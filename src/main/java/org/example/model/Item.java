@@ -1,27 +1,62 @@
 package org.example.model;
+
 import java.time.LocalDateTime;
 
-public class Item extends Entity {
+public abstract class Item extends Entity {
+
     private String itemName;
     private String description;
     private double startingPrice;
     private double currentPrice;
     private LocalDateTime startTime;
-    private LocalDateTime endtime;
+    private LocalDateTime endTime;
 
-    public Item(String id, String itemName, String description, double startingPrice, double currentPrice, LocalDateTime startTime, LocalDateTime endtime) {
+    public Item(String id,
+                String itemName,
+                String description,
+                double startingPrice,
+                LocalDateTime startTime,
+                LocalDateTime endTime) {
+
         super(id);
         this.itemName = itemName;
         this.description = description;
         this.startingPrice = startingPrice;
-        this.currentPrice = startingPrice; // Mới tạo thì giá = giá khởi điểm
+        this.currentPrice = startingPrice; // giá ban đầu = giá khởi điểm
         this.startTime = startTime;
-        this.endtime = endtime;
+        this.endTime = endTime;
     }
 
-    public String getItemName() { return itemName; }
-    public double getCurrentPrice() { return currentPrice; }
-    public void setCurrentPrice(double currentPrice) { this.currentPrice = currentPrice;
+    // Getter
+    public String getItemName() {
+        return itemName;
     }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public double getStartingPrice() {
+        return startingPrice;
+    }
+
+    public double getCurrentPrice() {
+        return currentPrice;
+    }
+
+    public LocalDateTime getStartTime() {
+        return startTime;
+    }
+
+    public LocalDateTime getEndTime() {
+        return endTime;
+    }
+
+    // Setter
+    public void setCurrentPrice(double currentPrice) {
+        this.currentPrice = currentPrice;
+    }
+
+    // Abstract method
     public abstract void displayInfo();
 }
