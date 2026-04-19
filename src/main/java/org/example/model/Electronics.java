@@ -5,9 +5,9 @@ public class Electronics extends Item {
     private String brand;
     private int warrantyMonths;
 
-    public Electronics(String id, String itemName, String description, double startingPrice,
+    public Electronics(String id, String itemName, String description, double startingPrice, double currentPrice,
                        LocalDateTime startTime, LocalDateTime endTime, String brand, int warrantyMonths) {
-        super(id, itemName, description, startingPrice, startTime, endTime); // Gọi constructor của lớp Item
+        super(id, itemName, description, startingPrice, currentPrice, startTime, endTime); // Gọi constructor của lớp Item
         this.brand = brand;
         this.warrantyMonths = warrantyMonths;
     }

@@ -7,4 +7,12 @@ public class Bidder extends User {
         super(id, username, password, email);
         this.balance = balance;
     }
+
+    public double getBalance() {
+        return balance;
+    }
+
+    @Override
+    public void displayRole() {
+        System.out.println("Role: Người đấu giá (Bidder)");}
 }
