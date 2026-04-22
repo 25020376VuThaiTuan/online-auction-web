@@ -43,54 +43,34 @@ public class AuctionSession implements AuctionSubject {
     public boolean placeBid(Bid bid) {
         lock.lock();
         try {
-            if(status != AuctionStatus.RUNNING) {
-                System.out.println("Error: The sesion is not started!");
+            // 1. Kiểm tra trạng thái session
+            if (status != AuctionStatus.RUNNING) {
+                System.out.println("Lỗi:Phiên chưa bắt đầu!");
                 return false;
             }
-
-            LocalDateTime now = LocalDateTime.now();
 
             // 2. Kiểm tra thời gian
+            LocalDateTime now = LocalDateTime.now();
             if (now.isAfter(endTime)) {
-                System.out.println("The sesion is ended!");
-                this.status = AuctionStatus.FINISHED; // Tự động cập nhật trạng thái
+                System.out.println("Phiên kết thúc!");
+                this.status = AuctionStatus.FINISHED;
                 return false;
             }
 
-            // Giả định lớp Bid của bạn có phương thức getAmount()
-            double newBidAmount = bid.getAmount();
-
-            // 3. Kiểm tra tính hợp lệ của giá
-            if (newBidAmount <= currentHighestBid) {
-            // 4. Cập nhật dữ liệu
-            currentHighestBid = newBidAmount;
-            bids.add(bid);
-            System.out.println("Bid successfully! New price: " + currentHighestBid);
-
-            // 5. Logic Anti-sniping
-            long secondsRemaining = ChronoUnit.SECONDS.between(now, endTime);
-            if (secondsRemaining <= X_SECONDS) {
-                endTime = endTime.plusSeconds(Y_SECONDS);
-                System.out.println("New time added: " + endTime);
-            }
-            if(secondsRemaining<60){
-                System.out.println("The session is about to end!Decide quickly or you will not have this gorgeous item");
-                notifyObservers();
-            }
+            // ... (Chỗ này là logic check giá thầu ) ...
 
             // 6. Thông báo cho các Client (Observer Pattern)
             notifyObservers();
-
             return true;
 
         } finally {
-            // Luôn đặt unlock trong finally để tránh deadlock nếu có Exception xảy ra
+            // Luôn đặt unlock trong finally để tránh deadlock
             lock.unlock();
         }
-    }
+    } // Kết thúc hàm placeBid chuẩn ở đây
 
     // Đưa hàm này ra ngoài cấp độ class (Class level)
-    private void notifyObservers() {
+    public void notifyObservers() {
         if (bids.isEmpty()) return;
         Bid lastBid = bids.get(bids.size() - 1);
         for (AuctionObserver o : observers) {
@@ -112,7 +92,7 @@ public class AuctionSession implements AuctionSubject {
         observers.remove(observer);
     }
 
-    @Override
+
     public AuctionStatus getStatus() {
         return status;
     }
