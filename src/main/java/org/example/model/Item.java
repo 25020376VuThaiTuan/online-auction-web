@@ -1,5 +1,6 @@
 package org.example.model;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 public abstract class Item extends Entity {
     private String itemName;
@@ -24,4 +25,11 @@ public abstract class Item extends Entity {
     public void setCurrentPrice(double currentPrice) { this.currentPrice = currentPrice;
     }
     public abstract void displayInfo();
+
+    public String getEndTimeString() {
+        if (endTime == null) return "N/A";
+        // Định dạng lại thành: Ngày/Tháng/Năm Giờ:Phút
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+        return endTime.format(formatter);
+    }
 }
