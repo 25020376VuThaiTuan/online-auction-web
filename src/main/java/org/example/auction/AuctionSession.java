@@ -115,8 +115,4 @@ public class AuctionSession implements AuctionSubject {
     public void removeObserver(AuctionObserver observer) {
         observers.remove(observer);
     }
-    @Override
-    public AuctionStatus getStatus() {
-        return status;
-    }
 }

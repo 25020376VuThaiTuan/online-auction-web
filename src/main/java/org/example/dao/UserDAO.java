@@ -1,4 +1,4 @@
-package dao;
+package org.example.dao;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -40,18 +40,23 @@ public class UserDAO {
     }
 
     // Lấy user theo id
-    public User getUserById(int id) throws SQLException {
+    public User getUserById(String id) throws SQLException {
         String sql = "SELECT * FROM users WHERE id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, id);
+            ps.setString(1, id);
             ResultSet rs = ps.executeQuery();
             if (rs.next()) {
                 return new User(
-                        rs.getInt("id"),
+                        rs.getString("id"),
                         rs.getString("username"),
                         rs.getString("password"),
                         rs.getString("role")
-                );
+                ) {
+                    @Override
+                    public void displayRole() {
+
+                    }
+                };
             }
         }
         return null;
@@ -65,11 +70,16 @@ public class UserDAO {
              ResultSet rs = st.executeQuery(sql)) {
             while (rs.next()) {
                 list.add(new User(
-                        rs.getInt("id"),
+                        rs.getString("id"),
                         rs.getString("username"),
                         rs.getString("password"),
                         rs.getString("role")
-                ));
+                ) {
+                    @Override
+                    public void displayRole() {
+
+                    }
+                });
             }
         }
         return list;
@@ -82,7 +92,7 @@ public class UserDAO {
             ps.setString(1, user.getUsername());
             ps.setString(2, user.getPassword());
             ps.setString(3, user.getRole());
-            ps.setInt(4, user.getId());
+            ps.setString(4, user.getId());
             ps.executeUpdate();
         }
     }
