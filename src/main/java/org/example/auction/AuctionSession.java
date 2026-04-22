@@ -61,28 +61,32 @@ public class AuctionSession implements AuctionSubject {
             double newBidAmount = bid.getAmount();
 
             // 3. Kiểm tra tính hợp lệ của giá
-            if (newBidAmount <= currentHighestBid) {
-            // 4. Cập nhật dữ liệu
-            currentHighestBid = newBidAmount;
-            bids.add(bid);
-            System.out.println("Bid successfully! New price: " + currentHighestBid);
+            if (newBidAmount > currentHighestBid) {
+                // 4. Cập nhật dữ liệu
+                currentHighestBid = newBidAmount;
+                bids.add(bid);
+                System.out.println("Bid successfully! New price: " + currentHighestBid);
 
-            // 5. Logic Anti-sniping
-            long secondsRemaining = ChronoUnit.SECONDS.between(now, endTime);
-            if (secondsRemaining <= X_SECONDS) {
-                endTime = endTime.plusSeconds(Y_SECONDS);
-                System.out.println("New time added! Time remaining: " + endTime);
-            }
-            if(secondsRemaining<60){
-                System.out.println("The session is about to end!Decide quickly or you will not have this gorgeous item");
+                // 5. Logic Anti-sniping
+                long secondsRemaining = ChronoUnit.SECONDS.between(now, endTime);
+                if (secondsRemaining <= X_SECONDS) {
+                    endTime = endTime.plusSeconds(Y_SECONDS);
+                    System.out.println("New time added! Time remaining: " + endTime);
+                }
+                if (secondsRemaining < 60) {
+                    System.out.println("The session is about to end!Decide quickly or you will not have this gorgeous item");
+                    notifyObservers();
+                }
+
+                // 6. Thông báo cho các Client (Observer Pattern)
                 notifyObservers();
+
+                return true;
+            }else{
+                // Logic for invalid bid price
+                System.out.println("Bid rejected! Must be higher than " + currentHighestBid);
+                return false;
             }
-
-            // 6. Thông báo cho các Client (Observer Pattern)
-            notifyObservers();
-
-            return true;
-
         } finally {
             // Luôn đặt unlock trong finally để tránh deadlock nếu có Exception xảy ra
             lock.unlock();
