@@ -71,7 +71,7 @@ public class AuctionSession implements AuctionSubject {
             long secondsRemaining = ChronoUnit.SECONDS.between(now, endTime);
             if (secondsRemaining <= X_SECONDS) {
                 endTime = endTime.plusSeconds(Y_SECONDS);
-                System.out.println("New time added: " + endTime);
+                System.out.println("New time added! Time remaining: " + endTime);
             }
             if(secondsRemaining<60){
                 System.out.println("The session is about to end!Decide quickly or you will not have this gorgeous item");
