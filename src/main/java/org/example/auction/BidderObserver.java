@@ -1,4 +1,4 @@
-package org.example.observer;
+package org.example.auction;
 
 import org.example.model.AuctionSession;
 
