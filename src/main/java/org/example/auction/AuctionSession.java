@@ -8,6 +8,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
+import
 
 public class AuctionSession implements AuctionSubject {
 
@@ -92,9 +93,9 @@ public class AuctionSession implements AuctionSubject {
             lock.unlock();
         }
     }
-
+    @Override
     // Đưa hàm này ra ngoài cấp độ class (Class level)
-    private void notifyObservers() {
+    public void notifyObservers(){
         if (bids.isEmpty()) return;
         Bid lastBid = bids.get(bids.size() - 1);
         for (AuctionObserver o : observers) {
@@ -115,7 +116,6 @@ public class AuctionSession implements AuctionSubject {
     public void removeObserver(AuctionObserver observer) {
         observers.remove(observer);
     }
-
     @Override
     public AuctionStatus getStatus() {
         return status;
