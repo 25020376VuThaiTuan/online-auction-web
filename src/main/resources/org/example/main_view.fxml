@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+
+<AnchorPane prefHeight="400.0" prefWidth="600.0" xmlns="http://javafx.com/javafx/17" xmlns:fx="http://javafx.com/fxml/1" fx:controller="org.example.controller.AuctionController">
+    <children>
+        <Label layoutX="200.0" layoutY="20.0" text="HỆ THỐNG ĐẤU GIÁ ONLINE" style="-fx-font-size: 18px; -fx-font-weight: bold;" />
+
+        <TableView fx:id="itemTable" layoutX="20.0" layoutY="60.0" prefHeight="250.0" prefWidth="560.0">
+            <columns>
+                <TableColumn fx:id="nameColumn" prefWidth="250.0" text="Tên món đồ" />
+                <TableColumn fx:id="priceColumn" prefWidth="150.0" text="Giá hiện tại" />
+                <TableColumn fx:id="timeColumn" prefWidth="150.0" text="Thời gian" />
+            </columns>
+        </TableView>
+
+        <TextField fx:id="bidAmountField" layoutX="150.0" layoutY="330.0" prefWidth="200.0" promptText="Nhập giá muốn trả..." />
+        <Button layoutX="360.0" layoutY="330.0" onAction="#handlePlaceBid" text="Đặt giá ngay" style="-fx-background-color: #4CAF50; -fx-text-fill: white;" />
+    </children>
+</AnchorPane>
