@@ -9,7 +9,7 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 
-import model.User;
+import org.example.model.User;
 
 public class UserDAO {
     private Connection conn;
