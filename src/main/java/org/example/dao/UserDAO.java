@@ -1,5 +1,7 @@
 package org.example.dao;
 
+import org.example.model.User;
+
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -9,26 +11,22 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.example.model.User;
-
 public class UserDAO {
     private Connection conn;
 
-    // Khởi tạo kết nối tới MySQL
     public UserDAO() throws SQLException {
         try {
-            Class.forName("com.mysql.cj.jdbc.Driver"); // Driver MySQL
+            Class.forName("com.mysql.cj.jdbc.Driver");
             conn = DriverManager.getConnection(
                     "jdbc:mysql://localhost:3306/auctiondb?useSSL=false&serverTimezone=UTC",
-                    "root",       // thay bằng user DB của bạn
-                    "password"    // thay bằng mật khẩu DB của bạn
+                    "root",
+                    "password"
             );
         } catch (ClassNotFoundException e) {
-            throw new SQLException("Không tìm thấy JDBC Driver", e);
+            throw new SQLException("Could not find JDBC driver", e);
         }
     }
 
-    // Thêm user mới
     public void addUser(User user) throws SQLException {
         String sql = "INSERT INTO users(username, password, role) VALUES (?, ?, ?)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -39,53 +37,30 @@ public class UserDAO {
         }
     }
 
-    // Lấy user theo id
     public User getUserById(String id) throws SQLException {
         String sql = "SELECT * FROM users WHERE id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, id);
             ResultSet rs = ps.executeQuery();
             if (rs.next()) {
-                return new User(
-                        rs.getString("id"),
-                        rs.getString("username"),
-                        rs.getString("password"),
-                        rs.getString("role")
-                ) {
-                    @Override
-                    public void displayRole() {
-
-                    }
-                };
+                return mapUser(rs);
             }
         }
         return null;
     }
 
-    // Lấy toàn bộ user
     public List<User> getAllUsers() throws SQLException {
         List<User> list = new ArrayList<>();
         String sql = "SELECT * FROM users";
         try (Statement st = conn.createStatement();
              ResultSet rs = st.executeQuery(sql)) {
             while (rs.next()) {
-                list.add(new User(
-                        rs.getString("id"),
-                        rs.getString("username"),
-                        rs.getString("password"),
-                        rs.getString("role")
-                ) {
-                    @Override
-                    public void displayRole() {
-
-                    }
-                });
+                list.add(mapUser(rs));
             }
         }
         return list;
     }
 
-    // Cập nhật user
     public void updateUser(User user) throws SQLException {
         String sql = "UPDATE users SET username=?, password=?, role=? WHERE id=?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -97,12 +72,26 @@ public class UserDAO {
         }
     }
 
-    // Xóa user
-    public void deleteUser(int id) throws SQLException {
+    public void deleteUser(String id) throws SQLException {
         String sql = "DELETE FROM users WHERE id=?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, id);
+            ps.setString(1, id);
             ps.executeUpdate();
         }
+    }
+
+    private User mapUser(ResultSet rs) throws SQLException {
+        User user = new User(
+                rs.getString("id"),
+                rs.getString("username"),
+                rs.getString("password"),
+                null
+        ) {
+            @Override
+            public void displayRole() {
+            }
+        };
+        user.setRole(rs.getString("role"));
+        return user;
     }
 }
