@@ -4,106 +4,127 @@ import org.example.model.Bid;
 import org.example.model.Item;
 
 import java.time.LocalDateTime;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.locks.ReentrantLock;
 
 public class AuctionSession implements AuctionSubject {
-
-    private static final int X_SECONDS = 10;
-    private static final int Y_SECONDS = 60;
-
-    private Item item;
+    private final Item item;
     private AuctionStatus status;
-    private List<AuctionObserver> observers = new ArrayList<>();
-    private List<Bid> bids = new ArrayList<>();
+    private final List<AuctionObserver> observers = new CopyOnWriteArrayList<>();
+    private final List<Bid> bids = new ArrayList<>();
     private double currentHighestBid;
     private LocalDateTime endTime;
 
-    // Sử dụng 'final' để đảm bảo lock không bị thay đổi tham chiếu
     private final ReentrantLock lock = new ReentrantLock();
 
-    // Hợp nhất các constructor lại để khởi tạo đầy đủ trạng thái
     public AuctionSession(Item item, double startingPrice, LocalDateTime endTime) {
-        this.item = item;
-        this.currentHighestBid = startingPrice;
-        this.endTime = endTime;
-        this.status = AuctionStatus.OPEN;
+        this.item = Objects.requireNonNull(item, "item");
+        this.currentHighestBid = Math.max(startingPrice, item.getCurrentPrice());
+        this.item.setCurrentPrice(this.currentHighestBid);
+        this.endTime = endTime == null ? item.getEndTime() : endTime;
+        this.item.setEndTime(this.endTime);
+        this.status = AuctionRules.resolveStatus(item.getStartTime(), this.endTime, LocalDateTime.now());
     }
 
     public void startAuction() {
-        this.status = AuctionStatus.RUNNING;
+        if (!status.isFinished()) {
+            status = AuctionStatus.RUNNING;
+        }
     }
 
     public void finishAuction() {
-        this.status = AuctionStatus.FINISHED;
+        status = AuctionStatus.FINISHED;
     }
 
     public boolean placeBid(Bid bid) {
+        return submitBid(bid).accepted();
+    }
+
+    public BidValidationResult submitBid(Bid bid) {
+        Objects.requireNonNull(bid, "bid");
+
         lock.lock();
         try {
-            if(status != AuctionStatus.RUNNING) {
-                System.out.println("Error: The sesion is not started!");
-                return false;
+            AuctionStatus currentStatus = getStatus();
+            if (currentStatus != AuctionStatus.RUNNING) {
+                return BidValidationResult.rejected(
+                        "Auction is not accepting bids.",
+                        bid.getAmount(),
+                        currentHighestBid,
+                        AuctionRules.minimumNextBid(currentHighestBid),
+                        currentStatus,
+                        endTime
+                );
             }
 
-            LocalDateTime now = LocalDateTime.now();
-
-            // 2. Kiểm tra thời gian
-            if (now.isAfter(endTime)) {
-                System.out.println("The sesion is ended!");
-                this.status = AuctionStatus.FINISHED; // Tự động cập nhật trạng thái
-                return false;
+            LocalDateTime bidTime = bid.getBidTime() == null ? LocalDateTime.now() : bid.getBidTime();
+            BidValidationResult validation = AuctionRules.validateBid(item, bid.getAmount(), bidTime);
+            if (!validation.accepted()) {
+                status = validation.status();
+                return validation;
             }
 
-            // Giả định lớp Bid của bạn có phương thức getAmount()
-            double newBidAmount = bid.getAmount();
+            currentHighestBid = bid.getAmount();
+            item.setCurrentPrice(currentHighestBid);
+            bids.add(bid);
+            endTime = validation.effectiveEndTime();
+            item.setEndTime(endTime);
+            status = AuctionRules.resolveStatus(item.getStartTime(), endTime, LocalDateTime.now());
 
-            // 3. Kiểm tra tính hợp lệ của giá
-            if (newBidAmount > currentHighestBid) {
-                // 4. Cập nhật dữ liệu
-                currentHighestBid = newBidAmount;
-                bids.add(bid);
-                System.out.println("Bid successfully! New price: " + currentHighestBid);
-
-                // 5. Logic Anti-sniping
-                long secondsRemaining = ChronoUnit.SECONDS.between(now, endTime);
-                if (secondsRemaining <= X_SECONDS) {
-                    endTime = endTime.plusSeconds(Y_SECONDS);
-                    System.out.println("New time added! Time remaining: " + endTime);
-                }
-                if (secondsRemaining < 60) {
-                    System.out.println("The session is about to end!Decide quickly or you will not have this gorgeous item");
-                    notifyObservers();
-                }
-
-                // 6. Thông báo cho các Client (Observer Pattern)
-                notifyObservers();
-
-                return true;
-            }else{
-                // Logic for invalid bid price
-                System.out.println("Bid rejected! Must be higher than " + currentHighestBid);
-                return false;
-            }
+            notifyObservers();
+            return validation;
         } finally {
-            // Luôn đặt unlock trong finally để tránh deadlock nếu có Exception xảy ra
             lock.unlock();
         }
     }
+
     @Override
-    // Đưa hàm này ra ngoài cấp độ class (Class level)
-    public void notifyObservers(){
-        if (bids.isEmpty()) return;
+    public void notifyObservers() {
+        if (bids.isEmpty()) {
+            return;
+        }
+
         Bid lastBid = bids.get(bids.size() - 1);
-        for (AuctionObserver o : observers) {
-            o.onNewBid(lastBid);
+        for (AuctionObserver observer : observers) {
+            observer.onNewBid(lastBid);
         }
     }
 
     public LocalDateTime getEndTime() {
         return endTime;
+    }
+
+    public Item getItem() {
+        return item;
+    }
+
+    public double getCurrentHighestBid() {
+        return currentHighestBid;
+    }
+
+    public AuctionStatus getStatus() {
+        if (status != null && status.isFinished()) {
+            return status;
+        }
+
+        status = AuctionRules.resolveStatus(item.getStartTime(), endTime, LocalDateTime.now());
+        return status;
+    }
+
+    public List<Bid> getBids() {
+        lock.lock();
+        try {
+            return List.copyOf(bids);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public AuctionSummary getSummary() {
+        return AuctionRules.buildSummary(item, getBids(), getStatus(), LocalDateTime.now());
     }
 
     @Override
