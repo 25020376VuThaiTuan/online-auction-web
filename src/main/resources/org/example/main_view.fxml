@@ -1,21 +1,97 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<?import javafx.scene.control.*?>
-<?import javafx.scene.layout.*?>
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.ScrollPane?>
+<?import javafx.scene.control.TableColumn?>
+<?import javafx.scene.control.TableView?>
+<?import javafx.scene.control.TextField?>
+<?import javafx.scene.layout.GridPane?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.Pane?>
+<?import javafx.scene.layout.VBox?>
 
-<AnchorPane prefHeight="400.0" prefWidth="600.0" xmlns="http://javafx.com/javafx/17" xmlns:fx="http://javafx.com/fxml/1" fx:controller="org.example.controller.AuctionController">
-    <children>
-        <Label layoutX="200.0" layoutY="20.0" text="HỆ THỐNG ĐẤU GIÁ ONLINE" style="-fx-font-size: 18px; -fx-font-weight: bold;" />
+<ScrollPane fitToWidth="true"
+            hbarPolicy="NEVER"
+            prefHeight="620.0"
+            prefWidth="980.0"
+            xmlns="http://javafx.com/javafx/21"
+            xmlns:fx="http://javafx.com/fxml/1"
+            fx:controller="org.example.controller.AuctionController">
+    <content>
+        <VBox spacing="14.0" fillWidth="true" maxWidth="1.7976931348623157E308">
+            <padding>
+                <Insets top="18.0" right="18.0" bottom="18.0" left="18.0"/>
+            </padding>
 
-        <TableView fx:id="itemTable" layoutX="20.0" layoutY="60.0" prefHeight="250.0" prefWidth="560.0">
-            <columns>
-                <TableColumn fx:id="nameColumn" prefWidth="250.0" text="Tên món đồ" />
-                <TableColumn fx:id="priceColumn" prefWidth="150.0" text="Giá hiện tại" />
-                <TableColumn fx:id="timeColumn" prefWidth="150.0" text="Thời gian" />
-            </columns>
-        </TableView>
+            <HBox alignment="CENTER_LEFT" spacing="10.0">
+                <Label style="-fx-font-size: 24px; -fx-font-weight: bold;" text="Auction Detail"/>
+                <Pane HBox.hgrow="ALWAYS"/>
+                <Label fx:id="userLabel" wrapText="true"/>
+                <Button onAction="#handleBack" text="Back"/>
+                <Button onAction="#handleLogout" text="Logout"/>
+            </HBox>
 
-        <TextField fx:id="bidAmountField" layoutX="150.0" layoutY="330.0" prefWidth="200.0" promptText="Nhập giá muốn trả..." />
-        <Button layoutX="360.0" layoutY="330.0" onAction="#handlePlaceBid" text="Đặt giá ngay" style="-fx-background-color: #4CAF50; -fx-text-fill: white;" />
-    </children>
-</AnchorPane>
+            <GridPane hgap="12.0" vgap="10.0" maxWidth="1.7976931348623157E308">
+                <Label style="-fx-font-weight: bold;" text="Item"/>
+                <Label fx:id="itemNameLabel" wrapText="true" GridPane.columnIndex="1"/>
+
+                <Label style="-fx-font-weight: bold;" text="Description" GridPane.rowIndex="1"/>
+                <Label fx:id="descriptionLabel" maxWidth="700.0" wrapText="true" GridPane.columnIndex="1" GridPane.rowIndex="1"/>
+
+                <Label style="-fx-font-weight: bold;" text="Status" GridPane.rowIndex="2"/>
+                <Label fx:id="statusLabel" GridPane.columnIndex="1" GridPane.rowIndex="2"/>
+
+                <Label style="-fx-font-weight: bold;" text="Current price" GridPane.rowIndex="3"/>
+                <Label fx:id="currentPriceLabel" GridPane.columnIndex="1" GridPane.rowIndex="3"/>
+
+                <Label style="-fx-font-weight: bold;" text="Next minimum bid" GridPane.rowIndex="4"/>
+                <Label fx:id="minimumBidLabel" GridPane.columnIndex="1" GridPane.rowIndex="4"/>
+
+                <Label style="-fx-font-weight: bold;" text="Time left" GridPane.rowIndex="5"/>
+                <Label fx:id="timeRemainingLabel" GridPane.columnIndex="1" GridPane.rowIndex="5"/>
+
+                <Label style="-fx-font-weight: bold;" text="Ends at" GridPane.rowIndex="6"/>
+                <Label fx:id="endTimeLabel" GridPane.columnIndex="1" GridPane.rowIndex="6"/>
+            </GridPane>
+
+            <Label style="-fx-font-size: 16px; -fx-font-weight: bold;" text="Bid History"/>
+            <TableView fx:id="bidTable" prefHeight="320.0" maxHeight="1.7976931348623157E308" maxWidth="1.7976931348623157E308">
+                <columns>
+                    <TableColumn fx:id="bidderColumn" prefWidth="220.0" text="Bidder"/>
+                    <TableColumn fx:id="amountColumn" prefWidth="180.0" text="Amount"/>
+                    <TableColumn fx:id="timeColumn" prefWidth="260.0" text="Placed At"/>
+                </columns>
+            </TableView>
+
+            <HBox alignment="CENTER_LEFT" spacing="10.0">
+                <Label text="Fast Bidding:"/>
+                <Button onAction="#handleFastBid10" text="+$10" fx:id="fastBid10Button"/>
+                <Button onAction="#handleFastBid50" text="+$50" fx:id="fastBid50Button"/>
+                <Button onAction="#handleFastBid100" text="+$100" fx:id="fastBid100Button"/>
+            </HBox>
+
+            <HBox alignment="CENTER_LEFT" spacing="10.0">
+                <Label text="Your bid"/>
+                <javafx.scene.control.ComboBox fx:id="bidAmountCombo"
+                           maxWidth="1.7976931348623157E308"
+                           prefWidth="220.0"
+                           promptText="Select or enter amount"
+                           editable="true"
+                           HBox.hgrow="ALWAYS"/>
+                <Button fx:id="placeBidButton" onAction="#handlePlaceBid" text="Place Bid"/>
+            </HBox>
+            
+            <HBox alignment="CENTER_LEFT" spacing="10.0">
+                <Label text="Auto-Bid Max Limit"/>
+                <TextField fx:id="autoBidMaxField"
+                           maxWidth="1.7976931348623157E308"
+                           prefWidth="220.0"
+                           promptText="Enter max limit"
+                           HBox.hgrow="ALWAYS"/>
+                <Button fx:id="setAutoBidButton" onAction="#handleSetAutoBid" text="Set Auto Bid"/>
+            </HBox>
+        </VBox>
+    </content>
+</ScrollPane>

@@ -7,12 +7,14 @@ import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Label;
+import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.util.Duration;
 import org.example.service.AuctionWorkflowService;
 import org.example.state.ApplicationSession;
+import org.example.util.ResponsiveViewSupport;
 import org.example.util.SceneNavigator;
 import org.example.viewmodel.AuctionListEntry;
 
@@ -41,6 +43,9 @@ public class AuctionListController {
     private TableColumn<AuctionListEntry, Double> minimumBidColumn;
 
     @FXML
+    private TableColumn<AuctionListEntry, String> timeRemainingColumn;
+
+    @FXML
     private TableColumn<AuctionListEntry, String> endTimeColumn;
 
     @FXML
@@ -54,7 +59,18 @@ public class AuctionListController {
         statusColumn.setCellValueFactory(new PropertyValueFactory<>("status"));
         currentPriceColumn.setCellValueFactory(new PropertyValueFactory<>("currentPrice"));
         minimumBidColumn.setCellValueFactory(new PropertyValueFactory<>("minimumNextBid"));
+        timeRemainingColumn.setCellValueFactory(new PropertyValueFactory<>("remainingTime"));
         endTimeColumn.setCellValueFactory(new PropertyValueFactory<>("endTimeString"));
+        ResponsiveViewSupport.configureResponsiveTable(auctionTable);
+        ResponsiveViewSupport.configureCurrencyColumn(currentPriceColumn);
+        ResponsiveViewSupport.configureCurrencyColumn(minimumBidColumn);
+        statusColumn.setCellFactory(column -> new TableCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty || item == null ? "" : item.replace('_', ' '));
+            }
+        });
 
         welcomeLabel.setText("Signed in as: " + applicationSession.getCurrentUserLabel());
         refreshTable();
@@ -82,6 +98,7 @@ public class AuctionListController {
     }
 
     private void refreshTable() {
+        workflowService.refreshFromStoreIfChanged();
         String selectedId = auctionTable.getSelectionModel().getSelectedItem() == null
                 ? null
                 : auctionTable.getSelectionModel().getSelectedItem().getItemId();

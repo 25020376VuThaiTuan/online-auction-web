@@ -7,6 +7,8 @@ import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
@@ -71,16 +73,31 @@ public class AuctionController {
     private TableColumn<Bid, LocalDateTime> timeColumn;
 
     @FXML
-    private TextField bidAmountField;
+    private ComboBox<String> bidAmountCombo;
 
     @FXML
     private Button placeBidButton;
+    
+    @FXML
+    private TextField autoBidMaxField;
+    
+    @FXML
+    private Button setAutoBidButton;
+    
+    @FXML
+    private Button fastBid10Button;
+    
+    @FXML
+    private Button fastBid50Button;
+    
+    @FXML
+    private Button fastBid100Button;
 
     @FXML
     public void initialize() {
         selectedAuctionId = applicationSession.getSelectedAuctionId().orElse(null);
         if (selectedAuctionId == null) {
-            Platform.runLater(() -> SceneNavigator.switchScene(bidAmountField, "/view/AuctionList.fxml", "Auction Catalog"));
+            Platform.runLater(() -> SceneNavigator.switchScene(placeBidButton, "/view/AuctionList.fxml", "Auction Catalog"));
             return;
         }
 
@@ -111,7 +128,22 @@ public class AuctionController {
         }
 
         try {
-            double bidAmount = Double.parseDouble(bidAmountField.getText());
+            String selectedAmount = bidAmountCombo.getValue();
+            if (selectedAmount == null || selectedAmount.isEmpty()) {
+                showAlert(Alert.AlertType.WARNING, "Invalid amount", "Please enter or select a bid amount.");
+                return;
+            }
+            double bidAmount = Double.parseDouble(selectedAmount.replace("$", "").replace(",", ""));
+            
+            Alert confirmAlert = new Alert(Alert.AlertType.CONFIRMATION, "Are you sure you want to place a bid of $" + bidAmount + "?", ButtonType.YES, ButtonType.NO);
+            confirmAlert.setTitle("Transaction Verification");
+            confirmAlert.setHeaderText(null);
+            confirmAlert.showAndWait();
+            
+            if (confirmAlert.getResult() != ButtonType.YES) {
+                return;
+            }
+
             BidValidationResult result = workflowService.placeBid(
                     selectedAuctionId,
                     applicationSession.getCurrentUser().orElseThrow(),
@@ -124,25 +156,74 @@ public class AuctionController {
                 return;
             }
 
-            bidAmountField.clear();
+            bidAmountCombo.setValue("");
             refreshView();
             showAlert(Alert.AlertType.INFORMATION, "Bid accepted", result.message());
         } catch (NumberFormatException e) {
             showAlert(Alert.AlertType.WARNING, "Invalid amount", "Enter a valid numeric bid amount.");
         }
     }
+    
+    @FXML
+    public void handleFastBid10() {
+        placeFastBid(10.0);
+    }
+    
+    @FXML
+    public void handleFastBid50() {
+        placeFastBid(50.0);
+    }
+    
+    @FXML
+    public void handleFastBid100() {
+        placeFastBid(100.0);
+    }
+    
+    private void placeFastBid(double addedAmount) {
+        AuctionSummary summary = workflowService.getSummary(selectedAuctionId);
+        double fastBid = summary.minimumNextBid() + addedAmount;
+        bidAmountCombo.setValue(String.valueOf(fastBid));
+        handlePlaceBid();
+    }
+    
+    @FXML
+    public void handleSetAutoBid() {
+        if (applicationSession.getCurrentUser().isEmpty()) {
+            showAlert(Alert.AlertType.WARNING, "Authentication required", "Please sign in again.");
+            handleLogout();
+            return;
+        }
+        
+        try {
+            double maxLimit = Double.parseDouble(autoBidMaxField.getText());
+            boolean success = workflowService.registerAutoBid(
+                selectedAuctionId, 
+                applicationSession.getCurrentUser().orElseThrow(), 
+                maxLimit
+            );
+            
+            if (success) {
+                autoBidMaxField.clear();
+                showAlert(Alert.AlertType.INFORMATION, "Auto-Bid Set", "Your auto-bid limit of $" + maxLimit + " was set successfully.");
+            } else {
+                showAlert(Alert.AlertType.ERROR, "Error", "Could not save auto-bid limit.");
+            }
+        } catch (NumberFormatException e) {
+            showAlert(Alert.AlertType.WARNING, "Invalid amount", "Enter a valid numeric max limit.");
+        }
+    }
 
     @FXML
     private void handleBack() {
         stopRefreshLoop();
-        SceneNavigator.switchScene(bidAmountField, "/view/AuctionList.fxml", "Auction Catalog");
+        SceneNavigator.switchScene(placeBidButton, "/view/AuctionList.fxml", "Auction Catalog");
     }
 
     @FXML
     private void handleLogout() {
         applicationSession.logout();
         stopRefreshLoop();
-        SceneNavigator.switchScene(bidAmountField, "/view/Login.fxml", "Online Auction System");
+        SceneNavigator.switchScene(placeBidButton, "/view/Login.fxml", "Online Auction System");
     }
 
     private void refreshView() {
@@ -167,8 +248,23 @@ public class AuctionController {
 
         // This guard enforces the rubric rule: only active auctions accept bids.
         boolean canBid = summary.status() == AuctionStatus.RUNNING && applicationSession.getCurrentUser().isPresent();
-        bidAmountField.setDisable(!canBid);
+        bidAmountCombo.setDisable(!canBid);
         placeBidButton.setDisable(!canBid);
+        fastBid10Button.setDisable(!canBid);
+        fastBid50Button.setDisable(!canBid);
+        fastBid100Button.setDisable(!canBid);
+        autoBidMaxField.setDisable(!canBid);
+        setAutoBidButton.setDisable(!canBid);
+        
+        // Populate ComboBox suggestions
+        if (bidAmountCombo.getItems().isEmpty() || !bidAmountCombo.getItems().get(0).equals(String.valueOf(summary.minimumNextBid()))) {
+            bidAmountCombo.setItems(FXCollections.observableArrayList(
+                String.valueOf(summary.minimumNextBid()),
+                String.valueOf(summary.minimumNextBid() + 10),
+                String.valueOf(summary.minimumNextBid() + 50),
+                String.valueOf(summary.minimumNextBid() + 100)
+            ));
+        }
     }
 
     private void startRefreshLoop() {

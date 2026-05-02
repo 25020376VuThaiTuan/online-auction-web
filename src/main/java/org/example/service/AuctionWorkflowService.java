@@ -1,21 +1,21 @@
 package org.example.service;
 
 import org.example.auction.AuctionRules;
-import org.example.auction.AuctionSeedData;
 import org.example.auction.AuctionSession;
 import org.example.auction.AuctionSessionRegistry;
 import org.example.auction.AuctionSummary;
 import org.example.auction.BidValidationResult;
-import org.example.model.AuctionStore;
+import org.example.dao.BidDAO;
+import org.example.dao.ItemDAO;
 import org.example.model.ApprovalStatus;
+import org.example.model.AutoBid;
 import org.example.model.Bid;
-import org.example.model.DataManager;
 import org.example.model.Item;
 import org.example.model.ItemFactory;
-import org.example.model.StoreSnapshot;
 import org.example.model.User;
 import org.example.viewmodel.AuctionListEntry;
 
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -26,14 +26,11 @@ import java.util.Optional;
 import java.util.UUID;
 
 public final class AuctionWorkflowService {
-    private static final int MAX_STORE_SAVE_RETRIES = 3;
     private static final AuctionWorkflowService INSTANCE = new AuctionWorkflowService();
 
-    private final DataManager dataManager = DataManager.getInstance();
     private final AuctionSessionRegistry sessionRegistry = AuctionSessionRegistry.getInstance();
-
+    
     private boolean initialized;
-    private long loadedStoreVersion;
     private List<Item> items = new ArrayList<>();
     private Map<String, List<Bid>> bidHistoryByItemId = new HashMap<>();
 
@@ -109,62 +106,71 @@ public final class AuctionWorkflowService {
 
     public synchronized BidValidationResult placeBid(String itemId, User user, double amount) {
         ensureInitialized();
+        refreshFromStoreIfChanged();
         Objects.requireNonNull(user, "user");
 
-        for (int attempt = 0; attempt < MAX_STORE_SAVE_RETRIES; attempt++) {
-            StoreSnapshot snapshot = normalizeSnapshot(dataManager.loadSnapshot());
-            AuctionStore workingStore = snapshot.store();
-            List<Item> workingItems = new ArrayList<>(workingStore.getItems());
-            Map<String, List<Bid>> workingBidHistory = copyBidHistory(workingStore.getBidHistoryByItemId());
+        Item item = findItemInternal(itemId)
+                .orElseThrow(() -> new IllegalArgumentException("Auction item not found: " + itemId));
 
-            Item item = findItemById(workingItems, itemId)
-                    .orElseThrow(() -> new IllegalArgumentException("Auction item not found: " + itemId));
+        AuctionSession session = getSessionForItem(itemId);
 
-            AuctionSession session = new AuctionSession(
-                    item,
-                    item.getCurrentPrice(),
-                    item.getEndTime(),
-                    workingBidHistory.getOrDefault(itemId, List.of())
-            );
+        Bid bid = new Bid(
+                "BID-" + UUID.randomUUID(),
+                user.getUsername(),
+                itemId,
+                amount,
+                LocalDateTime.now()
+        );
 
-            Bid bid = new Bid(
-                    "BID-" + UUID.randomUUID(),
-                    user.getUsername(),
-                    itemId,
-                    amount,
-                    LocalDateTime.now()
-            );
+        BidValidationResult result = session.submitBid(bid);
+        if (!result.accepted()) {
+            return result;
+        }
 
-            BidValidationResult result = session.submitBid(bid);
-            if (!result.accepted()) {
-                applySnapshot(snapshot);
-                return result;
-            }
+        try (ItemDAO itemDAO = ItemDAO.fromEnvironment();
+             BidDAO bidDAO = BidDAO.fromEnvironment()) {
+            
+            bidDAO.addBid(bid);
+            itemDAO.updateCurrentPrice(itemId, item.getCurrentPrice());
+            
+            // Process auto-bids
+            processAutoBids(item, session, bidDAO, itemDAO);
 
-            workingBidHistory.put(itemId, new ArrayList<>(session.getBids()));
-            AuctionStore updatedStore = new AuctionStore(workingItems, workingBidHistory);
-            Optional<StoreSnapshot> savedSnapshot = dataManager.saveStoreIfVersionMatches(updatedStore, snapshot.version());
-            if (savedSnapshot.isPresent()) {
-                applySnapshot(savedSnapshot.get());
-                return result;
-            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return BidValidationResult.rejected("Database error: " + e.getMessage(), amount, 0, 0, null, null);
         }
 
         refreshFromStoreIfChanged();
-        AuctionSession latestSession = getSessionForItem(itemId);
-        return BidValidationResult.rejected(
-                "Auction changed while your bid was being saved. Review the latest price and try again.",
-                amount,
-                latestSession.getCurrentHighestBid(),
-                AuctionRules.minimumNextBid(latestSession.getCurrentHighestBid()),
-                latestSession.getStatus(),
-                latestSession.getEndTime()
-        );
+        return result;
+    }
+
+    private void processAutoBids(Item item, AuctionSession session, BidDAO bidDAO, ItemDAO itemDAO) throws SQLException {
+        boolean autoBidPlaced = true;
+        while (autoBidPlaced) {
+            autoBidPlaced = false;
+            List<AutoBid> autoBids = bidDAO.getAllAutoBidsForItem(item.getId());
+            double currentHighest = session.getCurrentHighestBid();
+            double minNext = AuctionRules.minimumNextBid(currentHighest);
+            
+            for (AutoBid ab : autoBids) {
+                // If the auto-bid limit is sufficient to place the minimum next bid
+                if (ab.getMaxLimit() >= minNext && !ab.getBidderId().equals(session.getBids().get(session.getBids().size()-1).getBidderId())) {
+                    Bid nextBid = new Bid("BID-" + UUID.randomUUID(), ab.getBidderId(), item.getId(), minNext, LocalDateTime.now());
+                    BidValidationResult res = session.submitBid(nextBid);
+                    if (res.accepted()) {
+                        bidDAO.addBid(nextBid);
+                        itemDAO.updateCurrentPrice(item.getId(), session.getCurrentHighestBid());
+                        autoBidPlaced = true;
+                        break; // Re-evaluate all auto-bids after a successful bid
+                    }
+                }
+            }
+        }
     }
 
     public synchronized AuctionSession getSessionForItem(String itemId) {
         ensureInitialized();
-        refreshFromStoreIfChanged();
         Item item = findItemInternal(itemId)
                 .orElseThrow(() -> new IllegalArgumentException("Auction item not found: " + itemId));
 
@@ -179,13 +185,20 @@ public final class AuctionWorkflowService {
             return false;
         }
 
-        StoreSnapshot snapshot = dataManager.loadSnapshot();
-        if (snapshot.version() == loadedStoreVersion) {
+        try (ItemDAO itemDAO = ItemDAO.fromEnvironment();
+             BidDAO bidDAO = BidDAO.fromEnvironment()) {
+            
+            items = itemDAO.getAllItems();
+            bidHistoryByItemId.clear();
+            for (Item item : items) {
+                bidHistoryByItemId.put(item.getId(), bidDAO.getBidsForItem(item.getId()));
+            }
+            rebuildSessions();
+            return true;
+        } catch (SQLException e) {
+            e.printStackTrace();
             return false;
         }
-
-        applySnapshot(normalizeSnapshot(snapshot));
-        return true;
     }
 
     public synchronized Item addSellerItem(
@@ -200,7 +213,6 @@ public final class AuctionWorkflowService {
             String sellerId
     ) {
         ensureInitialized();
-        refreshFromStoreIfChanged();
 
         String prefix = type == null || type.isBlank()
                 ? "ITEM"
@@ -218,31 +230,47 @@ public final class AuctionWorkflowService {
         );
         item.setSellerId(sellerId);
         item.setApprovalStatus(ApprovalStatus.PENDING);
-        items.add(item);
-        persistCurrentState();
+        
+        try (ItemDAO itemDAO = ItemDAO.fromEnvironment()) {
+            itemDAO.addItem(item, type, extraText, extraNumber);
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return null;
+        }
+        
+        refreshFromStoreIfChanged();
         return item;
     }
 
     public synchronized boolean updateApprovalStatus(String itemId, ApprovalStatus approvalStatus) {
         ensureInitialized();
-        refreshFromStoreIfChanged();
 
-        Optional<Item> existing = findItemInternal(itemId);
-        if (existing.isEmpty()) {
+        try (ItemDAO itemDAO = ItemDAO.fromEnvironment()) {
+            itemDAO.updateApprovalStatus(itemId, approvalStatus);
+        } catch (SQLException e) {
+            e.printStackTrace();
             return false;
         }
-
-        existing.get().setApprovalStatus(approvalStatus);
-        persistCurrentState();
+        
+        refreshFromStoreIfChanged();
         return true;
+    }
+    
+    public synchronized boolean registerAutoBid(String itemId, User user, double maxLimit) {
+        try (BidDAO bidDAO = BidDAO.fromEnvironment()) {
+            bidDAO.addOrUpdateAutoBid(new AutoBid(0, user.getUsername(), itemId, maxLimit));
+            return true;
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return false;
+        }
     }
 
     private void ensureInitialized() {
         if (initialized) {
             return;
         }
-
-        applySnapshot(normalizeSnapshot(dataManager.loadSnapshot()));
+        refreshFromStoreIfChanged();
         initialized = true;
     }
 
@@ -252,44 +280,8 @@ public final class AuctionWorkflowService {
                 .findFirst();
     }
 
-    private Optional<Item> findItemById(List<Item> sourceItems, String itemId) {
-        return sourceItems.stream()
-                .filter(item -> item.getId().equals(itemId))
-                .findFirst();
-    }
-
-    private Map<String, List<Bid>> copyBidHistory(Map<String, List<Bid>> source) {
-        Map<String, List<Bid>> copy = new HashMap<>();
-        for (Map.Entry<String, List<Bid>> entry : source.entrySet()) {
-            copy.put(entry.getKey(), new ArrayList<>(entry.getValue()));
-        }
-        return copy;
-    }
-
-    private StoreSnapshot normalizeSnapshot(StoreSnapshot snapshot) {
-        if (!snapshot.store().getItems().isEmpty()) {
-            return snapshot;
-        }
-
-        AuctionStore seededStore = new AuctionStore(AuctionSeedData.createDemoItems(), Map.of());
-        return dataManager.saveStoreIfVersionMatches(seededStore, snapshot.version())
-                .orElseGet(dataManager::loadSnapshot);
-    }
-
-    private void applySnapshot(StoreSnapshot snapshot) {
-        items = new ArrayList<>(snapshot.store().getItems());
-        bidHistoryByItemId = copyBidHistory(snapshot.store().getBidHistoryByItemId());
-        loadedStoreVersion = snapshot.version();
-        rebuildSessions();
-    }
-
     private void rebuildSessions() {
         sessionRegistry.clear();
         sessionRegistry.preloadSessions(items, bidHistoryByItemId);
-    }
-
-    private void persistCurrentState() {
-        StoreSnapshot snapshot = dataManager.saveStore(new AuctionStore(items, bidHistoryByItemId));
-        applySnapshot(snapshot);
     }
 }
