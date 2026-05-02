@@ -1,98 +1,178 @@
 package org.example.controller;
 
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
+import javafx.application.Platform;
 import javafx.collections.FXCollections;
-import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
 import javafx.scene.control.cell.PropertyValueFactory;
-import org.example.auction.AuctionSession;
-import org.example.auction.AuctionSessionRegistry;
-import org.example.auction.AuctionSeedData;
+import javafx.util.Duration;
+import org.example.auction.AuctionStatus;
 import org.example.auction.AuctionSummary;
 import org.example.auction.BidValidationResult;
 import org.example.model.Bid;
-import org.example.model.DataManager;
 import org.example.model.Item;
+import org.example.service.AuctionWorkflowService;
+import org.example.state.ApplicationSession;
+import org.example.util.SceneNavigator;
 
 import java.time.LocalDateTime;
-import java.util.List;
-import java.util.UUID;
+import java.time.format.DateTimeFormatter;
 
 public class AuctionController {
+    private static final DateTimeFormatter BID_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
+
+    private final AuctionWorkflowService workflowService = AuctionWorkflowService.getInstance();
+    private final ApplicationSession applicationSession = ApplicationSession.getInstance();
+
+    private Timeline refreshTimeline;
+    private String selectedAuctionId;
+
     @FXML
-    private TableView<Item> itemTable;
+    private Label userLabel;
+
     @FXML
-    private TableColumn<Item, String> nameColumn;
+    private Label itemNameLabel;
+
     @FXML
-    private TableColumn<Item, Double> priceColumn;
+    private Label descriptionLabel;
+
     @FXML
-    private TableColumn<Item, String> timeColumn;
+    private Label statusLabel;
+
+    @FXML
+    private Label currentPriceLabel;
+
+    @FXML
+    private Label minimumBidLabel;
+
+    @FXML
+    private Label endTimeLabel;
+
+    @FXML
+    private TableView<Bid> bidTable;
+
+    @FXML
+    private TableColumn<Bid, String> bidderColumn;
+
+    @FXML
+    private TableColumn<Bid, Double> amountColumn;
+
+    @FXML
+    private TableColumn<Bid, LocalDateTime> timeColumn;
+
     @FXML
     private TextField bidAmountField;
 
     @FXML
-    public void initialize() {
-        nameColumn.setCellValueFactory(new PropertyValueFactory<>("itemName"));
-        priceColumn.setCellValueFactory(new PropertyValueFactory<>("currentPrice"));
-        timeColumn.setCellValueFactory(new PropertyValueFactory<>("endTimeString"));
+    private Button placeBidButton;
 
-        List<Item> savedItems = DataManager.getInstance().loadItems();
-        if (savedItems.isEmpty()) {
-            savedItems = AuctionSeedData.createDemoItems();
-            DataManager.getInstance().saveItems(savedItems);
+    @FXML
+    public void initialize() {
+        selectedAuctionId = applicationSession.getSelectedAuctionId().orElse(null);
+        if (selectedAuctionId == null) {
+            Platform.runLater(() -> SceneNavigator.switchScene(bidAmountField, "/view/AuctionList.fxml", "Auction Catalog"));
+            return;
         }
 
-        AuctionSessionRegistry.getInstance().clear();
-        AuctionSessionRegistry.getInstance().preloadSessions(savedItems);
+        bidderColumn.setCellValueFactory(new PropertyValueFactory<>("bidderId"));
+        amountColumn.setCellValueFactory(new PropertyValueFactory<>("amount"));
+        timeColumn.setCellValueFactory(new PropertyValueFactory<>("bidTime"));
+        timeColumn.setCellFactory(column -> new javafx.scene.control.TableCell<>() {
+            @Override
+            protected void updateItem(LocalDateTime item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty || item == null ? "" : BID_TIME_FORMATTER.format(item));
+            }
+        });
 
-        ObservableList<Item> data = FXCollections.observableArrayList(savedItems);
-        itemTable.setItems(data);
+        userLabel.setText("Signed in as: " + applicationSession.getCurrentUserLabel());
+        refreshView();
+        startRefreshLoop();
     }
 
     @FXML
     public void handlePlaceBid() {
-        Item selectedItem = itemTable.getSelectionModel().getSelectedItem();
-
-        if (selectedItem == null) {
-            showAlert(Alert.AlertType.WARNING, "Selection required", "Select an item before placing a bid.");
+        if (applicationSession.getCurrentUser().isEmpty()) {
+            showAlert(Alert.AlertType.WARNING, "Authentication required", "Please sign in again.");
+            handleLogout();
             return;
         }
 
         try {
             double bidAmount = Double.parseDouble(bidAmountField.getText());
-            AuctionSession session = AuctionSessionRegistry.getInstance().getOrCreateSession(selectedItem);
-            Bid bid = new Bid(
-                    "BID-" + UUID.randomUUID(),
-                    "local-ui-user",
-                    selectedItem.getId(),
-                    bidAmount,
-                    LocalDateTime.now()
+            BidValidationResult result = workflowService.placeBid(
+                    selectedAuctionId,
+                    applicationSession.getCurrentUser().orElseThrow(),
+                    bidAmount
             );
-            BidValidationResult validation = session.submitBid(bid);
 
-            if (!validation.accepted()) {
-                showAlert(Alert.AlertType.WARNING, "Bid rejected", validation.message());
+            if (!result.accepted()) {
+                showAlert(Alert.AlertType.WARNING, "Bid rejected", result.message());
                 return;
             }
 
-            itemTable.refresh();
-            DataManager.getInstance().saveItems(itemTable.getItems());
             bidAmountField.clear();
-
-            AuctionSummary summary = session.getSummary();
-            showAlert(
-                    Alert.AlertType.INFORMATION,
-                    "Bid accepted",
-                    validation.message()
-                            + "\nCurrent price: " + summary.currentPrice()
-                            + "\nNext minimum bid: " + summary.minimumNextBid()
-                            + "\nAuction ends: " + selectedItem.getEndTimeString()
-            );
+            refreshView();
+            showAlert(Alert.AlertType.INFORMATION, "Bid accepted", result.message());
         } catch (NumberFormatException e) {
-            showAlert(Alert.AlertType.WARNING, "Invalid amount", "Enter a valid bid amount.");
+            showAlert(Alert.AlertType.WARNING, "Invalid amount", "Enter a valid numeric bid amount.");
+        }
+    }
+
+    @FXML
+    private void handleBack() {
+        stopRefreshLoop();
+        SceneNavigator.switchScene(bidAmountField, "/view/AuctionList.fxml", "Auction Catalog");
+    }
+
+    @FXML
+    private void handleLogout() {
+        applicationSession.logout();
+        stopRefreshLoop();
+        SceneNavigator.switchScene(bidAmountField, "/view/Login.fxml", "Online Auction System");
+    }
+
+    private void refreshView() {
+        Item item = workflowService.findItemById(selectedAuctionId).orElse(null);
+        if (item == null) {
+            showAlert(Alert.AlertType.WARNING, "Auction missing", "The selected auction no longer exists.");
+            handleBack();
+            return;
+        }
+
+        AuctionSummary summary = workflowService.getSummary(selectedAuctionId);
+        itemNameLabel.setText(item.getItemName());
+        descriptionLabel.setText(item.getDescription());
+        statusLabel.setText(summary.status().name());
+        currentPriceLabel.setText(String.format("$%.2f", summary.currentPrice()));
+        minimumBidLabel.setText(String.format("$%.2f", summary.minimumNextBid()));
+        endTimeLabel.setText(item.getEndTimeString());
+        bidTable.setItems(FXCollections.observableArrayList(workflowService.getBidHistory(selectedAuctionId)));
+        bidTable.refresh();
+
+        // This guard enforces the rubric rule: only active auctions accept bids.
+        boolean canBid = summary.status() == AuctionStatus.RUNNING && applicationSession.getCurrentUser().isPresent();
+        bidAmountField.setDisable(!canBid);
+        placeBidButton.setDisable(!canBid);
+    }
+
+    private void startRefreshLoop() {
+        // The detail screen refreshes itself so status, timers, and bid history stay near real-time.
+        refreshTimeline = new Timeline(new KeyFrame(Duration.seconds(1), event -> refreshView()));
+        refreshTimeline.setCycleCount(Timeline.INDEFINITE);
+        refreshTimeline.play();
+    }
+
+    private void stopRefreshLoop() {
+        if (refreshTimeline != null) {
+            refreshTimeline.stop();
         }
     }
 
