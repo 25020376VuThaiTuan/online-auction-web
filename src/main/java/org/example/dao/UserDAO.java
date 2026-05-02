@@ -1,5 +1,8 @@
 package org.example.dao;
 
+import org.example.model.Admin;
+import org.example.model.Bidder;
+import org.example.model.Seller;
 import org.example.model.User;
 
 import java.sql.Connection;
@@ -10,21 +13,27 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
-public class UserDAO {
-    private Connection conn;
+public class UserDAO implements AutoCloseable {
+    private final Connection conn;
 
-    public UserDAO() throws SQLException {
+    public UserDAO(String jdbcUrl, String username, String password) throws SQLException {
         try {
             Class.forName("com.mysql.cj.jdbc.Driver");
-            conn = DriverManager.getConnection(
-                    "jdbc:mysql://localhost:3306/auctiondb?useSSL=false&serverTimezone=UTC",
-                    "root",
-                    "password"
-            );
+            conn = DriverManager.getConnection(jdbcUrl, username, password);
         } catch (ClassNotFoundException e) {
+            // Propagate as SQLException so the service layer only handles one DB-related exception type.
             throw new SQLException("Could not find JDBC driver", e);
         }
+    }
+
+    public static UserDAO fromEnvironment() throws SQLException {
+        return new UserDAO(
+                System.getenv("AUCTION_DB_URL"),
+                System.getenv("AUCTION_DB_USER"),
+                System.getenv("AUCTION_DB_PASSWORD")
+        );
     }
 
     public void addUser(User user) throws SQLException {
@@ -35,6 +44,18 @@ public class UserDAO {
             ps.setString(3, user.getRole());
             ps.executeUpdate();
         }
+    }
+
+    public Optional<User> findByUsername(String username) throws SQLException {
+        String sql = "SELECT * FROM users WHERE LOWER(username) = LOWER(?)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, username);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                return Optional.of(mapUser(rs));
+            }
+        }
+        return Optional.empty();
     }
 
     public User getUserById(String id) throws SQLException {
@@ -81,17 +102,25 @@ public class UserDAO {
     }
 
     private User mapUser(ResultSet rs) throws SQLException {
-        User user = new User(
-                rs.getString("id"),
-                rs.getString("username"),
-                rs.getString("password"),
-                null
-        ) {
-            @Override
-            public void displayRole() {
-            }
+        String role = rs.getString("role");
+        String id = rs.getString("id");
+        String username = rs.getString("username");
+        String password = rs.getString("password");
+
+        User user = switch (role == null ? "" : role.toUpperCase()) {
+            case "ADMIN" -> new Admin(id, username, password, null);
+            case "SELLER" -> new Seller(id, username, password, null);
+            case "BIDDER" -> new Bidder(id, username, password, null, 0.0);
+            default -> new Bidder(id, username, password, null, 0.0);
         };
-        user.setRole(rs.getString("role"));
+        user.setRole(role);
         return user;
+    }
+
+    @Override
+    public void close() throws SQLException {
+        if (conn != null && !conn.isClosed()) {
+            conn.close();
+        }
     }
 }
