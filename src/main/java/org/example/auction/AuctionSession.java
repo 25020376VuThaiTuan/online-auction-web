@@ -5,6 +5,7 @@ import org.example.model.Item;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -21,11 +22,26 @@ public class AuctionSession implements AuctionSubject {
     private final ReentrantLock lock = new ReentrantLock();
 
     public AuctionSession(Item item, double startingPrice, LocalDateTime endTime) {
+        this(item, startingPrice, endTime, List.of());
+    }
+
+    public AuctionSession(Item item, double startingPrice, LocalDateTime endTime, List<Bid> existingBids) {
         this.item = Objects.requireNonNull(item, "item");
         this.currentHighestBid = Math.max(startingPrice, item.getCurrentPrice());
         this.item.setCurrentPrice(this.currentHighestBid);
         this.endTime = endTime == null ? item.getEndTime() : endTime;
         this.item.setEndTime(this.endTime);
+
+        if (existingBids != null && !existingBids.isEmpty()) {
+            this.bids.addAll(
+                    existingBids.stream()
+                            .sorted(Comparator.comparing(bid -> bid.getBidTime() == null ? LocalDateTime.MIN : bid.getBidTime()))
+                            .toList()
+            );
+            this.currentHighestBid = Math.max(this.currentHighestBid, this.bids.get(this.bids.size() - 1).getAmount());
+            this.item.setCurrentPrice(this.currentHighestBid);
+        }
+
         this.status = AuctionRules.resolveStatus(item.getStartTime(), this.endTime, LocalDateTime.now());
     }
 
@@ -46,6 +62,7 @@ public class AuctionSession implements AuctionSubject {
     public BidValidationResult submitBid(Bid bid) {
         Objects.requireNonNull(bid, "bid");
 
+        // One lock per auction session prevents concurrent bidders from causing lost updates.
         lock.lock();
         try {
             AuctionStatus currentStatus = getStatus();
@@ -70,6 +87,7 @@ public class AuctionSession implements AuctionSubject {
             currentHighestBid = bid.getAmount();
             item.setCurrentPrice(currentHighestBid);
             bids.add(bid);
+            // Anti-sniping logic can extend the end time when a valid late bid arrives.
             endTime = validation.effectiveEndTime();
             item.setEndTime(endTime);
             status = AuctionRules.resolveStatus(item.getStartTime(), endTime, LocalDateTime.now());
