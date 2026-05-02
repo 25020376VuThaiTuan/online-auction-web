@@ -13,11 +13,11 @@ import java.util.concurrent.locks.ReentrantLock;
 
 public class AuctionSession implements AuctionSubject {
     private final Item item;
-    private AuctionStatus status;
+    private volatile AuctionStatus status;
     private final List<AuctionObserver> observers = new CopyOnWriteArrayList<>();
     private final List<Bid> bids = new ArrayList<>();
-    private double currentHighestBid;
-    private LocalDateTime endTime;
+    private volatile double currentHighestBid;
+    private volatile LocalDateTime endTime;
 
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -46,13 +46,23 @@ public class AuctionSession implements AuctionSubject {
     }
 
     public void startAuction() {
-        if (!status.isFinished()) {
-            status = AuctionStatus.RUNNING;
+        lock.lock();
+        try {
+            if (!status.isFinished()) {
+                status = AuctionStatus.RUNNING;
+            }
+        } finally {
+            lock.unlock();
         }
     }
 
     public void finishAuction() {
-        status = AuctionStatus.FINISHED;
+        lock.lock();
+        try {
+            status = AuctionStatus.FINISHED;
+        } finally {
+            lock.unlock();
+        }
     }
 
     public boolean placeBid(Bid bid) {
@@ -101,11 +111,16 @@ public class AuctionSession implements AuctionSubject {
 
     @Override
     public void notifyObservers() {
-        if (bids.isEmpty()) {
-            return;
+        Bid lastBid;
+        lock.lock();
+        try {
+            if (bids.isEmpty()) {
+                return;
+            }
+            lastBid = bids.get(bids.size() - 1);
+        } finally {
+            lock.unlock();
         }
-
-        Bid lastBid = bids.get(bids.size() - 1);
         for (AuctionObserver observer : observers) {
             observer.onNewBid(lastBid);
         }
@@ -124,12 +139,17 @@ public class AuctionSession implements AuctionSubject {
     }
 
     public AuctionStatus getStatus() {
-        if (status != null && status.isFinished()) {
-            return status;
-        }
+        lock.lock();
+        try {
+            if (status != null && status.isFinished()) {
+                return status;
+            }
 
-        status = AuctionRules.resolveStatus(item.getStartTime(), endTime, LocalDateTime.now());
-        return status;
+            status = AuctionRules.resolveStatus(item.getStartTime(), endTime, LocalDateTime.now());
+            return status;
+        } finally {
+            lock.unlock();
+        }
     }
 
     public List<Bid> getBids() {
