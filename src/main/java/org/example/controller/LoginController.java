@@ -1,21 +1,34 @@
 package org.example.controller;
 
 import javafx.fxml.FXML;
-import javafx.fxml.FXMLLoader;
-import javafx.scene.Parent;
-import javafx.scene.Scene;
 import javafx.scene.control.Alert;
+import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
-import javafx.stage.Stage;
+import org.example.exception.InvalidPasswordException;
+import org.example.exception.UserNotFound;
+import org.example.service.AuthenticationService;
+import org.example.state.ApplicationSession;
+import org.example.util.SceneNavigator;
 
 public class LoginController {
+    private final AuthenticationService authenticationService = AuthenticationService.getInstance();
+    private final ApplicationSession applicationSession = ApplicationSession.getInstance();
 
     @FXML
     private TextField usernameField;
 
     @FXML
     private PasswordField passwordField;
+
+    @FXML
+    private Label hintLabel;
+
+    @FXML
+    public void initialize() {
+        hintLabel.setText(authenticationService.getLoginHint());
+    }
+
     @FXML
     private void handleLogin() {
         String username = usernameField.getText() == null ? "" : usernameField.getText().trim();
@@ -27,11 +40,13 @@ public class LoginController {
         }
 
         try {
-            Parent root = FXMLLoader.load(getClass().getResource("/org/example/main_view.fxml"));
-            Stage stage = (Stage) usernameField.getScene().getWindow();
-            stage.setScene(new Scene(root));
-        } catch (Exception e) {
-            showAlert("Login failed", "Unable to load the auction screen.");
+            // Authentication problems are surfaced as explicit exceptions so the UI can explain the reason.
+            applicationSession.login(authenticationService.loginOrThrow(username, password));
+            SceneNavigator.switchScene(usernameField, "/view/AuctionList.fxml", "Auction Catalog");
+        } catch (UserNotFound e) {
+            showAlert("User not found", e.getMessage());
+        } catch (InvalidPasswordException e) {
+            showAlert("Password incorrect", e.getMessage());
         }
     }
 
