@@ -378,6 +378,6 @@ CREATE INDEX idx_auth_sessions_user
 
 INSERT INTO categories (slug, name, description)
 VALUES
-    ('electronics', 'Electronics', 'Devices, computers, and consumer electronics'),
-    ('art', 'Art', 'Paintings, sculptures, and other art pieces'),
-    ('vehicle', 'Vehicle', 'Cars, motorcycles, and other vehicles');
+    ('Electronics', 'Electronics', 'Devices, computers, and consumer electronics'),
+    ('Art', 'Art', 'Paintings, sculptures, and other art pieces'),
+    ('Vehicle', 'Vehicle', 'Cars, motorcycles, and other vehicles');
