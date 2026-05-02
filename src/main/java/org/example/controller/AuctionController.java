@@ -8,6 +8,7 @@ import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
+import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
@@ -20,14 +21,13 @@ import org.example.model.Bid;
 import org.example.model.Item;
 import org.example.service.AuctionWorkflowService;
 import org.example.state.ApplicationSession;
+import org.example.util.AuctionDisplayFormatter;
+import org.example.util.ResponsiveViewSupport;
 import org.example.util.SceneNavigator;
 
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 
 public class AuctionController {
-    private static final DateTimeFormatter BID_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
-
     private final AuctionWorkflowService workflowService = AuctionWorkflowService.getInstance();
     private final ApplicationSession applicationSession = ApplicationSession.getInstance();
 
@@ -54,6 +54,9 @@ public class AuctionController {
 
     @FXML
     private Label endTimeLabel;
+
+    @FXML
+    private Label timeRemainingLabel;
 
     @FXML
     private TableView<Bid> bidTable;
@@ -84,11 +87,13 @@ public class AuctionController {
         bidderColumn.setCellValueFactory(new PropertyValueFactory<>("bidderId"));
         amountColumn.setCellValueFactory(new PropertyValueFactory<>("amount"));
         timeColumn.setCellValueFactory(new PropertyValueFactory<>("bidTime"));
-        timeColumn.setCellFactory(column -> new javafx.scene.control.TableCell<>() {
+        ResponsiveViewSupport.configureResponsiveTable(bidTable);
+        ResponsiveViewSupport.configureCurrencyColumn(amountColumn);
+        timeColumn.setCellFactory(column -> new TableCell<>() {
             @Override
             protected void updateItem(LocalDateTime item, boolean empty) {
                 super.updateItem(item, empty);
-                setText(empty || item == null ? "" : BID_TIME_FORMATTER.format(item));
+                setText(empty ? "" : AuctionDisplayFormatter.formatDateTime(item));
             }
         });
 
@@ -114,6 +119,7 @@ public class AuctionController {
             );
 
             if (!result.accepted()) {
+                refreshView();
                 showAlert(Alert.AlertType.WARNING, "Bid rejected", result.message());
                 return;
             }
@@ -140,6 +146,7 @@ public class AuctionController {
     }
 
     private void refreshView() {
+        workflowService.refreshFromStoreIfChanged();
         Item item = workflowService.findItemById(selectedAuctionId).orElse(null);
         if (item == null) {
             showAlert(Alert.AlertType.WARNING, "Auction missing", "The selected auction no longer exists.");
@@ -150,10 +157,11 @@ public class AuctionController {
         AuctionSummary summary = workflowService.getSummary(selectedAuctionId);
         itemNameLabel.setText(item.getItemName());
         descriptionLabel.setText(item.getDescription());
-        statusLabel.setText(summary.status().name());
-        currentPriceLabel.setText(String.format("$%.2f", summary.currentPrice()));
-        minimumBidLabel.setText(String.format("$%.2f", summary.minimumNextBid()));
+        statusLabel.setText(summary.status().name().replace('_', ' '));
+        currentPriceLabel.setText(AuctionDisplayFormatter.formatCurrency(summary.currentPrice()));
+        minimumBidLabel.setText(AuctionDisplayFormatter.formatCurrency(summary.minimumNextBid()));
         endTimeLabel.setText(item.getEndTimeString());
+        timeRemainingLabel.setText(AuctionDisplayFormatter.formatRemainingTime(summary.secondsRemaining()));
         bidTable.setItems(FXCollections.observableArrayList(workflowService.getBidHistory(selectedAuctionId)));
         bidTable.refresh();
 
