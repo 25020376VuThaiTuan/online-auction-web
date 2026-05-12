@@ -70,6 +70,12 @@
                     <useModulePath>false</useModulePath>
                 </configuration>
             </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.1</version>
+            </plugin>
+
 
             <!-- This plugin makes `mvn javafx:run` work on a clean machine. -->
             <plugin>
