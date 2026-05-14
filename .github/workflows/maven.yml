@@ -1,11 +1,6 @@
 # This workflow will build a Java project with Maven, and cache/restore any dependencies to improve the workflow execution time
 # For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-java-with-maven
 
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
 name: Project CI with Maven
 
 on:
@@ -30,12 +25,11 @@ jobs:
       with:
         java-version: '21'
         distribution: 'temurin'
-        server-id: github-private-repo
+        server-id: github-private-repo # Khớp chính xác với <id> trong file pom.xml của bạn
+        cache: 'maven' # Tự động cache các thư viện để các lần chạy sau nhanh hơn
 
-    - name: Build with Maven
-      run: mvn clean test
-
-    - name: Publish to GitHub Packages
-      run: mvn --batch-mode deploy
+    - name: Build and Publish to GitHub Packages
+      # Lệnh deploy sẽ tự động chạy clean, compile, test và đẩy package lên GitHub cùng lúc
+      run: mvn --batch-mode clean deploy
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
