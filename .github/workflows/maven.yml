@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write # Critical permission required to upload to GitHub Packages
+      packages: write
 
     steps:
     - name: Checkout repository
@@ -25,11 +25,10 @@ jobs:
       with:
         java-version: '21'
         distribution: 'temurin'
-        server-id: github-private-repo # Khớp chính xác với <id> trong file pom.xml của bạn
-        cache: 'maven' # Tự động cache các thư viện để các lần chạy sau nhanh hơn
+        server-id: github-private-repo 
+        cache: 'maven' 
 
     - name: Build and Publish to GitHub Packages
-      # Lệnh deploy sẽ tự động chạy clean, compile, test và đẩy package lên GitHub cùng lúc
       run: mvn --batch-mode clean deploy
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
