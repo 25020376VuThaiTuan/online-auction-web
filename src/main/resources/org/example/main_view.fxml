@@ -2,11 +2,11 @@
 
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.Button?>
+<?import javafx.scene.control.ComboBox?>
 <?import javafx.scene.control.Label?>
 <?import javafx.scene.control.ScrollPane?>
 <?import javafx.scene.control.TableColumn?>
 <?import javafx.scene.control.TableView?>
-<?import javafx.scene.control.TextField?>
 <?import javafx.scene.layout.GridPane?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.Pane?>
@@ -56,6 +56,17 @@
                 <Label fx:id="endTimeLabel" GridPane.columnIndex="1" GridPane.rowIndex="6"/>
             </GridPane>
 
+            <HBox alignment="CENTER_LEFT" spacing="10.0">
+                <Label fx:id="depositLabel" text="Entry deposit: N/A"/>
+                <Button fx:id="confirmEntryButton" onAction="#handleConfirmEntryDeposit" text="Confirm Entry Deposit"/>
+            </HBox>
+
+            <Label fx:id="settlementLabel" maxWidth="900.0" text="Settlement: N/A" wrapText="true"/>
+            <HBox alignment="CENTER_LEFT" spacing="10.0">
+                <Button fx:id="admitResultButton" onAction="#handleAdmitResult" text="Admit Result"/>
+                <Button fx:id="confirmReceivedButton" onAction="#handleConfirmReceived" text="Confirm Received"/>
+            </HBox>
+
             <Label style="-fx-font-size: 16px; -fx-font-weight: bold;" text="Bid History"/>
             <TableView fx:id="bidTable" prefHeight="320.0" maxHeight="1.7976931348623157E308" maxWidth="1.7976931348623157E308">
                 <columns>
@@ -66,31 +77,15 @@
             </TableView>
 
             <HBox alignment="CENTER_LEFT" spacing="10.0">
-                <Label text="Fast Bidding:"/>
-                <Button onAction="#handleFastBid10" text="+$10" fx:id="fastBid10Button"/>
-                <Button onAction="#handleFastBid50" text="+$50" fx:id="fastBid50Button"/>
-                <Button onAction="#handleFastBid100" text="+$100" fx:id="fastBid100Button"/>
-            </HBox>
-
-            <HBox alignment="CENTER_LEFT" spacing="10.0">
                 <Label text="Your bid"/>
-                <javafx.scene.control.ComboBox fx:id="bidAmountCombo"
-                           maxWidth="1.7976931348623157E308"
-                           prefWidth="220.0"
-                           promptText="Select or enter amount"
-                           editable="true"
-                           HBox.hgrow="ALWAYS"/>
+                <ComboBox fx:id="bidAmountCombo"
+                          maxWidth="1.7976931348623157E308"
+                          prefWidth="220.0"
+                          promptText="Select or enter amount"
+                          editable="true"
+                          HBox.hgrow="ALWAYS"/>
+                <Label fx:id="bidEntryTimeRemainingLabel" text="Time remaining: N/A"/>
                 <Button fx:id="placeBidButton" onAction="#handlePlaceBid" text="Place Bid"/>
-            </HBox>
-            
-            <HBox alignment="CENTER_LEFT" spacing="10.0">
-                <Label text="Auto-Bid Max Limit"/>
-                <TextField fx:id="autoBidMaxField"
-                           maxWidth="1.7976931348623157E308"
-                           prefWidth="220.0"
-                           promptText="Enter max limit"
-                           HBox.hgrow="ALWAYS"/>
-                <Button fx:id="setAutoBidButton" onAction="#handleSetAutoBid" text="Set Auto Bid"/>
             </HBox>
         </VBox>
     </content>

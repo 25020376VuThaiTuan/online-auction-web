@@ -17,7 +17,7 @@ public final class ApiJson {
             return Map.of();
         }
 
-        Object parsed = new Parser(safeJson).parseValue();
+        Object parsed = new Parser(safeJson).parse();
         if (!(parsed instanceof Map<?, ?> rawMap)) {
             throw new IllegalArgumentException("Expected a JSON object.");
         }
@@ -127,6 +127,15 @@ public final class ApiJson {
 
         private Parser(String text) {
             this.text = text;
+        }
+
+        private Object parse() {
+            Object value = parseValue();
+            skipWhitespace();
+            if (index != text.length()) {
+                throw new IllegalArgumentException("Unexpected trailing JSON content near index " + index + ".");
+            }
+            return value;
         }
 
         private Object parseValue() {

@@ -5,12 +5,18 @@ public class AutoBid {
     private String bidderId;
     private String itemId;
     private double maxLimit;
+    private double bidIncrement;
 
     public AutoBid(int id, String bidderId, String itemId, double maxLimit) {
+        this(id, bidderId, itemId, maxLimit, 0.0);
+    }
+
+    public AutoBid(int id, String bidderId, String itemId, double maxLimit, double bidIncrement) {
         this.id = id;
         this.bidderId = bidderId;
         this.itemId = itemId;
         this.maxLimit = maxLimit;
+        this.bidIncrement = bidIncrement;
     }
 
     public int getId() {
@@ -43,5 +49,13 @@ public class AutoBid {
 
     public void setMaxLimit(double maxLimit) {
         this.maxLimit = maxLimit;
+    }
+
+    public double getBidIncrement() {
+        return bidIncrement;
+    }
+
+    public void setBidIncrement(double bidIncrement) {
+        this.bidIncrement = bidIncrement;
     }
 }

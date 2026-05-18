@@ -1,5 +1,6 @@
 package org.example.repository;
 
+import org.example.dao.DatabaseConfig;
 import org.example.dao.UserDAO;
 import org.example.model.User;
 
@@ -9,9 +10,11 @@ import java.util.Optional;
 
 public class JdbcUserRepository implements UserRepository {
     public static boolean isEnabled() {
-        return hasText(System.getenv("AUCTION_DB_URL"))
-                && hasText(System.getenv("AUCTION_DB_USER"))
-                && hasText(System.getenv("AUCTION_DB_PASSWORD"));
+        String problem = DatabaseConfig.environmentProblem();
+        if (problem != null) {
+            throw new IllegalStateException(problem);
+        }
+        return DatabaseConfig.hasEnvironmentConfig();
     }
 
     @Override
@@ -23,8 +26,7 @@ public class JdbcUserRepository implements UserRepository {
         try (UserDAO userDAO = UserDAO.fromEnvironment()) {
             return userDAO.findByUsername(username);
         } catch (SQLException e) {
-            System.err.println("Database user lookup failed: " + e.getMessage());
-            return Optional.empty();
+            throw databaseFailure("Database user lookup failed", e);
         }
     }
 
@@ -37,8 +39,7 @@ public class JdbcUserRepository implements UserRepository {
         try (UserDAO userDAO = UserDAO.fromEnvironment()) {
             return Optional.ofNullable(userDAO.getUserById(userId));
         } catch (SQLException e) {
-            System.err.println("Database user lookup failed: " + e.getMessage());
-            return Optional.empty();
+            throw databaseFailure("Database user lookup failed", e);
         }
     }
 
@@ -51,8 +52,7 @@ public class JdbcUserRepository implements UserRepository {
         try (UserDAO userDAO = UserDAO.fromEnvironment()) {
             return userDAO.getAllUsers();
         } catch (SQLException e) {
-            System.err.println("Database user list failed: " + e.getMessage());
-            return List.of();
+            throw databaseFailure("Database user list failed", e);
         }
     }
 
@@ -66,8 +66,21 @@ public class JdbcUserRepository implements UserRepository {
             userDAO.addUser(user);
             return Optional.of(user);
         } catch (SQLException e) {
-            System.err.println("Database user save failed: " + e.getMessage());
-            return Optional.empty();
+            throw databaseFailure("Database user save failed", e);
+        }
+    }
+
+    @Override
+    public boolean update(User user) {
+        if (!isEnabled() || user == null) {
+            return false;
+        }
+
+        try (UserDAO userDAO = UserDAO.fromEnvironment()) {
+            userDAO.updateUser(user);
+            return true;
+        } catch (SQLException e) {
+            throw databaseFailure("Database user update failed", e);
         }
     }
 
@@ -86,12 +99,26 @@ public class JdbcUserRepository implements UserRepository {
             userDAO.updateUser(user);
             return true;
         } catch (SQLException e) {
-            System.err.println("Database role update failed: " + e.getMessage());
-            return false;
+            throw databaseFailure("Database role update failed", e);
         }
     }
 
-    private static boolean hasText(String value) {
-        return value != null && !value.isBlank();
+    @Override
+    public boolean recordLogin(String userId) {
+        if (!isEnabled()) {
+            return false;
+        }
+
+        try (UserDAO userDAO = UserDAO.fromEnvironment()) {
+            userDAO.recordLogin(userId);
+            return true;
+        } catch (SQLException e) {
+            throw databaseFailure("Database login timestamp update failed", e);
+        }
     }
+
+    private IllegalStateException databaseFailure(String operation, SQLException e) {
+        return new IllegalStateException(operation + ": " + e.getMessage(), e);
+    }
+
 }

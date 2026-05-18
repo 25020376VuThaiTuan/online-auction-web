@@ -12,6 +12,7 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.util.Duration;
+import org.example.client.AuctionApiClient;
 import org.example.service.AuctionWorkflowService;
 import org.example.state.ApplicationSession;
 import org.example.util.ResponsiveViewSupport;
@@ -19,6 +20,7 @@ import org.example.util.SceneNavigator;
 import org.example.viewmodel.AuctionListEntry;
 
 public class AuctionListController {
+    private final AuctionApiClient apiClient = AuctionApiClient.getInstance();
     private final AuctionWorkflowService workflowService = AuctionWorkflowService.getInstance();
     private final ApplicationSession applicationSession = ApplicationSession.getInstance();
 
@@ -92,18 +94,28 @@ public class AuctionListController {
 
     @FXML
     private void handleLogout() {
+        if (useApi()) {
+            try {
+                apiClient.logout(apiToken());
+            } catch (AuctionApiClient.ApiClientException ignored) {
+            }
+        }
         applicationSession.logout();
         stopRefreshLoop();
         SceneNavigator.switchScene(auctionTable, "/view/Login.fxml", "Online Auction System");
     }
 
     private void refreshTable() {
-        workflowService.refreshFromStoreIfChanged();
+        if (!useApi()) {
+            workflowService.refreshFromStoreIfChanged();
+        }
         String selectedId = auctionTable.getSelectionModel().getSelectedItem() == null
                 ? null
                 : auctionTable.getSelectionModel().getSelectedItem().getItemId();
 
-        auctionTable.setItems(FXCollections.observableArrayList(workflowService.getAuctionListEntries()));
+        auctionTable.setItems(FXCollections.observableArrayList(
+                useApi() ? apiClient.getAuctionListEntries(apiToken()) : workflowService.getAuctionListEntries()
+        ));
         if (selectedId != null) {
             for (AuctionListEntry entry : auctionTable.getItems()) {
                 if (selectedId.equals(entry.getItemId())) {
@@ -134,5 +146,14 @@ public class AuctionListController {
         alert.setHeaderText(null);
         alert.setContentText(content);
         alert.showAndWait();
+    }
+
+    private boolean useApi() {
+        return apiClient.isEnabled() && applicationSession.getApiToken().isPresent();
+    }
+
+    private String apiToken() {
+        return applicationSession.getApiToken()
+                .orElseThrow(() -> new IllegalStateException("No API token in session."));
     }
 }

@@ -49,6 +49,12 @@ public class AuctionSession implements AuctionSubject {
         lock.lock();
         try {
             if (!status.isFinished()) {
+                LocalDateTime now = LocalDateTime.now();
+                item.setStartTime(now);
+                if (endTime != null && !now.isBefore(endTime)) {
+                    endTime = now.plusHours(1);
+                    item.setEndTime(endTime);
+                }
                 status = AuctionStatus.RUNNING;
             }
         } finally {
@@ -59,6 +65,8 @@ public class AuctionSession implements AuctionSubject {
     public void finishAuction() {
         lock.lock();
         try {
+            endTime = LocalDateTime.now();
+            item.setEndTime(endTime);
             status = AuctionStatus.FINISHED;
         } finally {
             lock.unlock();
@@ -72,10 +80,12 @@ public class AuctionSession implements AuctionSubject {
     public BidValidationResult submitBid(Bid bid) {
         Objects.requireNonNull(bid, "bid");
 
+        Bid acceptedBid;
+        BidValidationResult acceptedResult;
         // One lock per auction session prevents concurrent bidders from causing lost updates.
         lock.lock();
         try {
-            AuctionStatus currentStatus = getStatus();
+            AuctionStatus currentStatus = resolveStatusLocked(LocalDateTime.now());
             if (currentStatus != AuctionStatus.RUNNING) {
                 return BidValidationResult.rejected(
                         "Auction is not accepting bids.",
@@ -102,11 +112,14 @@ public class AuctionSession implements AuctionSubject {
             item.setEndTime(endTime);
             status = AuctionRules.resolveStatus(item.getStartTime(), endTime, LocalDateTime.now());
 
-            notifyObservers();
-            return validation;
+            acceptedBid = bid;
+            acceptedResult = validation;
         } finally {
             lock.unlock();
         }
+
+        notifyObservers(acceptedBid);
+        return acceptedResult;
     }
 
     @Override
@@ -121,6 +134,10 @@ public class AuctionSession implements AuctionSubject {
         } finally {
             lock.unlock();
         }
+        notifyObservers(lastBid);
+    }
+
+    private void notifyObservers(Bid lastBid) {
         for (AuctionObserver observer : observers) {
             observer.onNewBid(lastBid);
         }
@@ -141,12 +158,7 @@ public class AuctionSession implements AuctionSubject {
     public AuctionStatus getStatus() {
         lock.lock();
         try {
-            if (status != null && status.isFinished()) {
-                return status;
-            }
-
-            status = AuctionRules.resolveStatus(item.getStartTime(), endTime, LocalDateTime.now());
-            return status;
+            return resolveStatusLocked(LocalDateTime.now());
         } finally {
             lock.unlock();
         }
@@ -162,7 +174,22 @@ public class AuctionSession implements AuctionSubject {
     }
 
     public AuctionSummary getSummary() {
-        return AuctionRules.buildSummary(item, getBids(), getStatus(), LocalDateTime.now());
+        lock.lock();
+        try {
+            LocalDateTime now = LocalDateTime.now();
+            return AuctionRules.buildSummary(item, List.copyOf(bids), resolveStatusLocked(now), now);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private AuctionStatus resolveStatusLocked(LocalDateTime now) {
+        if (status != null && status.isFinished()) {
+            return status;
+        }
+
+        status = AuctionRules.resolveStatus(item.getStartTime(), endTime, now);
+        return status;
     }
 
     @Override

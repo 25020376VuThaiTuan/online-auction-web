@@ -1,8 +1,5 @@
 package org.example.model;
 
-import java.util.ArrayList;
-import java.util.List;
-
 public abstract class User extends Entity {
     private String username;
     private String password;
@@ -11,7 +8,6 @@ public abstract class User extends Entity {
     private String phoneNumber;
     private String address;
     private String avatarUrl;
-    private final List<BankAccount> bankAccounts = new ArrayList<>();
     protected String role;
 
     public User(String id, String username, String password, String email) {
@@ -78,23 +74,6 @@ public abstract class User extends Entity {
         this.avatarUrl = avatarUrl == null ? null : avatarUrl.trim();
     }
 
-    public List<BankAccount> getBankAccounts() {
-        return new ArrayList<>(bankAccounts);
-    }
-
-    public void addBankAccount(BankAccount bankAccount) {
-        if (bankAccount != null) {
-            bankAccounts.add(bankAccount);
-        }
-    }
-
-    public void replaceBankAccounts(List<BankAccount> accounts) {
-        bankAccounts.clear();
-        if (accounts != null) {
-            bankAccounts.addAll(accounts);
-        }
-    }
-
     public void copyProfileFrom(User source) {
         if (source == null) {
             return;
@@ -104,7 +83,6 @@ public abstract class User extends Entity {
         setPhoneNumber(source.getPhoneNumber());
         setAddress(source.getAddress());
         setAvatarUrl(source.getAvatarUrl());
-        replaceBankAccounts(source.getBankAccounts());
     }
 
     public abstract void displayRole();

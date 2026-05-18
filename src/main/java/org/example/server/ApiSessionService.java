@@ -53,6 +53,20 @@ public final class ApiSessionService {
         return findSession(token).map(SessionState::user);
     }
 
+    public void replaceUser(User user) {
+        if (user == null || user.getId() == null || user.getId().isBlank()) {
+            return;
+        }
+
+        sessionsByToken.replaceAll((token, session) -> {
+            User sessionUser = session.user();
+            if (sessionUser == null || !user.getId().equals(sessionUser.getId())) {
+                return session;
+            }
+            return new SessionState(session.token(), user, session.createdAt(), session.expiresAt());
+        });
+    }
+
     public void revoke(String token) {
         if (token == null || token.isBlank()) {
             return;

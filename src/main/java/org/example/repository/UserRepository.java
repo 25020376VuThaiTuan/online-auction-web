@@ -20,7 +20,15 @@ public interface UserRepository {
         return Optional.empty();
     }
 
+    default boolean update(User user) {
+        return false;
+    }
+
     default boolean updateRole(String userId, String role) {
+        return false;
+    }
+
+    default boolean recordLogin(String userId) {
         return false;
     }
 }

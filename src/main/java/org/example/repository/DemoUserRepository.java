@@ -61,6 +61,11 @@ public class DemoUserRepository implements UserRepository {
     }
 
     @Override
+    public synchronized boolean update(User user) {
+        return save(user).isPresent();
+    }
+
+    @Override
     public synchronized boolean updateRole(String userId, String role) {
         Optional<User> existing = findById(userId);
         if (existing.isEmpty()) {
@@ -70,6 +75,11 @@ public class DemoUserRepository implements UserRepository {
         User converted = convertRole(existing.get(), role);
         usersByUsername.put(normalize(converted.getUsername()), converted);
         return true;
+    }
+
+    @Override
+    public synchronized boolean recordLogin(String userId) {
+        return findById(userId).isPresent();
     }
 
     private void seedUser(User user) {
@@ -110,9 +120,9 @@ public class DemoUserRepository implements UserRepository {
             case "ADMIN" -> new Admin(source.getId(), source.getUsername(), source.getPassword(), source.getEmail());
             case "SELLER" -> new Seller(source.getId(), source.getUsername(), source.getPassword(), source.getEmail());
             case "BIDDER" -> new Bidder(source.getId(), source.getUsername(), source.getPassword(), source.getEmail(),
-                    source instanceof Bidder bidder ? bidder.getBalance() : 10_000.0);
+                    source instanceof Bidder bidder ? bidder.getBalance() : 0.0);
             default -> new Bidder(source.getId(), source.getUsername(), source.getPassword(), source.getEmail(),
-                    source instanceof Bidder bidder ? bidder.getBalance() : 10_000.0);
+                    source instanceof Bidder bidder ? bidder.getBalance() : 0.0);
         };
         converted.copyProfileFrom(source);
         converted.setRole(safeRole);

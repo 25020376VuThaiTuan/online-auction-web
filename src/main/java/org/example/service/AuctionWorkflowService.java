@@ -1,20 +1,26 @@
 package org.example.service;
 
 import org.example.auction.AuctionRules;
+import org.example.auction.AuctionSeedData;
 import org.example.auction.AuctionSession;
 import org.example.auction.AuctionSessionRegistry;
+import org.example.auction.AuctionStatus;
 import org.example.auction.AuctionSummary;
 import org.example.auction.BidValidationResult;
 import org.example.dao.BidDAO;
+import org.example.dao.DatabaseConfig;
 import org.example.dao.ItemDAO;
 import org.example.model.ApprovalStatus;
+import org.example.model.AuctionStore;
 import org.example.model.AutoBid;
 import org.example.model.Bid;
+import org.example.model.DataManager;
 import org.example.model.Item;
 import org.example.model.ItemFactory;
 import org.example.model.User;
 import org.example.viewmodel.AuctionListEntry;
 
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -29,10 +35,13 @@ public final class AuctionWorkflowService {
     private static final AuctionWorkflowService INSTANCE = new AuctionWorkflowService();
 
     private final AuctionSessionRegistry sessionRegistry = AuctionSessionRegistry.getInstance();
+    private final DataManager dataManager = DataManager.getInstance();
     
     private boolean initialized;
+    private boolean usingLocalStore;
     private List<Item> items = new ArrayList<>();
     private Map<String, List<Bid>> bidHistoryByItemId = new HashMap<>();
+    private Map<String, List<AutoBid>> autoBidsByItemId = new HashMap<>();
 
     private AuctionWorkflowService() {
     }
@@ -115,8 +124,8 @@ public final class AuctionWorkflowService {
         AuctionSession session = getSessionForItem(itemId);
 
         Bid bid = new Bid(
-                "BID-" + UUID.randomUUID(),
-                user.getUsername(),
+                newBidId(),
+                user.getId(),
                 itemId,
                 amount,
                 LocalDateTime.now()
@@ -127,40 +136,84 @@ public final class AuctionWorkflowService {
             return result;
         }
 
-        try (ItemDAO itemDAO = ItemDAO.fromEnvironment();
-             BidDAO bidDAO = BidDAO.fromEnvironment()) {
-            
-            bidDAO.addBid(bid);
-            itemDAO.updateCurrentPrice(itemId, item.getCurrentPrice());
-            
-            // Process auto-bids
-            processAutoBids(item, session, bidDAO, itemDAO);
+        if (usingLocalStore) {
+            recordLocalBid(item, bid);
+            processLocalAutoBids(item, session, bid.getBidderId());
+            persistLocalStore();
+            return result;
+        }
 
+        try {
+            persistAcceptedBid(item, bid, session);
         } catch (SQLException e) {
-            e.printStackTrace();
-            return BidValidationResult.rejected("Database error: " + e.getMessage(), amount, 0, 0, null, null);
+            refreshFromStoreIfChanged();
+            throw databaseFailure("Database bid persistence failed", e);
         }
 
         refreshFromStoreIfChanged();
         return result;
     }
 
-    private void processAutoBids(Item item, AuctionSession session, BidDAO bidDAO, ItemDAO itemDAO) throws SQLException {
+    private void persistAcceptedBid(Item item, Bid bid, AuctionSession session) throws SQLException {
+        DatabaseConfig config = DatabaseConfig.fromEnvironment();
+        try (Connection connection = config.openConnection()) {
+            boolean originalAutoCommit = connection.getAutoCommit();
+            try {
+                if (originalAutoCommit) {
+                    connection.setAutoCommit(false);
+                }
+                try (ItemDAO itemDAO = new ItemDAO(connection);
+                     BidDAO bidDAO = new BidDAO(connection)) {
+                    bidDAO.addBid(bid);
+                    itemDAO.updateCurrentPrice(item.getId(), item.getCurrentPrice());
+                    processAutoBids(item, session, bidDAO, itemDAO, bid.getBidderId());
+                }
+                if (originalAutoCommit) {
+                    connection.commit();
+                }
+            } catch (SQLException e) {
+                if (originalAutoCommit) {
+                    connection.rollback();
+                }
+                throw e;
+            } finally {
+                if (originalAutoCommit) {
+                    connection.setAutoCommit(true);
+                }
+            }
+        }
+    }
+
+    private void processAutoBids(
+            Item item,
+            AuctionSession session,
+            BidDAO bidDAO,
+            ItemDAO itemDAO,
+            String triggerBidderId
+    ) throws SQLException {
         boolean autoBidPlaced = true;
         while (autoBidPlaced) {
             autoBidPlaced = false;
             List<AutoBid> autoBids = bidDAO.getAllAutoBidsForItem(item.getId());
             double currentHighest = session.getCurrentHighestBid();
-            double minNext = AuctionRules.minimumNextBid(currentHighest);
+            List<Bid> sessionBids = session.getBids();
+            if (sessionBids.isEmpty()) {
+                return;
+            }
+            String leadingBidderId = sessionBids.get(sessionBids.size() - 1).getBidderId();
             
             for (AutoBid ab : autoBids) {
-                // If the auto-bid limit is sufficient to place the minimum next bid
-                if (ab.getMaxLimit() >= minNext && !ab.getBidderId().equals(session.getBids().get(session.getBids().size()-1).getBidderId())) {
-                    Bid nextBid = new Bid("BID-" + UUID.randomUUID(), ab.getBidderId(), item.getId(), minNext, LocalDateTime.now());
+                if (shouldTriggerAutoBid(ab, triggerBidderId, leadingBidderId)) {
+                    double nextAmount = nextAutoBidAmount(currentHighest, ab);
+                    if (nextAmount <= 0.0) {
+                        continue;
+                    }
+                    Bid nextBid = new Bid(newBidId(), ab.getBidderId(), item.getId(), nextAmount, LocalDateTime.now());
                     BidValidationResult res = session.submitBid(nextBid);
                     if (res.accepted()) {
                         bidDAO.addBid(nextBid);
                         itemDAO.updateCurrentPrice(item.getId(), session.getCurrentHighestBid());
+                        triggerBidderId = ab.getBidderId();
                         autoBidPlaced = true;
                         break; // Re-evaluate all auto-bids after a successful bid
                     }
@@ -185,6 +238,18 @@ public final class AuctionWorkflowService {
             return false;
         }
 
+        if (usingLocalStore) {
+            return false;
+        }
+
+        return refreshFromDatabase();
+    }
+
+    private boolean refreshFromDatabase() {
+        if (!databaseEnabled()) {
+            return false;
+        }
+
         try (ItemDAO itemDAO = ItemDAO.fromEnvironment();
              BidDAO bidDAO = BidDAO.fromEnvironment()) {
             
@@ -196,8 +261,7 @@ public final class AuctionWorkflowService {
             rebuildSessions();
             return true;
         } catch (SQLException e) {
-            e.printStackTrace();
-            return false;
+            throw databaseFailure("Database auction refresh failed", e);
         }
     }
 
@@ -230,12 +294,19 @@ public final class AuctionWorkflowService {
         );
         item.setSellerId(sellerId);
         item.setApprovalStatus(ApprovalStatus.PENDING);
+
+        if (usingLocalStore) {
+            items.add(item);
+            bidHistoryByItemId.putIfAbsent(item.getId(), new ArrayList<>());
+            persistLocalStore();
+            rebuildSessions();
+            return item;
+        }
         
         try (ItemDAO itemDAO = ItemDAO.fromEnvironment()) {
             itemDAO.addItem(item, type, extraText, extraNumber);
         } catch (SQLException e) {
-            e.printStackTrace();
-            return null;
+            throw databaseFailure("Database item save failed", e);
         }
         
         refreshFromStoreIfChanged();
@@ -245,11 +316,21 @@ public final class AuctionWorkflowService {
     public synchronized boolean updateApprovalStatus(String itemId, ApprovalStatus approvalStatus) {
         ensureInitialized();
 
+        Optional<Item> existingItem = findItemInternal(itemId);
+        if (existingItem.isEmpty() || getSessionForItem(itemId).getStatus().isFinished()) {
+            return false;
+        }
+
+        if (usingLocalStore) {
+            existingItem.get().setApprovalStatus(approvalStatus);
+            persistLocalStore();
+            return true;
+        }
+
         try (ItemDAO itemDAO = ItemDAO.fromEnvironment()) {
             itemDAO.updateApprovalStatus(itemId, approvalStatus);
         } catch (SQLException e) {
-            e.printStackTrace();
-            return false;
+            throw databaseFailure("Database approval update failed", e);
         }
         
         refreshFromStoreIfChanged();
@@ -257,27 +338,251 @@ public final class AuctionWorkflowService {
     }
     
     public synchronized boolean registerAutoBid(String itemId, User user, double maxLimit) {
-        try (BidDAO bidDAO = BidDAO.fromEnvironment()) {
-            bidDAO.addOrUpdateAutoBid(new AutoBid(0, user.getUsername(), itemId, maxLimit));
-            return true;
-        } catch (SQLException e) {
-            e.printStackTrace();
+        return registerAutoBid(itemId, user, maxLimit, 0.0);
+    }
+
+    public synchronized boolean registerAutoBid(String itemId, User user, double maxLimit, double bidIncrement) {
+        ensureInitialized();
+        if (user == null || !Double.isFinite(maxLimit) || maxLimit <= 0.0
+                || !Double.isFinite(bidIncrement) || bidIncrement < 0.0) {
             return false;
         }
+
+        if (usingLocalStore) {
+            List<AutoBid> autoBids = autoBidsByItemId.computeIfAbsent(itemId, ignored -> new ArrayList<>());
+            autoBids.removeIf(autoBid -> autoBid.getBidderId().equals(user.getId()));
+            autoBids.add(new AutoBid(autoBids.size() + 1, user.getId(), itemId, maxLimit, bidIncrement));
+            return true;
+        }
+
+        try (BidDAO bidDAO = BidDAO.fromEnvironment()) {
+            bidDAO.addOrUpdateAutoBid(new AutoBid(0, user.getId(), itemId, maxLimit, bidIncrement));
+            return true;
+        } catch (SQLException e) {
+            throw databaseFailure("Database auto-bid save failed", e);
+        }
+    }
+
+    public synchronized boolean startAuction(String itemId) {
+        ensureInitialized();
+        refreshFromStoreIfChanged();
+
+        Optional<Item> item = findItemInternal(itemId);
+        if (item.isEmpty()) {
+            return false;
+        }
+
+        AuctionSession session = getSessionForItem(itemId);
+        if (session.getStatus().isFinished()) {
+            return false;
+        }
+
+        session.startAuction();
+        persistAuctionWindow(item.get(), AuctionStatus.RUNNING);
+        return true;
+    }
+
+    public synchronized boolean finishAuction(String itemId) {
+        ensureInitialized();
+        refreshFromStoreIfChanged();
+
+        Optional<Item> item = findItemInternal(itemId);
+        if (item.isEmpty()) {
+            return false;
+        }
+
+        AuctionSession session = getSessionForItem(itemId);
+        if (session.getStatus().isFinished()) {
+            return false;
+        }
+
+        session.finishAuction();
+        persistAuctionWindow(item.get(), AuctionStatus.FINISHED);
+        return true;
     }
 
     private void ensureInitialized() {
         if (initialized) {
             return;
         }
-        refreshFromStoreIfChanged();
         initialized = true;
+        if (!refreshFromDatabase()) {
+            initializeLocalStore();
+        }
     }
 
     private Optional<Item> findItemInternal(String itemId) {
         return items.stream()
                 .filter(item -> item.getId().equals(itemId))
                 .findFirst();
+    }
+
+    private String newBidId() {
+        return UUID.randomUUID().toString();
+    }
+
+    private void processLocalAutoBids(Item item, AuctionSession session, String triggerBidderId) {
+        boolean autoBidPlaced = true;
+        while (autoBidPlaced) {
+            autoBidPlaced = false;
+            List<AutoBid> autoBids = autoBidsByItemId.getOrDefault(item.getId(), List.of());
+            double currentHighest = session.getCurrentHighestBid();
+            List<Bid> sessionBids = session.getBids();
+            if (sessionBids.isEmpty()) {
+                return;
+            }
+            String leadingBidderId = sessionBids.get(sessionBids.size() - 1).getBidderId();
+
+            for (AutoBid autoBid : autoBids) {
+                if (shouldTriggerAutoBid(autoBid, triggerBidderId, leadingBidderId)) {
+                    double nextAmount = nextAutoBidAmount(currentHighest, autoBid);
+                    if (nextAmount <= 0.0) {
+                        continue;
+                    }
+                    Bid nextBid = new Bid(newBidId(), autoBid.getBidderId(), item.getId(), nextAmount, LocalDateTime.now());
+                    BidValidationResult result = session.submitBid(nextBid);
+                    if (result.accepted()) {
+                        recordLocalBid(item, nextBid);
+                        triggerBidderId = autoBid.getBidderId();
+                        autoBidPlaced = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    static boolean shouldTriggerAutoBid(AutoBid autoBid, String triggerBidderId, String leadingBidderId) {
+        if (autoBid == null || autoBid.getBidderId() == null || autoBid.getBidderId().isBlank()) {
+            return false;
+        }
+        String autoBidderId = autoBid.getBidderId();
+        return !autoBidderId.equals(triggerBidderId) && !autoBidderId.equals(leadingBidderId);
+    }
+
+    static double nextAutoBidAmount(double currentHighest, AutoBid autoBid) {
+        if (autoBid == null) {
+            return 0.0;
+        }
+        double minNext = AuctionRules.minimumNextBid(currentHighest);
+        if (autoBid.getMaxLimit() < minNext) {
+            return 0.0;
+        }
+        double requiredIncrement = AuctionRules.minimumIncrement(currentHighest);
+        double configuredIncrement = autoBid.getBidIncrement();
+        double effectiveIncrement = configuredIncrement > 0.0
+                ? Math.max(configuredIncrement, requiredIncrement)
+                : requiredIncrement;
+        double requestedAmount = roundCurrency(currentHighest + effectiveIncrement);
+        return roundCurrency(Math.min(autoBid.getMaxLimit(), requestedAmount));
+    }
+
+    private static double roundCurrency(double amount) {
+        return Math.round(amount * 100.0) / 100.0;
+    }
+
+    private void recordLocalBid(Item item, Bid bid) {
+        bidHistoryByItemId.computeIfAbsent(item.getId(), ignored -> new ArrayList<>()).add(bid);
+        item.setCurrentPrice(Math.max(item.getCurrentPrice(), bid.getAmount()));
+    }
+
+    private void initializeLocalStore() {
+        usingLocalStore = true;
+        AuctionStore store = dataManager.loadStore();
+        items = store.getItems();
+        bidHistoryByItemId = store.getBidHistoryByItemId();
+        boolean storeChanged = false;
+
+        if (items.isEmpty()) {
+            items = new ArrayList<>(AuctionSeedData.createDemoItems());
+            for (Item item : items) {
+                bidHistoryByItemId.putIfAbsent(item.getId(), new ArrayList<>());
+            }
+            storeChanged = true;
+        }
+
+        for (Item item : items) {
+            if ("U-SEL-001".equalsIgnoreCase(item.getSellerId())) {
+                item.setSellerId("");
+                storeChanged = true;
+            }
+            if (!bidHistoryByItemId.containsKey(item.getId())) {
+                bidHistoryByItemId.put(item.getId(), new ArrayList<>());
+                storeChanged = true;
+            }
+        }
+
+        if (refreshStaleLocalDemoAuctions()) {
+            storeChanged = true;
+        }
+        if (storeChanged) {
+            persistLocalStore();
+        }
+        rebuildSessions();
+    }
+
+    private boolean refreshStaleLocalDemoAuctions() {
+        LocalDateTime now = LocalDateTime.now();
+        boolean hasLiveApprovedAuction = items.stream()
+                .filter(Item::isApproved)
+                .anyMatch(item -> AuctionRules.resolveStatus(item.getStartTime(), item.getEndTime(), now) != AuctionStatus.FINISHED);
+        if (hasLiveApprovedAuction) {
+            return false;
+        }
+
+        List<Item> restartableDemoItems = items.stream()
+                .filter(Item::isApproved)
+                .filter(this::isLocalDemoItem)
+                .filter(item -> bidHistoryByItemId.getOrDefault(item.getId(), List.of()).isEmpty())
+                .toList();
+        if (restartableDemoItems.isEmpty()) {
+            return false;
+        }
+
+        for (int index = 0; index < restartableDemoItems.size(); index++) {
+            Item item = restartableDemoItems.get(index);
+            item.setStartTime(now.minusMinutes(5L + index));
+            item.setEndTime(now.plusHours(2L + index));
+            item.setCurrentPrice(item.getStartingPrice());
+        }
+        return true;
+    }
+
+    private boolean isLocalDemoItem(Item item) {
+        String sellerId = item.getSellerId();
+        return sellerId.isBlank();
+    }
+
+    private void persistLocalStore() {
+        if (usingLocalStore) {
+            dataManager.saveStore(new AuctionStore(items, bidHistoryByItemId));
+        }
+    }
+
+    private void persistAuctionWindow(Item item, AuctionStatus status) {
+        if (usingLocalStore) {
+            persistLocalStore();
+            return;
+        }
+
+        try (ItemDAO itemDAO = ItemDAO.fromEnvironment()) {
+            itemDAO.updateAuctionWindow(item.getId(), item.getStartTime(), item.getEndTime(), status.name());
+        } catch (SQLException e) {
+            throw databaseFailure("Database auction window update failed", e);
+        }
+        refreshFromStoreIfChanged();
+    }
+
+    private boolean databaseEnabled() {
+        String problem = DatabaseConfig.environmentProblem();
+        if (problem != null) {
+            throw new IllegalStateException(problem);
+        }
+        return DatabaseConfig.hasEnvironmentConfig();
+    }
+
+    private IllegalStateException databaseFailure(String operation, SQLException e) {
+        return new IllegalStateException(operation + ": " + e.getMessage(), e);
     }
 
     private void rebuildSessions() {
