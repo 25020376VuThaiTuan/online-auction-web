@@ -29,7 +29,7 @@ import org.example.util.SceneNavigator;
 
 import java.time.LocalDateTime;
 
-public class AuctionController {
+public class AuctionController implements org.example.auction.AuctionObserver {
     private final AuctionWorkflowService workflowService = AuctionWorkflowService.getInstance();
     private final ApplicationSession applicationSession = ApplicationSession.getInstance();
 
@@ -122,7 +122,7 @@ public class AuctionController {
     @FXML
     public void handlePlaceBid() {
         if (applicationSession.getCurrentUser().isEmpty()) {
-            showAlert(Alert.AlertType.WARNING, "Authentication required", "Please sign in again.");
+            showAlert(Alert.AlertType.WARNING, "Cảnh báo", "Vui lòng đăng nhập lại.");
             handleLogout();
             return;
         }
@@ -130,37 +130,45 @@ public class AuctionController {
         try {
             String selectedAmount = bidAmountCombo.getValue();
             if (selectedAmount == null || selectedAmount.isEmpty()) {
-                showAlert(Alert.AlertType.WARNING, "Invalid amount", "Please enter or select a bid amount.");
+                showAlert(Alert.AlertType.WARNING, "Lỗi nhập liệu", "Vui lòng chọn hoặc nhập số tiền.");
                 return;
             }
+
+            // Parse tiền tệ
             double bidAmount = Double.parseDouble(selectedAmount.replace("$", "").replace(",", ""));
-            
-            Alert confirmAlert = new Alert(Alert.AlertType.CONFIRMATION, "Are you sure you want to place a bid of $" + bidAmount + "?", ButtonType.YES, ButtonType.NO);
-            confirmAlert.setTitle("Transaction Verification");
+
+            // Xác nhận
+            Alert confirmAlert = new Alert(Alert.AlertType.CONFIRMATION, "Chốt đơn với giá $" + bidAmount + "?", ButtonType.YES, ButtonType.NO);
+            confirmAlert.setTitle("Xác nhận");
             confirmAlert.setHeaderText(null);
             confirmAlert.showAndWait();
-            
+
             if (confirmAlert.getResult() != ButtonType.YES) {
                 return;
             }
 
+            // Service trả về Result, KHÔNG ném Exception
             BidValidationResult result = workflowService.placeBid(
                     selectedAuctionId,
-                    applicationSession.getCurrentUser().orElseThrow(),
+                    applicationSession.getCurrentUser().get(),
                     bidAmount
             );
 
+            // Xử lý Result ở đây
             if (!result.accepted()) {
                 refreshView();
-                showAlert(Alert.AlertType.WARNING, "Bid rejected", result.message());
+                // Lấy thẳng message lỗi từ backend ra hiện Alert đỏ
+                showAlert(Alert.AlertType.ERROR, "Lỗi Đặt Giá", result.message());
                 return;
             }
 
             bidAmountCombo.setValue("");
             refreshView();
-            showAlert(Alert.AlertType.INFORMATION, "Bid accepted", result.message());
+            showAlert(Alert.AlertType.INFORMATION, "Thành công", "Mày đã dẫn đầu!");
+
         } catch (NumberFormatException e) {
-            showAlert(Alert.AlertType.WARNING, "Invalid amount", "Enter a valid numeric bid amount.");
+            // Chỉ bắt lỗi gõ chữ vào ô nhập số
+            showAlert(Alert.AlertType.WARNING, "Sai định dạng", "Chỉ được nhập số thôi.");
         }
     }
     
@@ -269,7 +277,7 @@ public class AuctionController {
 
     private void startRefreshLoop() {
         // The detail screen refreshes itself so status, timers, and bid history stay near real-time.
-        refreshTimeline = new Timeline(new KeyFrame(Duration.seconds(1), event -> refreshView()));
+        refreshTimeline = new Timeline(new KeyFrame(Duration.seconds(1), event -> updateClockOnly()));
         refreshTimeline.setCycleCount(Timeline.INDEFINITE);
         refreshTimeline.play();
     }
@@ -286,5 +294,22 @@ public class AuctionController {
         alert.setHeaderText(null);
         alert.setContentText(content);
         alert.showAndWait();
+    }
+    @Override
+    public void onNewBid(org.example.model.Bid bid) {
+        Platform.runLater(() -> refreshView());
+    }
+    private void updateClockOnly() {
+        AuctionSummary summary = workflowService.getSummary(selectedAuctionId);
+        timeRemainingLabel.setText(AuctionDisplayFormatter.formatRemainingTime(summary.secondsRemaining()));
+
+        boolean canBid = summary.status() == AuctionStatus.RUNNING && applicationSession.getCurrentUser().isPresent();
+        bidAmountCombo.setDisable(!canBid);
+        placeBidButton.setDisable(!canBid);
+        fastBid10Button.setDisable(!canBid);
+        fastBid50Button.setDisable(!canBid);
+        fastBid100Button.setDisable(!canBid);
+        autoBidMaxField.setDisable(!canBid);
+        setAutoBidButton.setDisable(!canBid);
     }
 }
