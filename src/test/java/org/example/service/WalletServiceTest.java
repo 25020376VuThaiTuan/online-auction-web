@@ -102,7 +102,8 @@ class WalletServiceTest {
                 .orElseThrow()
                 .id();
         assertEquals(primaryAccountId, second.linkedAccounts().stream().filter(account -> account.primary()).findFirst().orElseThrow().id());
-        assertEquals(0.0, second.linkedAccounts().stream()
+        assertEquals(100.0, second.balance());
+        assertEquals(60.0, second.linkedAccounts().stream()
                 .filter(account -> account.id().equals(primaryAccountId))
                 .findFirst()
                 .orElseThrow()
@@ -110,7 +111,7 @@ class WalletServiceTest {
 
         WalletSummary sent = walletService.sendMoney(bidder, primaryAccountId, 20.0, "4567");
         assertEquals(80.0, sent.balance());
-        assertEquals(20.0, sent.linkedAccounts().stream()
+        assertEquals(80.0, sent.linkedAccounts().stream()
                 .filter(account -> account.id().equals(primaryAccountId))
                 .findFirst()
                 .orElseThrow()
@@ -119,12 +120,28 @@ class WalletServiceTest {
 
         WalletSummary received = walletService.receiveMoney(bidder, primaryAccountId, 15.0, "4567");
         assertEquals(95.0, received.balance());
-        assertEquals(5.0, received.linkedAccounts().stream()
+        assertEquals(65.0, received.linkedAccounts().stream()
                 .filter(account -> account.id().equals(primaryAccountId))
                 .findFirst()
                 .orElseThrow()
                 .balance());
         assertEquals("TOP_UP", received.transactions().getFirst().transactionType());
+    }
+
+    @Test
+    void linkedAccountOpeningBalanceMustBeNonNegative() {
+        Bidder bidder = bidder("OPENING-BALANCE", 100.0);
+        walletService.setPin(bidder, "2468");
+
+        assertThrows(IllegalArgumentException.class, () -> walletService.addLinkedAccount(
+                bidder,
+                "Checking",
+                "Provider",
+                "22223333",
+                -1.0,
+                true,
+                "2468"
+        ));
     }
 
     @Test

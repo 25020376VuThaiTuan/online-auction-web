@@ -46,7 +46,7 @@ class WalletApiIntegrationTest {
     }
 
     @Test
-    void walletAccountCreationIgnoresRequestedBalanceAndRemovalUsesApiPinFlow() throws Exception {
+    void walletAccountCreationUsesOpeningBalanceForTransfersAndRemovalUsesApiPinFlow() throws Exception {
         LoginResult login = login();
         String token = login.token();
         request("PATCH", "/users/me/wallet/pin", token, Map.of("newPin", "2468"));
@@ -55,14 +55,25 @@ class WalletApiIntegrationTest {
                 "accountName", "Integration Account",
                 "providerName", "Integration Provider",
                 "accountReference", "1234567890",
-                "balance", 30.0,
+                "initialBalance", 30.0,
                 "primary", true,
                 "walletPin", "2468"
         ));
         Map<?, ?> wallet = (Map<?, ?>) accountResponse.get("wallet");
         Map<?, ?> account = (Map<?, ?>) ((java.util.List<?>) wallet.get("linkedAccounts")).getFirst();
         String accountId = String.valueOf(account.get("id"));
-        assertEquals(0.0, ((Number) account.get("balance")).doubleValue());
+        assertEquals(30.0, ((Number) account.get("balance")).doubleValue());
+        assertEquals(0.0, ((Number) wallet.get("balance")).doubleValue());
+
+        Map<String, Object> topUpResponse = request("POST", "/users/me/wallet/top-up", token, Map.of(
+                "accountId", accountId,
+                "amount", 20.0,
+                "walletPin", "2468"
+        ));
+        Map<?, ?> toppedUpWallet = (Map<?, ?>) topUpResponse.get("wallet");
+        Map<?, ?> toppedUpAccount = (Map<?, ?>) ((java.util.List<?>) toppedUpWallet.get("linkedAccounts")).getFirst();
+        assertEquals(20.0, ((Number) toppedUpWallet.get("balance")).doubleValue());
+        assertEquals(10.0, ((Number) toppedUpAccount.get("balance")).doubleValue());
 
         Map<String, Object> removeResponse = request("DELETE", "/users/me/wallet/accounts/" + accountId, token, Map.of(
                 "walletPin", "2468"

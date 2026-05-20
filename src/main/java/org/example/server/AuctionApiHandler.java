@@ -349,7 +349,7 @@ public final class AuctionApiHandler implements HttpHandler {
                             ApiJson.requireString(request, "accountName"),
                             ApiJson.requireString(request, "providerName"),
                             ApiJson.requireString(request, "accountReference"),
-                            0.0,
+                            optionalOpeningBalance(request),
                             optionalBoolean(request, "primary"),
                             ApiJson.requireString(request, "walletPin")
                     )),
@@ -967,6 +967,13 @@ public final class AuctionApiHandler implements HttpHandler {
             return Double.parseDouble(text.trim());
         }
         return 0.0;
+    }
+
+    private double optionalOpeningBalance(Map<String, Object> source) {
+        if (source.containsKey("initialBalance")) {
+            return optionalDouble(source, "initialBalance");
+        }
+        return optionalDouble(source, "balance");
     }
 
     private Map<String, Object> jsonObject(Object... fields) {

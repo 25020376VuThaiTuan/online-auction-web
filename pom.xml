@@ -32,6 +32,8 @@
         <javafx.version>21.0.6</javafx.version>
         <mysql.version>8.3.0</mysql.version>
         <junit.version>5.10.2</junit.version>
+        <app.mainClass>org.example.Launcher</app.mainClass>
+        <api.server.mainClass>org.example.server.AuctionApiServerMain</api.server.mainClass>
     </properties>
 
     <dependencies>
@@ -90,9 +92,22 @@
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.1.1</version>
+                <!-- Default developer run path: `mvn exec:java` starts the JavaFX desktop app. -->
                 <configuration>
-                    <mainClass>org.example.server.AuctionApiServerMain</mainClass>
+                    <mainClass>${app.mainClass}</mainClass>
                 </configuration>
+                <executions>
+                    <execution>
+                        <id>api-server</id>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                        <configuration>
+                            <!-- Standalone API server path: `mvn exec:java@api-server`. -->
+                            <mainClass>${api.server.mainClass}</mainClass>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
 
             <plugin>
@@ -111,13 +126,13 @@
             </plugin>
 
 
-            <!-- This plugin makes `mvn javafx:run` work on a clean machine. -->
+            <!-- This plugin keeps `mvn javafx:run` aligned with the default JavaFX app entrypoint. -->
             <plugin>
                 <groupId>org.openjfx</groupId>
                 <artifactId>javafx-maven-plugin</artifactId>
                 <version>0.0.8</version>
                 <configuration>
-                    <mainClass>org.example.Launcher</mainClass>
+                    <mainClass>${app.mainClass}</mainClass>
                 </configuration>
             </plugin>
         </plugins>

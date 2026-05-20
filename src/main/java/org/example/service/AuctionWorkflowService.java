@@ -319,6 +319,7 @@ public final class AuctionWorkflowService {
         if (usingLocalStore) {
             items.add(item);
             bidHistoryByItemId.putIfAbsent(item.getId(), new ArrayList<>());
+            autoBidsByItemId.putIfAbsent(item.getId(), new ArrayList<>());
             persistLocalStore();
             rebuildSessions();
             return item;
@@ -390,6 +391,7 @@ public final class AuctionWorkflowService {
             List<AutoBid> autoBids = autoBidsByItemId.computeIfAbsent(itemId, ignored -> new ArrayList<>());
             autoBids.removeIf(autoBid -> autoBid.getBidderId().equals(user.getId()));
             autoBids.add(new AutoBid(autoBids.size() + 1, user.getId(), itemId, maxLimit, bidIncrement));
+            persistLocalStore();
             return true;
         }
 
@@ -613,12 +615,14 @@ public final class AuctionWorkflowService {
         AuctionStore store = dataManager.loadStore();
         items = store.getItems();
         bidHistoryByItemId = store.getBidHistoryByItemId();
+        autoBidsByItemId = store.getAutoBidsByItemId();
         boolean storeChanged = false;
 
         if (items.isEmpty()) {
             items = new ArrayList<>(AuctionSeedData.createDemoItems());
             for (Item item : items) {
                 bidHistoryByItemId.putIfAbsent(item.getId(), new ArrayList<>());
+                autoBidsByItemId.putIfAbsent(item.getId(), new ArrayList<>());
             }
             storeChanged = true;
         }
@@ -630,6 +634,10 @@ public final class AuctionWorkflowService {
             }
             if (!bidHistoryByItemId.containsKey(item.getId())) {
                 bidHistoryByItemId.put(item.getId(), new ArrayList<>());
+                storeChanged = true;
+            }
+            if (!autoBidsByItemId.containsKey(item.getId())) {
+                autoBidsByItemId.put(item.getId(), new ArrayList<>());
                 storeChanged = true;
             }
         }
@@ -677,7 +685,7 @@ public final class AuctionWorkflowService {
 
     private void persistLocalStore() {
         if (usingLocalStore) {
-            dataManager.saveStore(new AuctionStore(items, bidHistoryByItemId));
+            dataManager.saveStore(new AuctionStore(items, bidHistoryByItemId, autoBidsByItemId));
         }
     }
 

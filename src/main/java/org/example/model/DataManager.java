@@ -21,10 +21,16 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class DataManager {
     private static DataManager instance;
-    private static final Path FILE_PATH = Path.of("data.dat");
+    private static final Path DEFAULT_FILE_PATH = Path.of("data.dat");
+    private final Path filePath;
     private final ReadWriteLock fileLock = new ReentrantReadWriteLock();
 
     private DataManager() {
+        this(DEFAULT_FILE_PATH);
+    }
+
+    DataManager(Path filePath) {
+        this.filePath = filePath == null ? DEFAULT_FILE_PATH : filePath;
     }
 
     public static DataManager getInstance() {
@@ -80,12 +86,12 @@ public class DataManager {
     }
 
     private StoreSnapshot readSnapshotFromDisk() {
-        if (!Files.exists(FILE_PATH)) {
+        if (!Files.exists(filePath)) {
             System.out.println("No data file yet. Starting with an empty catalog.");
             return new StoreSnapshot(AuctionStore.empty(), 0L);
         }
 
-        try (RandomAccessFile file = new RandomAccessFile(FILE_PATH.toFile(), "r");
+        try (RandomAccessFile file = new RandomAccessFile(filePath.toFile(), "r");
              FileChannel channel = file.getChannel();
              FileLock ignored = channel.lock(0L, Long.MAX_VALUE, true)) {
             if (channel.size() == 0L) {
@@ -125,7 +131,17 @@ public class DataManager {
     }
 
     private Optional<StoreSnapshot> writeStoreToDisk(AuctionStore safeStore, Long expectedVersion) {
-        try (RandomAccessFile file = new RandomAccessFile(FILE_PATH.toFile(), "rw");
+        try {
+            Path parent = filePath.toAbsolutePath().getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+        } catch (IOException e) {
+            System.err.println("Failed to prepare data directory: " + e.getMessage());
+            return Optional.empty();
+        }
+
+        try (RandomAccessFile file = new RandomAccessFile(filePath.toFile(), "rw");
              FileChannel channel = file.getChannel();
              FileLock ignored = channel.lock()) {
             long currentVersion = resolveVersion(channel);
@@ -140,7 +156,7 @@ public class DataManager {
             oos.flush();
             channel.force(true);
             long version = resolveVersion(channel);
-            System.out.println("Saved data to " + FILE_PATH);
+            System.out.println("Saved data to " + filePath);
             return Optional.of(new StoreSnapshot(safeStore, version));
         } catch (IOException e) {
             System.err.println("Failed to save file: " + e.getMessage());
@@ -149,13 +165,13 @@ public class DataManager {
     }
 
     private long resolveVersion() {
-        if (!Files.exists(FILE_PATH)) {
+        if (!Files.exists(filePath)) {
             return 0L;
         }
 
         try {
-            long modifiedTime = Files.getLastModifiedTime(FILE_PATH).to(TimeUnit.NANOSECONDS);
-            long size = Files.size(FILE_PATH);
+            long modifiedTime = Files.getLastModifiedTime(filePath).to(TimeUnit.NANOSECONDS);
+            long size = Files.size(filePath);
             return Math.max(0L, modifiedTime * 31L + size);
         } catch (IOException e) {
             System.err.println("Failed to inspect file version: " + e.getMessage());
@@ -165,8 +181,8 @@ public class DataManager {
 
     private long resolveVersion(FileChannel channel) {
         try {
-            long modifiedTime = Files.exists(FILE_PATH)
-                    ? Files.getLastModifiedTime(FILE_PATH).to(TimeUnit.NANOSECONDS)
+            long modifiedTime = Files.exists(filePath)
+                    ? Files.getLastModifiedTime(filePath).to(TimeUnit.NANOSECONDS)
                     : 0L;
             long size = channel.size();
             return Math.max(0L, modifiedTime * 31L + size);

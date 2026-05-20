@@ -276,7 +276,7 @@ public final class WalletService {
         if (isBlank(accountName) || isBlank(providerName) || isBlank(accountReference)) {
             throw new IllegalArgumentException("Account name, provider, and reference are required.");
         }
-        double accountBalance = 0.0;
+        double accountBalance = validateAccountBalance(initialBalance);
 
         List<WalletLinkedAccount> existingAccounts = new ArrayList<>(linkedAccountsFor(user));
         boolean primary = makePrimary || existingAccounts.isEmpty();

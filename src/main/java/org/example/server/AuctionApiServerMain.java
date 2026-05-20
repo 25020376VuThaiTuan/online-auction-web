@@ -1,6 +1,7 @@
 package org.example.server;
 
 import com.sun.net.httpserver.HttpServer;
+import org.example.dao.AuthSessionDAO;
 import org.example.dao.BidDAO;
 import org.example.dao.DatabaseConfig;
 import org.example.dao.WalletDAO;
@@ -51,7 +52,8 @@ public final class AuctionApiServerMain {
             new RequiredTable("wallet_linked_accounts", List.of(
                     "id", "user_id", "account_name", "provider_name", "account_reference", "balance", "is_primary"
             )),
-            new RequiredTable("wallet_holds", List.of("user_id", "hold_key", "reference_id", "amount"))
+            new RequiredTable("wallet_holds", List.of("user_id", "hold_key", "reference_id", "amount")),
+            new RequiredTable("auth_sessions", List.of("id", "user_id", "refresh_token_hash", "expires_at", "revoked_at", "created_at"))
     );
     private static final List<String> MODERN_WALLET_TRANSACTION_COLUMNS = List.of(
             "id", "user_id", "reference_id", "transaction_type", "amount",
@@ -181,7 +183,7 @@ public final class AuctionApiServerMain {
                 || containsIgnoreCase(mysqlMessage, "missing required table")
                 || containsIgnoreCase(mysqlMessage, "missing required column")) {
             return "Remote MySQL schema is incomplete for the auction API. "
-                    + "Apply schema.sql and migrations so bid history is stored in bids and auto-bids are stored in auto_bids. "
+                    + "Apply schema.sql and migrations so auction, wallet, and auth session tables are available. "
                     + "MySQL said: " + mysqlMessage;
         }
         if (isConnectionSqlState(sqlState)
@@ -446,9 +448,11 @@ public final class AuctionApiServerMain {
             }
             verifyDatabaseSchema(connection, CORE_REQUIRED_DATABASE_SCHEMA);
             try (BidDAO bidDAO = new BidDAO(connection);
-                 WalletDAO walletDAO = new WalletDAO(connection)) {
+                 WalletDAO walletDAO = new WalletDAO(connection);
+                 AuthSessionDAO authSessionDAO = new AuthSessionDAO(connection)) {
                 bidDAO.ensureSchema();
                 walletDAO.ensureSchema();
+                authSessionDAO.ensureSchema();
             }
             return true;
         }

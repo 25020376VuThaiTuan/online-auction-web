@@ -193,6 +193,7 @@ public final class AuctionApiClient {
                 "accountName", accountName,
                 "providerName", providerName,
                 "accountReference", accountReference,
+                "initialBalance", initialBalance,
                 "primary", primary,
                 "walletPin", walletPin
         ));

@@ -167,6 +167,7 @@
                                     <TextField fx:id="walletAccountNameField" promptText="Account name"/>
                                     <TextField fx:id="walletProviderField" promptText="Provider"/>
                                     <TextField fx:id="walletAccountReferenceField" promptText="Account reference"/>
+                                    <TextField fx:id="walletAccountOpeningBalanceField" promptText="Opening balance"/>
                                     <HBox alignment="CENTER_RIGHT" spacing="10.0">
                                         <Button onAction="#handleAddWalletAccount" text="Add Account"/>
                                         <Button onAction="#handleSetPrimaryWalletAccount" text="Set Primary"/>

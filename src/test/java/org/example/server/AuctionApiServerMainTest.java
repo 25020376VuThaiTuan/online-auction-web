@@ -248,8 +248,8 @@ class AuctionApiServerMainTest {
         );
 
         assertTrue(exception.getMessage().contains("Remote MySQL schema is incomplete"));
-        assertTrue(exception.getMessage().contains("bids"));
-        assertTrue(exception.getMessage().contains("auto_bids"));
+        assertTrue(exception.getMessage().contains("wallet"));
+        assertTrue(exception.getMessage().contains("auth session"));
         assertTrue(exception.getMessage().contains("manual_bids"));
     }
 

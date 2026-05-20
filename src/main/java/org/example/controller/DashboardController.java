@@ -191,6 +191,9 @@ public class DashboardController {
     private TextField walletAccountReferenceField;
 
     @FXML
+    private TextField walletAccountOpeningBalanceField;
+
+    @FXML
     private TableView<AuctionEligibilityEntry> auctionTable;
 
     @FXML
@@ -514,6 +517,18 @@ public class DashboardController {
             return;
         }
 
+        double initialBalance;
+        try {
+            initialBalance = parseOptionalAmount(walletAccountOpeningBalanceField.getText());
+        } catch (NumberFormatException e) {
+            showAlert(Alert.AlertType.WARNING, "Invalid opening balance", "Opening balance must be numeric.");
+            return;
+        }
+        if (!Double.isFinite(initialBalance) || initialBalance < 0.0) {
+            showAlert(Alert.AlertType.WARNING, "Invalid opening balance", "Opening balance must be zero or greater.");
+            return;
+        }
+
         String walletPin = requestWalletPin("Add Wallet Account");
         if (walletPin == null) {
             return;
@@ -521,12 +536,13 @@ public class DashboardController {
 
         try {
             WalletSummary summary = useApi()
-                    ? apiClient.addWalletAccount(apiToken(), accountName, provider, reference, false, walletPin)
-                    : dashboardService.addWalletAccount(currentUser(), accountName, provider, reference, false, walletPin);
+                    ? apiClient.addWalletAccount(apiToken(), accountName, provider, reference, initialBalance, false, walletPin)
+                    : dashboardService.addWalletAccount(currentUser(), accountName, provider, reference, initialBalance, false, walletPin);
             openedWalletSummary = summary;
             walletAccountNameField.clear();
             walletProviderField.clear();
             walletAccountReferenceField.clear();
+            walletAccountOpeningBalanceField.clear();
             refreshWallet(summary);
             showAlert(Alert.AlertType.INFORMATION, "Account added", "Wallet account was added.");
         } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
