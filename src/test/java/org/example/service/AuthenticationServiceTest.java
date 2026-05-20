@@ -18,20 +18,29 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AuthenticationServiceTest {
-    private final AuthenticationService authenticationService = AuthenticationService.getInstance();
-
     @Test
     void demoAccountsCanLogInWithoutManualRegistration() throws Exception {
-        assertEquals("BIDDER", authenticationService.loginOrThrow("bidder", "bid123").getRole());
-        assertEquals("SELLER", authenticationService.loginOrThrow("seller", "sell123").getRole());
-        assertEquals("ADMIN", authenticationService.loginOrThrow("admin", "admin123").getRole());
+        AuthenticationService service = new AuthenticationService(List.of(DemoUserRepository.getInstance()));
+
+        assertEquals("BIDDER", service.loginOrThrow("bidder", "bid123").getRole());
+        assertEquals("SELLER", service.loginOrThrow("seller", "sell123").getRole());
+        assertEquals("ADMIN", service.loginOrThrow("admin", "admin123").getRole());
     }
 
     @Test
     void loginHintShowsAvailableDemoCredentials() {
-        assertTrue(authenticationService.getLoginHint().contains("bidder/bid123"));
-        assertTrue(authenticationService.getLoginHint().contains("seller/sell123"));
-        assertTrue(authenticationService.getLoginHint().contains("admin/admin123"));
+        AuthenticationService service = new AuthenticationService(List.of(DemoUserRepository.getInstance()));
+
+        assertTrue(service.getLoginHint().contains("bidder/bid123"));
+        assertTrue(service.getLoginHint().contains("seller/sell123"));
+        assertTrue(service.getLoginHint().contains("admin/admin123"));
+    }
+
+    @Test
+    void loginHintFallsBackToGenericMessageWhenDemoAccountsAreDisabled() {
+        AuthenticationService service = new AuthenticationService(List.of(DemoUserRepository.createEmpty()));
+
+        assertTrue(service.getLoginHint().contains("existing account"));
     }
 
     @Test

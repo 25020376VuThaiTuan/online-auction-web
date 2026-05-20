@@ -12,11 +12,14 @@ import java.util.Map;
 import java.util.Optional;
 
 public class DemoUserRepository implements UserRepository {
-    private static final DemoUserRepository INSTANCE = new DemoUserRepository();
+    private static final DemoUserRepository INSTANCE = new DemoUserRepository(true);
 
     private final Map<String, User> usersByUsername = new LinkedHashMap<>();
 
-    private DemoUserRepository() {
+    private DemoUserRepository(boolean seedDefaults) {
+        if (!seedDefaults) {
+            return;
+        }
         seedUser(createBidder("U-BID-001", "bidder", "bid123", "bidder@demo.local", 10_000.0, "Primary Bidder"));
         seedUser(createSeller("U-SEL-001", "seller", "sell123", "seller@demo.local", "Primary Seller"));
         seedUser(createAdmin("U-ADM-001", "admin", "admin123", "admin@demo.local", "Primary Admin"));
@@ -24,6 +27,10 @@ public class DemoUserRepository implements UserRepository {
 
     public static DemoUserRepository getInstance() {
         return INSTANCE;
+    }
+
+    public static DemoUserRepository createEmpty() {
+        return new DemoUserRepository(false);
     }
 
     @Override

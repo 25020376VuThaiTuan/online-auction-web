@@ -18,22 +18,30 @@ import java.util.Optional;
 import java.util.UUID;
 
 public final class AuthenticationService {
+    private static final String DEMO_ACCOUNTS_PROPERTY = "auction.demoAccounts.enabled";
+    private static final String DEMO_ACCOUNTS_ENV = "AUCTION_DEMO_ACCOUNTS_ENABLED";
     private static final AuthenticationService INSTANCE = new AuthenticationService();
 
     private final List<UserRepository> repositories = new ArrayList<>();
+    private final boolean demoAccountsEnabled;
 
     private AuthenticationService() {
-        this(defaultRepositories(), true);
+        this(defaultRepositories(resolveDemoAccountsEnabled()), resolveDemoAccountsEnabled(), resolveDemoAccountsEnabled());
     }
 
     AuthenticationService(List<UserRepository> repositories) {
-        this(repositories, false);
+        this(repositories, false, containsSeededDemoRepository(repositories));
     }
 
     AuthenticationService(List<UserRepository> repositories, boolean bootstrapDefaultAccounts) {
+        this(repositories, bootstrapDefaultAccounts, bootstrapDefaultAccounts || containsSeededDemoRepository(repositories));
+    }
+
+    AuthenticationService(List<UserRepository> repositories, boolean bootstrapDefaultAccounts, boolean demoAccountsEnabled) {
         if (repositories != null) {
             this.repositories.addAll(repositories);
         }
+        this.demoAccountsEnabled = demoAccountsEnabled;
         if (bootstrapDefaultAccounts) {
             bootstrapPersistentAccounts();
         }
@@ -187,7 +195,10 @@ public final class AuthenticationService {
     }
 
     public String getLoginHint() {
-        return "Demo accounts: bidder/bid123, seller/sell123, admin/admin123. You can also create a new account.";
+        if (demoAccountsEnabled) {
+            return "Demo accounts: bidder/bid123, seller/sell123, admin/admin123. You can also create a new account.";
+        }
+        return "Use an existing account or create a new bidder or seller account.";
     }
 
     private String normalize(String username) {
@@ -251,12 +262,16 @@ public final class AuthenticationService {
         repository.save(user);
     }
 
-    private static List<UserRepository> defaultRepositories() {
+    private static List<UserRepository> defaultRepositories(boolean demoAccountsEnabled) {
         List<UserRepository> repositories = new ArrayList<>();
         if (JdbcUserRepository.isEnabled()) {
             repositories.add(new JdbcUserRepository());
         }
-        repositories.add(DemoUserRepository.getInstance());
+        if (demoAccountsEnabled) {
+            repositories.add(DemoUserRepository.getInstance());
+        } else if (repositories.isEmpty()) {
+            repositories.add(DemoUserRepository.createEmpty());
+        }
         return repositories;
     }
 
@@ -287,5 +302,23 @@ public final class AuthenticationService {
         admin.setRole("ADMIN");
         admin.setFullName("Primary Admin");
         return admin;
+    }
+
+    private static boolean containsSeededDemoRepository(List<UserRepository> repositories) {
+        if (repositories == null) {
+            return false;
+        }
+        return repositories.stream().anyMatch(repository -> repository == DemoUserRepository.getInstance());
+    }
+
+    private static boolean resolveDemoAccountsEnabled() {
+        String configured = System.getProperty(DEMO_ACCOUNTS_PROPERTY);
+        if (configured == null || configured.isBlank()) {
+            configured = System.getenv(DEMO_ACCOUNTS_ENV);
+        }
+        if (configured == null || configured.isBlank()) {
+            return false;
+        }
+        return Boolean.parseBoolean(configured.trim());
     }
 }
