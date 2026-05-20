@@ -39,34 +39,38 @@ public final class ApiJson {
         if (value instanceof Number || value instanceof Boolean) {
             return String.valueOf(value);
         }
-        if (value instanceof Enum<?> enumValue) {
-            return stringify(enumValue.name());
-        }
-        if (value instanceof Map<?, ?> map) {
-            StringBuilder builder = new StringBuilder("{");
-            boolean first = true;
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                if (!first) {
-                    builder.append(',');
-                }
-                first = false;
-                builder.append(stringify(String.valueOf(entry.getKey())));
-                builder.append(':');
-                builder.append(stringify(entry.getValue()));
+        switch (value) {
+            case Enum<?> enumValue -> {
+                return stringify(enumValue.name());
             }
-            return builder.append('}').toString();
-        }
-        if (value instanceof Collection<?> collection) {
-            StringBuilder builder = new StringBuilder("[");
-            boolean first = true;
-            for (Object item : collection) {
-                if (!first) {
-                    builder.append(',');
+            case Map<?, ?> map -> {
+                StringBuilder builder = new StringBuilder("{");
+                boolean first = true;
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    if (!first) {
+                        builder.append(',');
+                    }
+                    first = false;
+                    builder.append(stringify(String.valueOf(entry.getKey())));
+                    builder.append(':');
+                    builder.append(stringify(entry.getValue()));
                 }
-                first = false;
-                builder.append(stringify(item));
+                return builder.append('}').toString();
             }
-            return builder.append(']').toString();
+            case Collection<?> collection -> {
+                StringBuilder builder = new StringBuilder("[");
+                boolean first = true;
+                for (Object item : collection) {
+                    if (!first) {
+                        builder.append(',');
+                    }
+                    first = false;
+                    builder.append(stringify(item));
+                }
+                return builder.append(']').toString();
+            }
+            default -> {
+            }
         }
         if (value.getClass().isArray()) {
             List<Object> values = new ArrayList<>();

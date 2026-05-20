@@ -148,7 +148,7 @@ public class AuctionController {
 
         try {
             String selectedAmount = selectedBidAmountText();
-            if (selectedAmount == null || selectedAmount.isEmpty()) {
+            if (selectedAmount.isEmpty()) {
                 showAlert(Alert.AlertType.WARNING, "Invalid amount", "Please enter or select a bid amount.");
                 return;
             }

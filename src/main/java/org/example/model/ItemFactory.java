@@ -8,14 +8,13 @@ public class ItemFactory {
                                   String extraStr, int extraInt) {
 
         // Mới tạo thì giá hiện tại (currentPrice) bằng giá khởi điểm (startingPrice)
-        double currentPrice = startingPrice;
 
         return switch (type.toLowerCase()) {
-            case "electronics" -> new Electronics(id, itemName, description, startingPrice, currentPrice,
+            case "electronics" -> new Electronics(id, itemName, description, startingPrice, startingPrice,
                     startTime, endTime, extraStr, extraInt);
-            case "art" -> new Art(id, itemName, description, startingPrice, currentPrice,
+            case "art" -> new Art(id, itemName, description, startingPrice, startingPrice,
                     startTime, endTime, extraStr, extraInt);
-            case "vehicle" -> new Vehicle(id, itemName, description, startingPrice, currentPrice,
+            case "vehicle" -> new Vehicle(id, itemName, description, startingPrice, startingPrice,
                     startTime, endTime, extraStr, extraInt);
             default -> throw new IllegalArgumentException("Loại sản phẩm " + type + " không tồn tại!");
         };

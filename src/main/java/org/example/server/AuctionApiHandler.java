@@ -733,10 +733,6 @@ public final class AuctionApiHandler implements HttpHandler {
                         (int) ApiJson.requireDouble(request, "extraNumber")
                 );
 
-                if (item == null) {
-                    throw new ApiHttpException(500, "Item could not be saved.");
-                }
-
                 sendJson(exchange, 201, jsonObject(
                         "message", "Item submitted.",
                         "item", payloads.item(item)
@@ -957,16 +953,12 @@ public final class AuctionApiHandler implements HttpHandler {
 
     private double optionalDouble(Map<String, Object> source, String fieldName) {
         Object value = source.get(fieldName);
-        if (value == null) {
-            return 0.0;
-        }
-        if (value instanceof Number number) {
-            return number.doubleValue();
-        }
-        if (value instanceof String text && !text.isBlank()) {
-            return Double.parseDouble(text.trim());
-        }
-        return 0.0;
+        return switch (value) {
+            case null -> 0.0;
+            case Number number -> number.doubleValue();
+            case String text when !text.isBlank() -> Double.parseDouble(text.trim());
+            default -> 0.0;
+        };
     }
 
     private double optionalOpeningBalance(Map<String, Object> source) {

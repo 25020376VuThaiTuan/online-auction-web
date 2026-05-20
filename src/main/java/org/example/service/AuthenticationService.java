@@ -69,10 +69,8 @@ public final class AuthenticationService {
             invalidPassword = new InvalidPasswordException("Password does not match the selected account.");
         }
 
-        if (invalidPassword != null || usernameFound) {
-            throw invalidPassword == null
-                    ? new InvalidPasswordException("Password does not match the selected account.")
-                    : invalidPassword;
+        if (invalidPassword != null) {
+            throw invalidPassword;
         }
         throw new UserNotFound("No account exists for username: " + normalizedUsername);
     }
