@@ -242,10 +242,28 @@ public class DashboardController {
     private TextField bidAmountField;
 
     @FXML
+    private Button bidPlusTenButton;
+
+    @FXML
+    private Button bidPlusFiftyButton;
+
+    @FXML
+    private Button bidPlusHundredButton;
+
+    @FXML
+    private TextField autoBidMaxField;
+
+    @FXML
+    private TextField autoBidIncrementField;
+
+    @FXML
     private Label bidEntryTimeRemainingLabel;
 
     @FXML
     private Button placeDashboardBidButton;
+
+    @FXML
+    private Button registerAutoBidButton;
 
     @FXML
     private Button admitDashboardResultButton;
@@ -400,9 +418,13 @@ public class DashboardController {
         }
 
         try {
-            WalletSummary summary = useApi()
-                    ? apiClient.getWallet(apiToken(), pin)
-                    : dashboardService.getWallet(currentUser(), pin);
+            WalletSummary summary;
+            if (useApi()) {
+                summary = apiClient.getWallet(apiToken(), pin);
+                refreshApiCurrentUser();
+            } else {
+                summary = dashboardService.getWallet(currentUser(), pin);
+            }
             rememberWalletAuthorization(pin, rememberWalletPinCheckBox.isSelected());
             openedWalletSummary = summary;
             walletPinField.clear();
@@ -630,7 +652,7 @@ public class DashboardController {
 
     @FXML
     private void handlePlaceBidFromDashboard() {
-        AuctionEligibilityEntry selected = auctionTable.getSelectionModel().getSelectedItem();
+        AuctionEligibilityEntry selected = selectedAuctionEntry();
         if (selected == null) {
             showAlert(Alert.AlertType.WARNING, "Selection required", "Select an item from the item list first.");
             return;
@@ -657,6 +679,74 @@ public class DashboardController {
             showAlert(Alert.AlertType.WARNING, "Invalid bid", "Bid amount must be numeric.");
         } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
             showAlert(Alert.AlertType.WARNING, "Bid failed", e.getMessage());
+        }
+    }
+
+    @FXML
+    private void handleAddTenToBid() {
+        applyBidIncrement(10.0);
+    }
+
+    @FXML
+    private void handleAddFiftyToBid() {
+        applyBidIncrement(50.0);
+    }
+
+    @FXML
+    private void handleAddHundredToBid() {
+        applyBidIncrement(100.0);
+    }
+
+    @FXML
+    private void handleRegisterAutoBidFromDashboard() {
+        AuctionEligibilityEntry selected = selectedAuctionEntry();
+        if (selected == null) {
+            showAlert(Alert.AlertType.WARNING, "Selection required", "Select an item from the item list first.");
+            return;
+        }
+
+        try {
+            double maxLimit = parseAmount(autoBidMaxField.getText());
+            double bidIncrement = parseOptionalAmount(autoBidIncrementField.getText());
+            if (bidIncrement < 0.0) {
+                showAlert(Alert.AlertType.WARNING, "Invalid auto-bid", "Auto-bid increment must be zero or greater.");
+                return;
+            }
+
+            String walletPin = requestWalletPin("Enable Auto-bid");
+            if (walletPin == null) {
+                return;
+            }
+
+            boolean saved;
+            if (useApi()) {
+                apiClient.registerAutoBid(apiToken(), selected.getItemId(), maxLimit, bidIncrement, walletPin);
+                saved = true;
+            } else {
+                saved = dashboardService.registerAutoBidWithDeposit(
+                        selected.getItemId(),
+                        currentUser(),
+                        maxLimit,
+                        bidIncrement,
+                        walletPin
+                );
+            }
+
+            refreshView();
+            if (!saved) {
+                showAlert(Alert.AlertType.WARNING,
+                        "Auto-bid not saved",
+                        "Confirm entry deposit and make sure available balance covers the auto-bid maximum.");
+                return;
+            }
+
+            autoBidMaxField.clear();
+            autoBidIncrementField.clear();
+            showAlert(Alert.AlertType.INFORMATION, "Auto-bid saved", "Auto-bid was enabled for this auction.");
+        } catch (NumberFormatException e) {
+            showAlert(Alert.AlertType.WARNING, "Invalid auto-bid", "Auto-bid amounts must be numeric.");
+        } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
+            showAlert(Alert.AlertType.WARNING, "Auto-bid failed", e.getMessage());
         }
     }
 
@@ -1268,6 +1358,7 @@ public class DashboardController {
     }
 
     private void refreshBidSection(AuctionEligibilityEntry entry) {
+        selectedAuctionId = entry.getItemId();
         selectedAuctionLabel.setText(entry.getItemName() + " [" + entry.getStatus().replace('_', ' ') + "]");
         selectedAuctionDepositLabel.setText("Deposit required: " + AuctionDisplayFormatter.formatCurrency(entry.getRequiredDeposit())
                 + " - " + entry.getEligibleText());
@@ -1278,7 +1369,14 @@ public class DashboardController {
         boolean canBid = entry.isDepositConfirmed() && "RUNNING".equalsIgnoreCase(entry.getStatus());
         bidAmountField.setDisable(!canBid);
         bidAmountField.setPromptText("Min " + AuctionDisplayFormatter.formatCurrency(entry.getMinimumBid()));
+        bidPlusTenButton.setDisable(!canBid);
+        bidPlusFiftyButton.setDisable(!canBid);
+        bidPlusHundredButton.setDisable(!canBid);
         placeDashboardBidButton.setDisable(!canBid);
+        autoBidMaxField.setDisable(!canBid);
+        autoBidMaxField.setPromptText("Max " + AuctionDisplayFormatter.formatCurrency(entry.getAvailableBalance()));
+        autoBidIncrementField.setDisable(!canBid);
+        registerAutoBidButton.setDisable(!canBid);
         refreshBidChart(entry.getItemId());
         refreshBuyerSettlementButtons(entry.getItemId());
     }
@@ -1292,7 +1390,16 @@ public class DashboardController {
         selectedAuctionEndTimeLabel.setText("Ends at: N/A");
         bidAmountField.clear();
         bidAmountField.setDisable(true);
+        bidPlusTenButton.setDisable(true);
+        bidPlusFiftyButton.setDisable(true);
+        bidPlusHundredButton.setDisable(true);
         placeDashboardBidButton.setDisable(true);
+        autoBidMaxField.clear();
+        autoBidMaxField.setDisable(true);
+        autoBidMaxField.setPromptText("Auto-bid max limit");
+        autoBidIncrementField.clear();
+        autoBidIncrementField.setDisable(true);
+        registerAutoBidButton.setDisable(true);
         bidHistoryChart.getData().clear();
         refreshBuyerSettlementButtons(null);
     }
@@ -1658,6 +1765,48 @@ public class DashboardController {
             throw new NumberFormatException("Amount is blank.");
         }
         return Double.parseDouble(normalized);
+    }
+
+    private double parseOptionalAmount(String text) {
+        return value(text).isBlank() ? 0.0 : parseAmount(text);
+    }
+
+    private void applyBidIncrement(double increment) {
+        AuctionEligibilityEntry selected = selectedAuctionEntry();
+        if (selected == null) {
+            showAlert(Alert.AlertType.WARNING, "Selection required", "Select an auction first.");
+            return;
+        }
+
+        double baseAmount = selected.getMinimumBid();
+        try {
+            String currentAmount = value(bidAmountField.getText());
+            if (!currentAmount.isBlank()) {
+                baseAmount = Math.max(baseAmount, parseAmount(currentAmount));
+            }
+        } catch (NumberFormatException ignored) {
+            baseAmount = selected.getMinimumBid();
+        }
+
+        bidAmountField.setText(formatAmountInput(baseAmount + increment));
+    }
+
+    private AuctionEligibilityEntry selectedAuctionEntry() {
+        AuctionEligibilityEntry selected = auctionTable.getSelectionModel().getSelectedItem();
+        if (selected != null) {
+            return selected;
+        }
+        if (selectedAuctionId == null || selectedAuctionId.isBlank()) {
+            return null;
+        }
+        return auctionTable.getItems().stream()
+                .filter(entry -> selectedAuctionId.equals(entry.getItemId()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private String formatAmountInput(double amount) {
+        return String.format(java.util.Locale.US, "%.2f", amount);
     }
 
     private String formatDateTime(LocalDateTime value) {

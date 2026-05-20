@@ -229,7 +229,15 @@
                         </HBox>
                         <HBox alignment="CENTER_LEFT" spacing="10.0">
                             <TextField fx:id="bidAmountField" prefWidth="220.0" promptText="Enter bid amount"/>
+                            <Button fx:id="bidPlusTenButton" onAction="#handleAddTenToBid" text="+$10"/>
+                            <Button fx:id="bidPlusFiftyButton" onAction="#handleAddFiftyToBid" text="+$50"/>
+                            <Button fx:id="bidPlusHundredButton" onAction="#handleAddHundredToBid" text="+$100"/>
                             <Button fx:id="placeDashboardBidButton" onAction="#handlePlaceBidFromDashboard" text="Place Bid"/>
+                        </HBox>
+                        <HBox alignment="CENTER_LEFT" spacing="10.0">
+                            <TextField fx:id="autoBidMaxField" prefWidth="220.0" promptText="Auto-bid max limit"/>
+                            <TextField fx:id="autoBidIncrementField" prefWidth="180.0" promptText="Increment optional"/>
+                            <Button fx:id="registerAutoBidButton" onAction="#handleRegisterAutoBidFromDashboard" text="Enable Auto-bid"/>
                         </HBox>
                         <HBox alignment="CENTER_LEFT" spacing="10.0">
                             <Button fx:id="admitDashboardResultButton" onAction="#handleAdmitDashboardResult" text="Admit Result"/>

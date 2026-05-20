@@ -648,7 +648,7 @@ public final class AuctionApiHandler implements HttpHandler {
                     bidIncrement,
                     ApiJson.requireString(request, "walletPin")
             )) {
-                throw new ApiHttpException(409, "Confirm auction entry and lock the deposit before enabling auto-bid.");
+                throw new ApiHttpException(409, "Confirm entry deposit and make sure available balance covers the auto-bid maximum.");
             }
             sendJson(exchange, 201, jsonObject(
                 "message", "Auto-bid saved.",

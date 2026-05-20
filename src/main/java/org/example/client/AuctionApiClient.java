@@ -51,6 +51,17 @@ public final class AuctionApiClient {
         return baseUrl != null && !baseUrl.isBlank();
     }
 
+    public static boolean isConnectivityFailure(ApiClientException exception) {
+        Throwable current = exception;
+        while (current != null) {
+            if (current instanceof IOException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
     public AuthResult login(String username, String password) {
         Map<String, Object> response = request("POST", "/auth/login", null, jsonObject(
                 "username", username,

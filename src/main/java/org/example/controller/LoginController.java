@@ -39,27 +39,29 @@ public class LoginController {
         String password = passwordField.getText() == null ? "" : passwordField.getText().trim();
 
         if (username.isEmpty() || password.isEmpty()) {
-            showAlert("Missing credentials", "Enter both username and password.");
+            showAlert(Alert.AlertType.WARNING, "Missing credentials", "Enter both username and password.");
             return;
         }
 
         try {
-            if (apiClient.isEnabled()) {
-                AuctionApiClient.AuthResult result = apiClient.login(username, password);
-                applicationSession.login(result.user(), result.token());
-            } else {
-                applicationSession.login(authenticationService.loginOrThrow(username, password));
+            boolean usedLocalFallback = authenticate(username, password);
+            if (usedLocalFallback) {
+                showAlert(
+                        Alert.AlertType.INFORMATION,
+                        "API unavailable",
+                        "Signed in with local data because the configured API server could not be reached."
+                );
             }
             SceneNavigator.switchScene(usernameField, "/view/Dashboard.fxml", "Auction Dashboard");
         } catch (UserNotFound e) {
-            showAlert("User not found", e.getMessage());
+            showAlert(Alert.AlertType.WARNING, "User not found", e.getMessage());
         } catch (InvalidPasswordException e) {
-            showAlert("Password incorrect", e.getMessage());
+            showAlert(Alert.AlertType.WARNING, "Password incorrect", e.getMessage());
         } catch (AuctionApiClient.ApiClientException e) {
-            showAlert("Server login failed", e.getMessage());
+            showAlert(Alert.AlertType.WARNING, "Server login failed", e.getMessage());
         } catch (RuntimeException e) {
             applicationSession.logout();
-            showAlert("Dashboard unavailable", failureMessage(e));
+            showAlert(Alert.AlertType.WARNING, "Dashboard unavailable", failureMessage(e));
         }
     }
 
@@ -68,8 +70,28 @@ public class LoginController {
         SceneNavigator.switchScene(usernameField, "/view/Register.fxml", "Create Account");
     }
 
-    private void showAlert(String title, String content) {
-        Alert alert = new Alert(Alert.AlertType.WARNING);
+    private boolean authenticate(String username, String password) throws UserNotFound, InvalidPasswordException {
+        if (!apiClient.isEnabled()) {
+            applicationSession.login(authenticationService.loginOrThrow(username, password));
+            return false;
+        }
+
+        try {
+            AuctionApiClient.AuthResult result = apiClient.login(username, password);
+            applicationSession.login(result.user(), result.token());
+            return false;
+        } catch (AuctionApiClient.ApiClientException e) {
+            if (!AuctionApiClient.isConnectivityFailure(e)) {
+                throw e;
+            }
+            var localUser = authenticationService.loginOrThrow(username, password);
+            applicationSession.login(localUser);
+            return true;
+        }
+    }
+
+    private void showAlert(Alert.AlertType type, String title, String content) {
+        Alert alert = new Alert(type);
         alert.setTitle(title);
         alert.setHeaderText(null);
         alert.setContentText(content);

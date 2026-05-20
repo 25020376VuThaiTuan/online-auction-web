@@ -18,7 +18,7 @@ public abstract class User extends Entity {
     }
 
     public void setRole(String role) {
-        this.role = role;
+        this.role = role == null ? null : role.trim().toUpperCase();
     }
 
     public String getRole() {

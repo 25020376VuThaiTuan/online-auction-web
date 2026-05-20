@@ -194,35 +194,8 @@ public final class MarketplaceDashboardService {
 
     public BidValidationResult placeBidWithDeposit(String itemId, User user, double amount, String walletPin) {
         walletService.requirePin(user, walletPin);
-        if (!(user instanceof Bidder bidder)) {
-            return BidValidationResult.rejected(
-                    "Only bidder accounts can place bids.",
-                    amount,
-                    0.0,
-                    0.0,
-                    auctionWorkflowService.getSummary(itemId).status(),
-                    auctionWorkflowService.findItemById(itemId).map(Item::getEndTime).orElse(null)
-            );
-        }
-
-        AuctionSummary summary = auctionWorkflowService.getSummary(itemId);
-        if (!settlementService.hasEntryDeposit(itemId, bidder)) {
-            return BidValidationResult.rejected(
-                    "Confirm auction entry and lock the deposit before placing a bid.",
-                    amount,
-                    summary.currentPrice(),
-                    summary.minimumNextBid(),
-                    summary.status(),
-                    auctionWorkflowService.findItemById(itemId).map(Item::getEndTime).orElse(null)
-            );
-        }
-
-        BidValidationResult result = auctionWorkflowService.placeBid(itemId, user, amount);
-        if (!result.accepted()) {
-            return result;
-        }
-
-        return result;
+        synchronizeAuctionOutcomes();
+        return auctionWorkflowService.placeBid(itemId, user, amount);
     }
 
     public boolean registerAutoBidWithDeposit(String itemId, User user, double maxLimit) {
@@ -236,9 +209,6 @@ public final class MarketplaceDashboardService {
     public boolean registerAutoBidWithDeposit(String itemId, User user, double maxLimit, double bidIncrement, String walletPin) {
         walletService.requirePin(user, walletPin);
         synchronizeAuctionOutcomes();
-        if (!(user instanceof Bidder) || !settlementService.hasEntryDeposit(itemId, user)) {
-            return false;
-        }
         return auctionWorkflowService.registerAutoBid(itemId, user, maxLimit, bidIncrement);
     }
 

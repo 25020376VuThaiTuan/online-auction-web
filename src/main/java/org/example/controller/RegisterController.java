@@ -59,15 +59,13 @@ public class RegisterController {
         }
 
         try {
-            if (apiClient.isEnabled()) {
-                AuctionApiClient.AuthResult result = "SELLER".equalsIgnoreCase(accountRole)
-                        ? apiClient.registerManualSeller(username, password, email, fullName)
-                        : apiClient.registerManualBidder(username, password, email, fullName);
-                applicationSession.login(result.user(), result.token());
-            } else {
-                applicationSession.login("SELLER".equalsIgnoreCase(accountRole)
-                        ? dashboardService.registerManualSeller(username, password, email, fullName)
-                        : dashboardService.registerManualBidder(username, password, email, fullName));
+            boolean usedLocalFallback = register(accountRole, username, password, email, fullName);
+            if (usedLocalFallback) {
+                showAlert(
+                        Alert.AlertType.INFORMATION,
+                        "API unavailable",
+                        "Account created locally because the configured API server could not be reached."
+                );
             }
             SceneNavigator.switchScene(usernameField, "/view/Dashboard.fxml", "Auction Dashboard");
         } catch (IllegalArgumentException | AuctionApiClient.ApiClientException e) {
@@ -82,6 +80,39 @@ public class RegisterController {
 
     private String value(String text) {
         return text == null ? "" : text.trim();
+    }
+
+    private boolean register(String accountRole, String username, String password, String email, String fullName) {
+        if (!apiClient.isEnabled()) {
+            applicationSession.login(registerLocally(accountRole, username, password, email, fullName));
+            return false;
+        }
+
+        try {
+            AuctionApiClient.AuthResult result = "SELLER".equalsIgnoreCase(accountRole)
+                    ? apiClient.registerManualSeller(username, password, email, fullName)
+                    : apiClient.registerManualBidder(username, password, email, fullName);
+            applicationSession.login(result.user(), result.token());
+            return false;
+        } catch (AuctionApiClient.ApiClientException e) {
+            if (!AuctionApiClient.isConnectivityFailure(e)) {
+                throw e;
+            }
+            applicationSession.login(registerLocally(accountRole, username, password, email, fullName));
+            return true;
+        }
+    }
+
+    private org.example.model.User registerLocally(
+            String accountRole,
+            String username,
+            String password,
+            String email,
+            String fullName
+    ) {
+        return "SELLER".equalsIgnoreCase(accountRole)
+                ? dashboardService.registerManualSeller(username, password, email, fullName)
+                : dashboardService.registerManualBidder(username, password, email, fullName);
     }
 
     private void showAlert(Alert.AlertType type, String title, String content) {
