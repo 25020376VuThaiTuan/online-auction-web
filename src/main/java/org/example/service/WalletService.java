@@ -10,6 +10,7 @@ import org.example.model.WalletLinkedAccount;
 import org.example.model.WalletRecoveryResult;
 import org.example.model.WalletSummary;
 import org.example.model.WalletTransaction;
+import org.example.util.AccountInputValidator;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -276,6 +277,7 @@ public final class WalletService {
         if (isBlank(accountName) || isBlank(providerName) || isBlank(accountReference)) {
             throw new IllegalArgumentException("Account name, provider, and reference are required.");
         }
+        validateAccountHolderName(user, accountName);
         double accountBalance = validateAccountBalance(initialBalance);
 
         List<WalletLinkedAccount> existingAccounts = new ArrayList<>(linkedAccountsFor(user));
@@ -308,6 +310,18 @@ public final class WalletService {
         existingAccounts.add(0, account);
         linkedAccountsByUserId.put(user.getId(), existingAccounts);
         return getWallet(user, pin);
+    }
+
+    private void validateAccountHolderName(User user, String accountName) {
+        String expectedName = AccountInputValidator.normalizeFullName(user == null ? null : user.getFullName());
+        String providedName = AccountInputValidator.normalizeFullName(accountName);
+        if (expectedName.isBlank()) {
+            return;
+        }
+        if (!AccountInputValidator.normalizeIdentityLabel(expectedName)
+                .equals(AccountInputValidator.normalizeIdentityLabel(providedName))) {
+            throw new IllegalArgumentException("Bank account name must match the account holder full name.");
+        }
     }
 
     public synchronized WalletSummary removeLinkedAccount(User user, String accountId, String pin) {
