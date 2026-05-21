@@ -31,6 +31,19 @@ public class JdbcUserRepository implements UserRepository {
     }
 
     @Override
+    public Optional<User> findByEmail(String email) {
+        if (!isEnabled()) {
+            return Optional.empty();
+        }
+
+        try (UserDAO userDAO = UserDAO.fromEnvironment()) {
+            return userDAO.findByEmail(email);
+        } catch (SQLException e) {
+            throw databaseFailure("Database user lookup failed", e);
+        }
+    }
+
+    @Override
     public Optional<User> findById(String userId) {
         if (!isEnabled()) {
             return Optional.empty();

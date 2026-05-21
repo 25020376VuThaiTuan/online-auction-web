@@ -26,6 +26,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.LinkedHashMap;
@@ -33,10 +34,22 @@ import java.util.List;
 import java.util.Map;
 
 public final class AuctionApiClient {
+    private static final Duration CONNECT_TIMEOUT = resolveTimeout(
+            "auction.api.connectTimeoutMillis",
+            "AUCTION_API_CONNECT_TIMEOUT_MILLIS",
+            3_000L
+    );
+    private static final Duration REQUEST_TIMEOUT = resolveTimeout(
+            "auction.api.requestTimeoutMillis",
+            "AUCTION_API_REQUEST_TIMEOUT_MILLIS",
+            5_000L
+    );
     private static final AuctionApiClient INSTANCE = new AuctionApiClient();
     private static final DateTimeFormatter ISO_DATE_TIME = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(CONNECT_TIMEOUT)
+            .build();
     private final String baseUrl;
 
     private AuctionApiClient() {
@@ -485,6 +498,7 @@ public final class AuctionApiClient {
         try {
             HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + path))
+                    .timeout(REQUEST_TIMEOUT)
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json");
             if (token != null && !token.isBlank()) {
@@ -497,21 +511,57 @@ public final class AuctionApiClient {
                 builder.method(method, HttpRequest.BodyPublishers.ofString(ApiJson.stringify(body)));
             }
             HttpResponse<String> response = httpClient.send(builder.build(), HttpResponse.BodyHandlers.ofString());
-            Map<String, Object> parsed = ApiJson.parseObject(response.body());
+            Map<String, Object> parsed = parseResponseBody(response);
             if (response.statusCode() >= 400 && !(allowConflictResult && response.statusCode() == 409)) {
-                Object error = parsed.get("error");
-                if (error == null) {
-                    error = parsed.get("message");
-                }
-                throw new ApiClientException(error == null ? "API request failed." : String.valueOf(error));
+                throw createFailure(response.statusCode(), parsed, null);
             }
             return parsed;
+        } catch (IllegalArgumentException e) {
+            throw new ApiClientException("Auction API base URL is invalid.", e);
         } catch (IOException e) {
             throw new ApiClientException("Could not reach auction API server: " + e.getMessage(), e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new ApiClientException("Auction API request was interrupted.", e);
         }
+    }
+
+    private Map<String, Object> parseResponseBody(HttpResponse<String> response) {
+        String responseBody = response.body() == null ? "" : response.body().trim();
+        if (responseBody.isEmpty()) {
+            return Map.of();
+        }
+        try {
+            return ApiJson.parseObject(responseBody);
+        } catch (IllegalArgumentException e) {
+            if (response.statusCode() >= 400) {
+                return Map.of("message", responseBody);
+            }
+            throw createFailure(
+                    response.statusCode(),
+                    Map.of(),
+                    new IllegalStateException("API returned invalid JSON.", e)
+            );
+        }
+    }
+
+    private ApiClientException createFailure(int statusCode, Map<String, Object> parsed, Exception cause) {
+        Object error = parsed.get("error");
+        if (error == null) {
+            error = parsed.get("message");
+        }
+
+        String message = error == null || String.valueOf(error).isBlank()
+                ? "API request failed with status " + statusCode + "."
+                : String.valueOf(error).trim();
+        if (message.length() > 240) {
+            message = message.substring(0, 237) + "...";
+        }
+
+        if (cause == null) {
+            return new ApiClientException(message, statusCode);
+        }
+        return new ApiClientException(message, cause, statusCode);
     }
 
     private AuthResult authResult(Map<String, Object> response) {
@@ -843,6 +893,22 @@ public final class AuctionApiClient {
         return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
     }
 
+    private static Duration resolveTimeout(String propertyName, String environmentName, long defaultMillis) {
+        String configured = System.getProperty(propertyName);
+        if (configured == null || configured.isBlank()) {
+            configured = System.getenv(environmentName);
+        }
+        if (configured == null || configured.isBlank()) {
+            return Duration.ofMillis(defaultMillis);
+        }
+        try {
+            long millis = Long.parseLong(configured.trim());
+            return Duration.ofMillis(millis > 0L ? millis : defaultMillis);
+        } catch (NumberFormatException ignored) {
+            return Duration.ofMillis(defaultMillis);
+        }
+    }
+
     public record AuthResult(String token, User user) {
     }
 
@@ -880,12 +946,27 @@ public final class AuctionApiClient {
     }
 
     public static class ApiClientException extends RuntimeException {
+        private final int statusCode;
+
         public ApiClientException(String message) {
-            super(message);
+            this(message, null, -1);
         }
 
         public ApiClientException(String message, Throwable cause) {
+            this(message, cause, -1);
+        }
+
+        public ApiClientException(String message, int statusCode) {
+            this(message, null, statusCode);
+        }
+
+        public ApiClientException(String message, Throwable cause, int statusCode) {
             super(message, cause);
+            this.statusCode = statusCode;
+        }
+
+        public int getStatusCode() {
+            return statusCode;
         }
     }
 }

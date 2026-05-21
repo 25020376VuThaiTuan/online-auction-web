@@ -20,6 +20,7 @@ import javafx.scene.control.ListView;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.Tab;
 import javafx.scene.control.TabPane;
+import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
@@ -45,6 +46,7 @@ import org.example.model.WalletTransaction;
 import org.example.service.MarketplaceDashboardService;
 import org.example.state.ApplicationSession;
 import org.example.util.AuctionDisplayFormatter;
+import org.example.util.BackgroundExecutorFactory;
 import org.example.util.ResponsiveViewSupport;
 import org.example.util.SceneNavigator;
 import org.example.viewmodel.AuctionEligibilityEntry;
@@ -53,22 +55,43 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class DashboardController {
     private static final DateTimeFormatter CHART_TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static final DateTimeFormatter DASHBOARD_DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
     private static final java.time.Duration WALLET_PIN_TRUST_DURATION = java.time.Duration.ofMinutes(120);
+    private static final int REFRESH_INTERVAL_MILLIS = 3_000;
+    private static final String ALL_STATUSES = "All statuses";
+    private static final String SORT_ENDING_SOON = "Ending soonest";
+    private static final String SORT_PRICE_LOW = "Price low to high";
+    private static final String SORT_PRICE_HIGH = "Price high to low";
+    private static final String SORT_NAME = "Name A to Z";
 
     private final AuctionApiClient apiClient = AuctionApiClient.getInstance();
     private final MarketplaceDashboardService dashboardService = MarketplaceDashboardService.getInstance();
     private final ApplicationSession applicationSession = ApplicationSession.getInstance();
+    private final ExecutorService refreshExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("dashboard-refresh");
+    private final ExecutorService selectionDetailExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("dashboard-selection-refresh");
+    private final AtomicBoolean refreshInFlight = new AtomicBoolean(false);
 
     private Timeline refreshTimeline;
+    private volatile boolean refreshActive;
     private String selectedAuctionId;
     private WalletSummary openedWalletSummary;
     private final List<AuctionSettlement> adminSettlementItems = new ArrayList<>();
+    private boolean suppressAuctionSelectionRefresh;
+    private boolean suppressSellerSelectionRefresh;
+    private long auctionDetailRequestId;
+    private long sellerDetailRequestId;
     private String lastAdminRefreshFailureMessage;
     private String lastDashboardRefreshFailureMessage;
+    private String lastAuctionDetailFailureMessage;
+    private String lastSellerDetailFailureMessage;
+    private List<AuctionEligibilityEntry> latestAuctionEntries = List.of();
 
     @FXML
     private TabPane dashboardTabPane;
@@ -99,6 +122,18 @@ public class DashboardController {
 
     @FXML
     private Label availableBalanceLabel;
+
+    @FXML
+    private Label overviewAuctionCountLabel;
+
+    @FXML
+    private Label overviewRunningCountLabel;
+
+    @FXML
+    private Label overviewEnteredCountLabel;
+
+    @FXML
+    private Label overviewEligibleCountLabel;
 
     @FXML
     private ListView<String> notificationList;
@@ -222,6 +257,24 @@ public class DashboardController {
 
     @FXML
     private TableColumn<AuctionEligibilityEntry, String> auctionEligibleColumn;
+
+    @FXML
+    private TextField dashboardAuctionSearchField;
+
+    @FXML
+    private ChoiceBox<String> dashboardAuctionStatusFilterChoiceBox;
+
+    @FXML
+    private ChoiceBox<String> dashboardAuctionSortChoiceBox;
+
+    @FXML
+    private CheckBox dashboardAuctionOpenOnlyCheckBox;
+
+    @FXML
+    private CheckBox dashboardEligibleOnlyCheckBox;
+
+    @FXML
+    private Label auctionResultsSummaryLabel;
 
     @FXML
     private Label selectedAuctionLabel;
@@ -374,7 +427,8 @@ public class DashboardController {
         configureTables();
         configureRoleTabs();
         bindCurrentUserFields();
-        refreshViewSafely(true);
+        refreshActive = true;
+        refreshViewAsync(true);
         startRefreshLoop();
     }
 
@@ -432,7 +486,7 @@ public class DashboardController {
             openedWalletSummary = summary;
             walletPinField.clear();
             refreshWallet(summary);
-            refreshAuctionList(currentUser());
+            refreshViewAsync(false);
         } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
             showAlert(Alert.AlertType.WARNING, "Wallet locked", e.getMessage());
         }
@@ -459,7 +513,7 @@ public class DashboardController {
             openedWalletSummary = summary;
             newWalletPinField.clear();
             refreshWallet(summary);
-            refreshAuctionList(currentUser());
+            refreshViewAsync(false);
             showAlert(Alert.AlertType.INFORMATION, "Wallet PIN saved", "Wallet PIN was saved.");
         } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
             showAlert(Alert.AlertType.WARNING, "PIN not saved", e.getMessage());
@@ -500,7 +554,7 @@ public class DashboardController {
             recoveryCodeField.clear();
             newWalletPinField.clear();
             refreshWallet(summary);
-            refreshAuctionList(currentUser());
+            refreshViewAsync(false);
             showAlert(Alert.AlertType.INFORMATION, "Wallet PIN reset", "Wallet PIN was reset.");
         } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
             showAlert(Alert.AlertType.WARNING, "PIN reset failed", e.getMessage());
@@ -513,7 +567,7 @@ public class DashboardController {
         String provider = value(walletProviderField.getText());
         String reference = value(walletAccountReferenceField.getText());
         if (accountName.isBlank() || provider.isBlank() || reference.isBlank()) {
-            showAlert(Alert.AlertType.WARNING, "Account data required", "Fill in account name, provider, and reference.");
+            showAlert(Alert.AlertType.WARNING, "Account data required", "Fill in account holder name, provider, and reference.");
             return;
         }
 
@@ -637,6 +691,16 @@ public class DashboardController {
     }
 
     @FXML
+    private void handleClearAuctionFilters() {
+        dashboardAuctionSearchField.clear();
+        dashboardAuctionStatusFilterChoiceBox.setValue(ALL_STATUSES);
+        dashboardAuctionSortChoiceBox.setValue(SORT_ENDING_SOON);
+        dashboardAuctionOpenOnlyCheckBox.setSelected(false);
+        dashboardEligibleOnlyCheckBox.setSelected(false);
+        applyAuctionFilters();
+    }
+
+    @FXML
     private void handleConfirmAuctionEntry() {
         AuctionEligibilityEntry selected = auctionTable.getSelectionModel().getSelectedItem();
         if (selected == null) {
@@ -657,7 +721,7 @@ public class DashboardController {
             } else {
                 result = dashboardService.confirmAuctionEntry(selected.getItemId(), currentUser(), walletPin);
             }
-            refreshView();
+            refreshViewAsync(false);
             showAlert(result.accepted() ? Alert.AlertType.INFORMATION : Alert.AlertType.WARNING,
                     result.accepted() ? "Deposit locked" : "Deposit not locked",
                     result.message());
@@ -683,7 +747,7 @@ public class DashboardController {
             BidValidationResult result = useApi()
                     ? apiClient.placeBid(apiToken(), selected.getItemId(), amount, walletPin)
                     : dashboardService.placeBidWithDeposit(selected.getItemId(), currentUser(), amount, walletPin);
-            refreshView();
+            refreshViewAsync(false);
             if (!result.accepted()) {
                 showAlert(Alert.AlertType.WARNING, "Bid rejected", result.message());
                 return;
@@ -748,7 +812,7 @@ public class DashboardController {
                 );
             }
 
-            refreshView();
+            refreshViewAsync(false);
             if (!saved) {
                 showAlert(Alert.AlertType.WARNING,
                         "Auto-bid not saved",
@@ -876,8 +940,7 @@ public class DashboardController {
             sellerExtraNumberField.clear();
             sellerPrepareMinutesField.clear();
             sellerBiddingMinutesField.clear();
-            refreshSellerData(user);
-            refreshAdminData();
+            refreshViewAsync(false);
             showAlert(Alert.AlertType.INFORMATION, "Auction session created", "Auction session is waiting for admin approval.");
         } catch (NumberFormatException e) {
             showAlert(Alert.AlertType.WARNING, "Invalid seller item", "Price and numeric fields must be valid numbers.");
@@ -901,7 +964,7 @@ public class DashboardController {
                 showAlert(Alert.AlertType.WARNING, "Auction not started", "This auction could not be started.");
                 return;
             }
-            refreshView();
+            refreshViewAsync(false);
             showAlert(Alert.AlertType.INFORMATION, "Auction started", "Seller auction is now running.");
         } catch (AuctionApiClient.ApiClientException e) {
             showAlert(Alert.AlertType.WARNING, "Auction not started", e.getMessage());
@@ -923,7 +986,7 @@ public class DashboardController {
                 showAlert(Alert.AlertType.WARNING, "Auction not finished", "This auction could not be finished.");
                 return;
             }
-            refreshView();
+            refreshViewAsync(false);
             showAlert(Alert.AlertType.INFORMATION, "Auction finished", "Auction is finished and locked.");
         } catch (AuctionApiClient.ApiClientException e) {
             showAlert(Alert.AlertType.WARNING, "Auction not finished", e.getMessage());
@@ -949,7 +1012,7 @@ public class DashboardController {
             } else {
                 dashboardService.markGoodsShipped(selectedItem.getId(), currentUser(), walletPin);
             }
-            refreshView();
+            refreshViewAsync(false);
             showAlert(Alert.AlertType.INFORMATION, "Item sent confirmed", "Buyer payment is locked until the buyer confirms receipt.");
         } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
             showAlert(Alert.AlertType.WARNING, "Item sent not confirmed", e.getMessage());
@@ -989,7 +1052,7 @@ public class DashboardController {
             showAlert(Alert.AlertType.WARNING, "Role update failed", e.getMessage());
             return;
         }
-        refreshAdminData();
+        refreshViewAsync(false);
         showAlert(Alert.AlertType.INFORMATION, "Role updated", "User role was updated.");
     }
 
@@ -1033,8 +1096,8 @@ public class DashboardController {
             } catch (AuctionApiClient.ApiClientException ignored) {
             }
         }
-        applicationSession.logout();
         stopRefreshLoop();
+        applicationSession.logout();
         SceneNavigator.switchScene(dashboardTabPane, "/view/Login.fxml", "Online Auction System");
     }
 
@@ -1051,7 +1114,7 @@ public class DashboardController {
             } else {
                 dashboardService.updateItemApproval(selectedItem.getId(), approvalStatus);
             }
-            refreshAdminData();
+            refreshViewAsync(false);
             showAlert(Alert.AlertType.INFORMATION, title, "Selected item status changed to " + approvalStatus + ".");
         } catch (AuctionApiClient.ApiClientException e) {
             showAlert(Alert.AlertType.WARNING, "Approval update failed", e.getMessage());
@@ -1087,6 +1150,21 @@ public class DashboardController {
                 new SimpleStringProperty(cellData.getValue().getItemName()));
         auctionStatusColumn.setCellValueFactory(cellData ->
                 new SimpleStringProperty(cellData.getValue().getStatus()));
+        auctionStatusColumn.setCellFactory(column -> new TableCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                getStyleClass().removeAll("status-pill", "status-open", "status-running", "status-finished", "status-paid", "status-cancelled");
+                if (empty || item == null) {
+                    setText(null);
+                    return;
+                }
+                String normalizedStatus = normalizeStatus(item);
+                setText(item.replace('_', ' '));
+                getStyleClass().add("status-pill");
+                getStyleClass().add(statusStyleClass(normalizedStatus));
+            }
+        });
         auctionCurrentPriceColumn.setCellValueFactory(cellData ->
                 new SimpleObjectProperty<>(cellData.getValue().getCurrentPrice()));
         auctionMinimumBidColumn.setCellValueFactory(cellData ->
@@ -1101,17 +1179,37 @@ public class DashboardController {
                 new SimpleStringProperty(cellData.getValue().getEndTimeString()));
         auctionEligibleColumn.setCellValueFactory(cellData ->
                 new SimpleStringProperty(cellData.getValue().getEligibleText()));
+        auctionEligibleColumn.setCellFactory(column -> new TableCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                getStyleClass().removeAll("eligible-pill", "eligible-entered", "eligible-ready", "eligible-blocked");
+                if (empty || item == null) {
+                    setText(null);
+                    return;
+                }
+                setText(item);
+                getStyleClass().add("eligible-pill");
+                getStyleClass().add(eligibleStyleClass(item));
+            }
+        });
         ResponsiveViewSupport.configureResponsiveTable(auctionTable);
         ResponsiveViewSupport.configureCurrencyColumn(auctionCurrentPriceColumn);
         ResponsiveViewSupport.configureCurrencyColumn(auctionMinimumBidColumn);
         ResponsiveViewSupport.configureCurrencyColumn(auctionRequiredDepositColumn);
         ResponsiveViewSupport.configureCurrencyColumn(auctionAvailableBalanceColumn);
         auctionTable.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> {
+            if (suppressAuctionSelectionRefresh) {
+                return;
+            }
             if (current == null) {
+                clearBidSection();
                 return;
             }
             selectedAuctionId = current.getItemId();
-            refreshBidSection(current);
+            boolean selectionChanged = previous == null || !current.getItemId().equals(previous.getItemId());
+            showSelectedAuctionSummary(current, selectionChanged);
+            refreshSelectedAuctionDetailAsync(current);
         });
 
         sellerItemNameColumn.setCellValueFactory(cellData ->
@@ -1127,8 +1225,20 @@ public class DashboardController {
         ResponsiveViewSupport.configureResponsiveTable(sellerItemsTable);
         ResponsiveViewSupport.configureCurrencyColumn(sellerItemCurrentPriceColumn);
         sellerItemsTable.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> {
-            refreshSellerBidHistory(current);
-            refreshSellerButtons();
+            if (suppressSellerSelectionRefresh) {
+                return;
+            }
+            if (current == null) {
+                sellerBidHistoryList.setItems(FXCollections.observableArrayList());
+                applySellerSelectionState(null, false);
+                return;
+            }
+            boolean selectionChanged = previous == null || !current.getId().equals(previous.getId());
+            if (selectionChanged) {
+                sellerBidHistoryList.setItems(FXCollections.observableArrayList());
+            }
+            applySellerSelectionState(current, false);
+            refreshSellerSelectionAsync(current);
         });
 
         adminUsernameColumn.setCellValueFactory(cellData ->
@@ -1154,12 +1264,39 @@ public class DashboardController {
         if (!sellerItemTypeChoiceBox.getItems().isEmpty()) {
             sellerItemTypeChoiceBox.setValue(sellerItemTypeChoiceBox.getItems().get(0));
         }
+        configureAuctionFilters();
     }
 
     private void configureRoleTabs() {
         User user = currentUser();
         sellerTab.setDisable(!isSeller(user) && !isAdmin(user));
         adminTab.setDisable(!isAdmin(user));
+    }
+
+    private void configureAuctionFilters() {
+        dashboardAuctionStatusFilterChoiceBox.setItems(FXCollections.observableArrayList(
+                ALL_STATUSES,
+                "OPEN",
+                "RUNNING",
+                "FINISHED",
+                "PAID",
+                "CANCELLED"
+        ));
+        dashboardAuctionStatusFilterChoiceBox.setValue(ALL_STATUSES);
+
+        dashboardAuctionSortChoiceBox.setItems(FXCollections.observableArrayList(
+                SORT_ENDING_SOON,
+                SORT_PRICE_LOW,
+                SORT_PRICE_HIGH,
+                SORT_NAME
+        ));
+        dashboardAuctionSortChoiceBox.setValue(SORT_ENDING_SOON);
+
+        dashboardAuctionSearchField.textProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
+        dashboardAuctionStatusFilterChoiceBox.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
+        dashboardAuctionSortChoiceBox.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
+        dashboardAuctionOpenOnlyCheckBox.selectedProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
+        dashboardEligibleOnlyCheckBox.selectedProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
     }
 
     private void bindCurrentUserFields() {
@@ -1170,30 +1307,29 @@ public class DashboardController {
         avatarUrlField.setText(user.getAvatarUrl());
     }
 
-    private void refreshView() {
-        refreshApiUserSnapshot();
-        User user = currentUser();
-        refreshAccountSummary(user);
-        refreshNotifications(user);
-        refreshWalletSnapshot(user);
-        refreshAuctionList(user);
-        refreshSellerData(user);
-        refreshAdminData();
-        if (selectedAuctionId != null) {
-            auctionTable.getItems().stream()
-                    .filter(entry -> selectedAuctionId.equals(entry.getItemId()))
-                    .findFirst()
-                    .ifPresent(this::refreshBidSection);
+    private void refreshViewAsync(boolean initialLoad) {
+        if (!refreshActive || !refreshInFlight.compareAndSet(false, true)) {
+            return;
         }
-    }
 
-    private void refreshViewSafely(boolean initialLoad) {
-        try {
-            refreshView();
-            lastDashboardRefreshFailureMessage = null;
-        } catch (RuntimeException exception) {
-            handleDashboardRefreshFailure(exception, initialLoad);
-        }
+        DashboardLoadContext context = captureDashboardLoadContext();
+        CompletableFuture
+                .supplyAsync(() -> loadDashboardSnapshot(context), refreshExecutor)
+                .whenComplete((snapshot, throwable) -> Platform.runLater(() -> {
+                    try {
+                        if (!refreshActive) {
+                            return;
+                        }
+                        if (throwable != null) {
+                            handleDashboardRefreshFailure(refreshFailureMessage(throwable), initialLoad);
+                            return;
+                        }
+                        applyDashboardSnapshot(snapshot);
+                        lastDashboardRefreshFailureMessage = null;
+                    } finally {
+                        refreshInFlight.set(false);
+                    }
+                }));
     }
 
     private void refreshAccountSummary(User user) {
@@ -1274,6 +1410,109 @@ public class DashboardController {
         setWalletPinButton.setDisable(pinSetKnown && pinSet);
     }
 
+    private DashboardLoadContext captureDashboardLoadContext() {
+        boolean api = useApi();
+        return new DashboardLoadContext(
+                api,
+                api ? apiToken() : null,
+                currentUser()
+        );
+    }
+
+    private DashboardSnapshot loadDashboardSnapshot(DashboardLoadContext context) {
+        User refreshedUser = context.useApi()
+                ? apiClient.getCurrentUser(context.apiToken())
+                : null;
+        User snapshotUser = refreshedUser != null ? refreshedUser : context.currentUser();
+        List<String> notificationLines = context.useApi()
+                ? apiClient.getNotifications(context.apiToken())
+                : dashboardService.getNotifications(snapshotUser).stream()
+                .map(UserNotification::getDisplayText)
+                .toList();
+        List<AuctionEligibilityEntry> auctionEntries = context.useApi()
+                ? apiClient.getAuctionEligibilityEntries(context.apiToken(), snapshotUser)
+                : dashboardService.getAuctionEligibilityEntries(snapshotUser);
+        List<Item> sellerItems = loadSellerItems(context, snapshotUser);
+        AdminSectionSnapshot adminSection = loadAdminSectionSnapshot(context, snapshotUser);
+        return new DashboardSnapshot(refreshedUser, notificationLines, auctionEntries, sellerItems, adminSection);
+    }
+
+    private List<Item> loadSellerItems(DashboardLoadContext context, User user) {
+        if (!isSeller(user) && !isAdmin(user)) {
+            return List.of();
+        }
+        return context.useApi()
+                ? apiClient.getSellerItems(context.apiToken())
+                : dashboardService.getSellerItems(user);
+    }
+
+    private AdminSectionSnapshot loadAdminSectionSnapshot(DashboardLoadContext context, User user) {
+        if (!isAdmin(user)) {
+            return AdminSectionSnapshot.notAdmin();
+        }
+
+        try {
+            List<User> users = context.useApi()
+                    ? apiClient.getAllUsers(context.apiToken())
+                    : dashboardService.getAllUsers();
+            List<Item> pendingItems = context.useApi()
+                    ? apiClient.getPendingApprovalItems(context.apiToken())
+                    : dashboardService.getPendingApprovalItems();
+            List<String> settlementLines = new ArrayList<>();
+            List<AuctionSettlement> settlements = new ArrayList<>();
+            if (context.useApi()) {
+                for (AuctionApiClient.SettlementDetail settlement : apiClient.getSettlements(context.apiToken())) {
+                    settlementLines.add(settlement.displaySummary());
+                    settlements.add(new AuctionSettlement(
+                            settlement.itemId(),
+                            settlement.itemName(),
+                            "",
+                            settlement.winnerBidderId(),
+                            settlement.winningBidAmount(),
+                            settlement.depositAmount(),
+                            settlement.buyerPremiumAmount(),
+                            settlement.totalBuyerDue(),
+                            settlement.remainingPaymentDue(),
+                            0.0,
+                            0.0,
+                            LocalDateTime.now()
+                    ));
+                }
+            } else {
+                settlements.addAll(dashboardService.getAllSettlements());
+                settlementLines.addAll(settlements.stream().map(AuctionSettlement::getDisplaySummary).toList());
+            }
+            return AdminSectionSnapshot.success(users, pendingItems, settlementLines, settlements);
+        } catch (AuctionApiClient.ApiClientException | IllegalStateException exception) {
+            return AdminSectionSnapshot.failure(refreshFailureMessage(exception, "Admin data is temporarily unavailable."));
+        }
+    }
+
+    private void applyDashboardSnapshot(DashboardSnapshot snapshot) {
+        applyRefreshedUser(snapshot.refreshedUser());
+        User user = currentUser();
+        refreshAccountSummary(user);
+        applyNotifications(snapshot.notificationLines());
+        refreshWalletSnapshot(user);
+        applyMarketplaceSummary(snapshot.auctionEntries());
+        applyAuctionEntries(snapshot.auctionEntries());
+        applySellerItems(snapshot.sellerItems(), user);
+        applyAdminSection(snapshot.adminSection(), user);
+    }
+
+    private void applyRefreshedUser(User refreshedUser) {
+        if (refreshedUser == null) {
+            return;
+        }
+        String previousRole = value(currentUser().getRole());
+        applicationSession.replaceCurrentUser(refreshedUser);
+        String currentRole = value(refreshedUser.getRole());
+        if (!previousRole.equalsIgnoreCase(currentRole)) {
+            configureRoleTabs();
+            bindCurrentUserFields();
+        }
+    }
+
     private void transferWalletMoney(boolean receiving) {
         String accountId = selectedWalletAccountId();
         if (accountId == null) {
@@ -1301,7 +1540,7 @@ public class DashboardController {
             walletTransferAmountField.clear();
             refreshWallet(summary);
             refreshAccountSummary(currentUser());
-            refreshAuctionList(currentUser());
+            refreshViewAsync(false);
             showAlert(Alert.AlertType.INFORMATION,
                     receiving ? "Money received" : "Money sent",
                     receiving ? "Wallet balance was increased." : "Wallet balance was decreased.");
@@ -1355,26 +1594,107 @@ public class DashboardController {
         }
     }
 
-    private void refreshAuctionList(User user) {
-        String previousSelectedId = selectedAuctionId;
-        List<AuctionEligibilityEntry> entries = useApi()
-                ? apiClient.getAuctionEligibilityEntries(apiToken(), user)
-                : dashboardService.getAuctionEligibilityEntries(user);
-        auctionTable.setItems(FXCollections.observableArrayList(entries));
-        if (previousSelectedId != null) {
-            auctionTable.getItems().stream()
-                    .filter(entry -> previousSelectedId.equals(entry.getItemId()))
-                    .findFirst()
-                    .ifPresent(entry -> auctionTable.getSelectionModel().select(entry));
-        }
-        if (auctionTable.getSelectionModel().getSelectedItem() == null) {
-            confirmAuctionEntryButton.setDisable(true);
-            clearBidSection();
-        }
+    private void applyMarketplaceSummary(List<AuctionEligibilityEntry> entries) {
+        int total = entries.size();
+        int live = (int) entries.stream()
+                .filter(entry -> isOpenStatus(entry.getStatus()))
+                .count();
+        int entered = (int) entries.stream()
+                .filter(AuctionEligibilityEntry::isDepositConfirmed)
+                .count();
+        int actionable = (int) entries.stream()
+                .filter(entry -> entry.isEligible() || entry.isDepositConfirmed())
+                .count();
+        overviewAuctionCountLabel.setText(String.valueOf(total));
+        overviewRunningCountLabel.setText(String.valueOf(live));
+        overviewEnteredCountLabel.setText(String.valueOf(entered));
+        overviewEligibleCountLabel.setText(String.valueOf(actionable));
     }
 
-    private void refreshBidSection(AuctionEligibilityEntry entry) {
-        selectedAuctionId = entry.getItemId();
+    private void applyAuctionEntries(List<AuctionEligibilityEntry> entries) {
+        latestAuctionEntries = entries;
+        applyAuctionFilters();
+    }
+
+    private void applyAuctionFilters() {
+        String desiredSelectionId = selectedAuctionId;
+        String searchText = normalizeText(dashboardAuctionSearchField.getText());
+        String selectedStatus = dashboardAuctionStatusFilterChoiceBox.getValue();
+        String selectedSort = dashboardAuctionSortChoiceBox.getValue();
+        boolean openOnly = dashboardAuctionOpenOnlyCheckBox.isSelected();
+        boolean actionableOnly = dashboardEligibleOnlyCheckBox.isSelected();
+
+        List<AuctionEligibilityEntry> filteredEntries = latestAuctionEntries.stream()
+                .filter(entry -> matchesAuctionSearch(entry, searchText))
+                .filter(entry -> matchesAuctionStatus(entry, selectedStatus))
+                .filter(entry -> !openOnly || isOpenStatus(entry.getStatus()))
+                .filter(entry -> !actionableOnly || entry.isEligible() || entry.isDepositConfirmed())
+                .sorted((left, right) -> compareAuctionEntries(left, right, selectedSort))
+                .toList();
+
+        suppressAuctionSelectionRefresh = true;
+        try {
+            auctionTable.setItems(FXCollections.observableArrayList(filteredEntries));
+            auctionTable.getSelectionModel().clearSelection();
+            if (desiredSelectionId != null) {
+                auctionTable.getItems().stream()
+                        .filter(entry -> desiredSelectionId.equals(entry.getItemId()))
+                        .findFirst()
+                        .ifPresent(entry -> auctionTable.getSelectionModel().select(entry));
+            }
+        } finally {
+            suppressAuctionSelectionRefresh = false;
+        }
+
+        updateAuctionResultsSummary(filteredEntries.size(), latestAuctionEntries.size());
+
+        AuctionEligibilityEntry selectedEntry = auctionTable.getSelectionModel().getSelectedItem();
+        if (selectedEntry == null) {
+            clearBidSection();
+            return;
+        }
+
+        selectedAuctionId = selectedEntry.getItemId();
+        showSelectedAuctionSummary(selectedEntry, false);
+        refreshSelectedAuctionDetailAsync(selectedEntry);
+    }
+
+    private boolean matchesAuctionSearch(AuctionEligibilityEntry entry, String searchText) {
+        return searchText.isBlank() || normalizeText(entry.getItemName()).contains(searchText);
+    }
+
+    private boolean matchesAuctionStatus(AuctionEligibilityEntry entry, String selectedStatus) {
+        return selectedStatus == null
+                || ALL_STATUSES.equals(selectedStatus)
+                || normalizeStatus(entry.getStatus()).equals(selectedStatus);
+    }
+
+    private int compareAuctionEntries(AuctionEligibilityEntry left, AuctionEligibilityEntry right, String selectedSort) {
+        if (SORT_PRICE_LOW.equals(selectedSort)) {
+            return Double.compare(left.getCurrentPrice(), right.getCurrentPrice());
+        }
+        if (SORT_PRICE_HIGH.equals(selectedSort)) {
+            return Double.compare(right.getCurrentPrice(), left.getCurrentPrice());
+        }
+        if (SORT_NAME.equals(selectedSort)) {
+            return normalizeText(left.getItemName()).compareTo(normalizeText(right.getItemName()));
+        }
+        return Long.compare(left.getRemainingSeconds(), right.getRemainingSeconds());
+    }
+
+    private void updateAuctionResultsSummary(int visibleCount, int totalCount) {
+        if (totalCount == 0) {
+            auctionResultsSummaryLabel.setText("No auction sessions are available right now.");
+            return;
+        }
+        if (visibleCount == totalCount) {
+            auctionResultsSummaryLabel.setText(totalCount + " auction sessions available");
+            return;
+        }
+        auctionResultsSummaryLabel.setText("Showing " + visibleCount + " of " + totalCount + " auction sessions");
+    }
+
+    private void showSelectedAuctionSummary(AuctionEligibilityEntry entry, boolean clearHistory) {
         selectedAuctionLabel.setText(entry.getItemName() + " [" + entry.getStatus().replace('_', ' ') + "]");
         selectedAuctionDepositLabel.setText("Deposit required: " + AuctionDisplayFormatter.formatCurrency(entry.getRequiredDeposit())
                 + " - " + entry.getEligibleText());
@@ -1393,8 +1713,10 @@ public class DashboardController {
         autoBidMaxField.setPromptText("Max " + AuctionDisplayFormatter.formatCurrency(entry.getAvailableBalance()));
         autoBidIncrementField.setDisable(!canBid);
         registerAutoBidButton.setDisable(!canBid);
-        refreshBidChart(entry.getItemId());
-        refreshBuyerSettlementButtons(entry.getItemId());
+        if (clearHistory) {
+            bidHistoryChart.getData().clear();
+            applyBuyerSettlementButtons(SettlementButtonState.disabled());
+        }
     }
 
     private void clearBidSection() {
@@ -1416,19 +1738,12 @@ public class DashboardController {
         autoBidIncrementField.clear();
         autoBidIncrementField.setDisable(true);
         registerAutoBidButton.setDisable(true);
+        confirmAuctionEntryButton.setDisable(true);
         bidHistoryChart.getData().clear();
-        refreshBuyerSettlementButtons(null);
+        applyBuyerSettlementButtons(SettlementButtonState.disabled());
     }
 
-    private void refreshNotifications(User user) {
-        List<String> lines;
-        if (useApi()) {
-            lines = apiClient.getNotifications(apiToken());
-        } else {
-            lines = dashboardService.getNotifications(user).stream()
-                    .map(UserNotification::getDisplayText)
-                    .toList();
-        }
+    private void applyNotifications(List<String> lines) {
         notificationList.setItems(FXCollections.observableArrayList(lines));
         showNewAuctionCompletionPopups(lines);
     }
@@ -1457,8 +1772,7 @@ public class DashboardController {
                 || normalized.contains("you have won this session");
     }
 
-    private void refreshBidChart(String itemId) {
-        List<Bid> bidHistory = bidHistory(itemId);
+    private void applyBidHistory(List<Bid> bidHistory) {
         XYChart.Series<String, Number> series = new XYChart.Series<>();
         series.setName("Bid history");
         for (Bid bid : bidHistory) {
@@ -1469,74 +1783,211 @@ public class DashboardController {
         bidHistoryChart.getData().add(series);
     }
 
-    private void refreshSellerData(User user) {
+    private void refreshSelectedAuctionDetailAsync(AuctionEligibilityEntry entry) {
+        long requestId = ++auctionDetailRequestId;
+        AuctionSelectionLoadContext context = new AuctionSelectionLoadContext(
+                requestId,
+                useApi(),
+                useApi() ? apiToken() : null,
+                currentUser().getId(),
+                entry.getItemId()
+        );
+        CompletableFuture
+                .supplyAsync(() -> loadAuctionDetailSectionSnapshot(context), selectionDetailExecutor)
+                .whenComplete((snapshot, throwable) -> Platform.runLater(() -> {
+                    if (!refreshActive || requestId != auctionDetailRequestId) {
+                        return;
+                    }
+                    AuctionEligibilityEntry selected = selectedAuctionEntry();
+                    if (selected == null || !selected.getItemId().equals(context.itemId())) {
+                        return;
+                    }
+                    if (throwable != null) {
+                        handleAuctionDetailRefreshFailure(refreshFailureMessage(throwable, "Auction details are temporarily unavailable."));
+                        return;
+                    }
+                    applyAuctionDetailSectionSnapshot(snapshot);
+                    lastAuctionDetailFailureMessage = null;
+                }));
+    }
+
+    private AuctionDetailSectionSnapshot loadAuctionDetailSectionSnapshot(AuctionSelectionLoadContext context) {
+        return new AuctionDetailSectionSnapshot(
+                context.requestId(),
+                context.itemId(),
+                bidHistory(context.useApi(), context.apiToken(), context.itemId()),
+                loadBuyerSettlementButtonState(context.useApi(), context.apiToken(), context.itemId(), context.currentUserId())
+        );
+    }
+
+    private SettlementButtonState loadBuyerSettlementButtonState(boolean useApi, String apiToken, String itemId, String currentUserId) {
+        if (itemId == null || itemId.isBlank()) {
+            return SettlementButtonState.disabled();
+        }
+
+        String status;
+        String winnerId;
+        if (useApi) {
+            AuctionApiClient.SettlementDetail settlement = apiClient.getSettlement(apiToken, itemId);
+            if (settlement == null) {
+                return SettlementButtonState.disabled();
+            }
+            status = settlement.status();
+            winnerId = settlement.winnerBidderId();
+        } else {
+            AuctionSettlement settlement = dashboardService.getSettlement(itemId).orElse(null);
+            if (settlement == null) {
+                return SettlementButtonState.disabled();
+            }
+            status = settlement.getStatus().name();
+            winnerId = settlement.getWinnerBidderId();
+        }
+
+        boolean isWinner = currentUserId.equals(winnerId);
+        boolean admitDisabled = !isWinner || !"AWAITING_WINNER_ADMISSION".equals(status);
+        boolean confirmDisabled = !isWinner || !"AWAITING_BUYER_CONFIRMATION".equals(status);
+        return new SettlementButtonState(admitDisabled, confirmDisabled);
+    }
+
+    private void applyAuctionDetailSectionSnapshot(AuctionDetailSectionSnapshot snapshot) {
+        applyBidHistory(snapshot.bidHistory());
+        applyBuyerSettlementButtons(snapshot.settlementButtonState());
+    }
+
+    private void applyBuyerSettlementButtons(SettlementButtonState state) {
+        admitDashboardResultButton.setDisable(state.admitDisabled());
+        confirmDashboardReceivedButton.setDisable(state.confirmDisabled());
+    }
+
+    private void applySellerItems(List<Item> items, User user) {
         if (!isSeller(user) && !isAdmin(user)) {
             sellerItemsTable.setItems(FXCollections.observableArrayList());
             sellerBidHistoryList.setItems(FXCollections.observableArrayList());
-            sellerStartAuctionButton.setDisable(true);
-            sellerFinishAuctionButton.setDisable(true);
-            sellerMarkShippedButton.setDisable(true);
+            applySellerSelectionState(null, false);
             return;
         }
 
         Item previousSelection = sellerItemsTable.getSelectionModel().getSelectedItem();
         String previousSelectedItemId = previousSelection == null ? null : previousSelection.getId();
-        List<Item> items = useApi()
-                ? apiClient.getSellerItems(apiToken())
-                : dashboardService.getSellerItems(user);
-        sellerItemsTable.setItems(FXCollections.observableArrayList(items));
-        if (previousSelectedItemId != null) {
-            sellerItemsTable.getItems().stream()
-                    .filter(item -> previousSelectedItemId.equals(item.getId()))
-                    .findFirst()
-                    .ifPresent(item -> sellerItemsTable.getSelectionModel().select(item));
+        suppressSellerSelectionRefresh = true;
+        try {
+            sellerItemsTable.setItems(FXCollections.observableArrayList(items));
+            sellerItemsTable.getSelectionModel().clearSelection();
+            if (previousSelectedItemId != null) {
+                sellerItemsTable.getItems().stream()
+                        .filter(item -> previousSelectedItemId.equals(item.getId()))
+                        .findFirst()
+                        .ifPresent(item -> sellerItemsTable.getSelectionModel().select(item));
+            }
+        } finally {
+            suppressSellerSelectionRefresh = false;
         }
-        refreshSellerBidHistory(sellerItemsTable.getSelectionModel().getSelectedItem());
-        refreshSellerButtons();
-    }
 
-    private void refreshSellerBidHistory(Item item) {
-        if (item == null) {
+        Item selectedItem = sellerItemsTable.getSelectionModel().getSelectedItem();
+        if (selectedItem == null) {
             sellerBidHistoryList.setItems(FXCollections.observableArrayList());
+            applySellerSelectionState(null, false);
             return;
         }
 
-        List<String> lines = new ArrayList<>();
-        for (Bid bid : bidHistory(item.getId())) {
-            lines.add(bid.getBidderId() + " -> " + AuctionDisplayFormatter.formatCurrency(bid.getAmount())
-                    + " at " + (bid.getBidTime() == null ? "N/A" : bid.getBidTime().format(DateTimeFormatter.ofPattern("dd/MM HH:mm:ss"))));
-        }
-        sellerBidHistoryList.setItems(FXCollections.observableArrayList(lines));
+        applySellerSelectionState(selectedItem, false);
+        refreshSellerSelectionAsync(selectedItem);
     }
 
-    private void refreshAdminData() {
-        if (!isAdmin(currentUser())) {
-            userTable.setItems(FXCollections.observableArrayList());
-            pendingItemsTable.setItems(FXCollections.observableArrayList());
-            adminSettlementItems.clear();
-            adminSettlementList.setItems(FXCollections.observableArrayList());
+    private void applySellerSelectionState(Item item, boolean canShip) {
+        boolean sellerCanAct = isSeller(currentUser()) || isAdmin(currentUser());
+        boolean hasItem = item != null;
+        sellerStartAuctionButton.setDisable(!sellerCanAct || !hasItem);
+        sellerFinishAuctionButton.setDisable(!sellerCanAct || !hasItem);
+        sellerMarkShippedButton.setDisable(!sellerCanAct || !hasItem || !canShip);
+    }
+
+    private void refreshSellerSelectionAsync(Item item) {
+        long requestId = ++sellerDetailRequestId;
+        SellerSelectionLoadContext context = new SellerSelectionLoadContext(
+                requestId,
+                useApi(),
+                useApi() ? apiToken() : null,
+                item.getId()
+        );
+        CompletableFuture
+                .supplyAsync(() -> loadSellerSelectionDetailSnapshot(context), selectionDetailExecutor)
+                .whenComplete((snapshot, throwable) -> Platform.runLater(() -> {
+                    if (!refreshActive || requestId != sellerDetailRequestId) {
+                        return;
+                    }
+                    Item selectedItem = sellerItemsTable.getSelectionModel().getSelectedItem();
+                    if (selectedItem == null || !selectedItem.getId().equals(context.itemId())) {
+                        return;
+                    }
+                    if (throwable != null) {
+                        handleSellerDetailRefreshFailure(refreshFailureMessage(throwable, "Seller item details are temporarily unavailable."));
+                        return;
+                    }
+                    applySellerSelectionDetailSnapshot(snapshot);
+                    lastSellerDetailFailureMessage = null;
+                }));
+    }
+
+    private SellerSelectionDetailSnapshot loadSellerSelectionDetailSnapshot(SellerSelectionLoadContext context) {
+        List<String> bidHistoryLines = bidHistory(context.useApi(), context.apiToken(), context.itemId()).stream()
+                .map(this::formatSellerBidHistoryLine)
+                .toList();
+        boolean canShip = loadSellerCanShip(context.useApi(), context.apiToken(), context.itemId());
+        return new SellerSelectionDetailSnapshot(context.requestId(), context.itemId(), bidHistoryLines, canShip);
+    }
+
+    private String formatSellerBidHistoryLine(Bid bid) {
+        return bid.getBidderId() + " -> " + AuctionDisplayFormatter.formatCurrency(bid.getAmount())
+                + " at " + (bid.getBidTime() == null ? "N/A" : bid.getBidTime().format(DateTimeFormatter.ofPattern("dd/MM HH:mm:ss")));
+    }
+
+    private boolean loadSellerCanShip(boolean useApi, String apiToken, String itemId) {
+        if (itemId == null || itemId.isBlank()) {
+            return false;
+        }
+        if (useApi) {
+            AuctionApiClient.SettlementDetail settlement = apiClient.getSettlement(apiToken, itemId);
+            return settlement != null && AuctionSettlementStatus.AWAITING_SELLER_CONFIRMATION.name().equals(settlement.status());
+        }
+        return dashboardService.getSettlement(itemId)
+                .map(settlement -> settlement.getStatus() == AuctionSettlementStatus.AWAITING_SELLER_CONFIRMATION)
+                .orElse(false);
+    }
+
+    private void applySellerSelectionDetailSnapshot(SellerSelectionDetailSnapshot snapshot) {
+        sellerBidHistoryList.setItems(FXCollections.observableArrayList(snapshot.bidHistoryLines()));
+        applySellerSelectionState(sellerItemsTable.getSelectionModel().getSelectedItem(), snapshot.canShip());
+    }
+
+    private void applyAdminSection(AdminSectionSnapshot adminSection, User user) {
+        if (!adminSection.admin() || !isAdmin(user)) {
+            clearAdminSection();
+            return;
+        }
+        if (adminSection.failureMessage() != null) {
+            handleAdminRefreshFailure(adminSection.failureMessage());
+            return;
+        }
+
+        userTable.setItems(FXCollections.observableArrayList(adminSection.users()));
+        pendingItemsTable.setItems(FXCollections.observableArrayList(adminSection.pendingItems()));
+        adminSettlementItems.clear();
+        adminSettlementItems.addAll(adminSection.settlementItems());
+        adminSettlementList.setItems(FXCollections.observableArrayList(adminSection.settlementLines()));
+        if (lastAdminRefreshFailureMessage != null) {
             adminWalletAuditList.setItems(FXCollections.observableArrayList());
             lastAdminRefreshFailureMessage = null;
-            return;
         }
+    }
 
-        try {
-            List<User> users = useApi()
-                    ? apiClient.getAllUsers(apiToken())
-                    : dashboardService.getAllUsers();
-            List<Item> pendingItems = useApi()
-                    ? apiClient.getPendingApprovalItems(apiToken())
-                    : dashboardService.getPendingApprovalItems();
-            userTable.setItems(FXCollections.observableArrayList(users));
-            pendingItemsTable.setItems(FXCollections.observableArrayList(pendingItems));
-            refreshAdminSettlements();
-            if (lastAdminRefreshFailureMessage != null) {
-                adminWalletAuditList.setItems(FXCollections.observableArrayList());
-                lastAdminRefreshFailureMessage = null;
-            }
-        } catch (AuctionApiClient.ApiClientException | IllegalStateException e) {
-            handleAdminRefreshFailure(e);
-        }
+    private void clearAdminSection() {
+        userTable.setItems(FXCollections.observableArrayList());
+        pendingItemsTable.setItems(FXCollections.observableArrayList());
+        adminSettlementItems.clear();
+        adminSettlementList.setItems(FXCollections.observableArrayList());
+        adminWalletAuditList.setItems(FXCollections.observableArrayList());
+        lastAdminRefreshFailureMessage = null;
     }
 
     private String walletAuditLine(WalletTransaction transaction) {
@@ -1552,146 +2003,84 @@ public class DashboardController {
                 + (transaction.note() == null || transaction.note().isBlank() ? "" : " - " + transaction.note());
     }
 
-    private void refreshSellerButtons() {
-        boolean sellerCanAct = isSeller(currentUser()) || isAdmin(currentUser());
-        Item selectedItem = sellerItemsTable.getSelectionModel().getSelectedItem();
-        boolean hasItem = selectedItem != null;
-        sellerStartAuctionButton.setDisable(!sellerCanAct || !hasItem);
-        sellerFinishAuctionButton.setDisable(!sellerCanAct || !hasItem);
-        boolean canShip = sellerCanAct && hasItem && isAwaitingSellerConfirmation(selectedItem.getId());
-        sellerMarkShippedButton.setDisable(!canShip);
-    }
-
-    private boolean isAwaitingSellerConfirmation(String itemId) {
-        if (itemId == null || itemId.isBlank()) {
-            return false;
-        }
-
-        if (useApi()) {
-            AuctionApiClient.SettlementDetail settlement = apiClient.getSettlement(apiToken(), itemId);
-            return settlement != null && AuctionSettlementStatus.AWAITING_SELLER_CONFIRMATION.name().equals(settlement.status());
-        }
-
-        return dashboardService.getSettlement(itemId)
-                .map(settlement -> settlement.getStatus() == AuctionSettlementStatus.AWAITING_SELLER_CONFIRMATION)
-                .orElse(false);
-    }
-
-    private void refreshBuyerSettlementButtons(String itemId) {
-        if (itemId == null || itemId.isBlank()) {
-            admitDashboardResultButton.setDisable(true);
-            confirmDashboardReceivedButton.setDisable(true);
-            return;
-        }
-
-        String currentUserId = currentUser().getId();
-        String status;
-        String winnerId;
-        if (useApi()) {
-            AuctionApiClient.SettlementDetail settlement = apiClient.getSettlement(apiToken(), itemId);
-            if (settlement == null) {
-                admitDashboardResultButton.setDisable(true);
-                confirmDashboardReceivedButton.setDisable(true);
-                return;
-            }
-            status = settlement.status();
-            winnerId = settlement.winnerBidderId();
-        } else {
-            AuctionSettlement settlement = dashboardService.getSettlement(itemId).orElse(null);
-            if (settlement == null) {
-                admitDashboardResultButton.setDisable(true);
-                confirmDashboardReceivedButton.setDisable(true);
-                return;
-            }
-            status = settlement.getStatus().name();
-            winnerId = settlement.getWinnerBidderId();
-        }
-
-        boolean isWinner = currentUserId.equals(winnerId);
-        admitDashboardResultButton.setDisable(!isWinner || !"AWAITING_WINNER_ADMISSION".equals(status));
-        boolean awaitingBuyer = isWinner && "AWAITING_BUYER_CONFIRMATION".equals(status);
-        confirmDashboardReceivedButton.setDisable(!awaitingBuyer);
-    }
-
-    private void refreshAdminSettlements() {
-        if (!isAdmin(currentUser())) {
-            adminSettlementItems.clear();
-            adminSettlementList.setItems(FXCollections.observableArrayList());
-            return;
-        }
-
-        List<String> lines = new ArrayList<>();
-        adminSettlementItems.clear();
-        if (useApi()) {
-            for (AuctionApiClient.SettlementDetail settlement : apiClient.getSettlements(apiToken())) {
-                lines.add(settlement.displaySummary());
-                adminSettlementItems.add(new AuctionSettlement(
-                        settlement.itemId(),
-                        settlement.itemName(),
-                        "",
-                        settlement.winnerBidderId(),
-                        settlement.winningBidAmount(),
-                        settlement.depositAmount(),
-                        settlement.buyerPremiumAmount(),
-                        settlement.totalBuyerDue(),
-                        settlement.remainingPaymentDue(),
-                        0.0,
-                        0.0,
-                        LocalDateTime.now()
-                ));
-            }
-        } else {
-            adminSettlementItems.addAll(dashboardService.getAllSettlements());
-            lines.addAll(adminSettlementItems.stream().map(AuctionSettlement::getDisplaySummary).toList());
-        }
-        adminSettlementList.setItems(FXCollections.observableArrayList(lines));
-    }
-
-    private void handleAdminRefreshFailure(RuntimeException exception) {
-        String message = exception == null || exception.getMessage() == null || exception.getMessage().isBlank()
+    private void handleAdminRefreshFailure(String message) {
+        String resolvedMessage = message == null || message.isBlank()
                 ? "Admin data is temporarily unavailable."
-                : exception.getMessage();
-        lastAdminRefreshFailureMessage = message;
+                : message;
+        lastAdminRefreshFailureMessage = resolvedMessage;
         userTable.setItems(FXCollections.observableArrayList());
         pendingItemsTable.setItems(FXCollections.observableArrayList());
         adminSettlementItems.clear();
         adminSettlementList.setItems(FXCollections.observableArrayList("Admin data unavailable."));
-        adminWalletAuditList.setItems(FXCollections.observableArrayList(message));
+        adminWalletAuditList.setItems(FXCollections.observableArrayList(resolvedMessage));
     }
 
-    private void handleDashboardRefreshFailure(RuntimeException exception, boolean initialLoad) {
-        if (isAdmin(currentUser())) {
-            handleAdminRefreshFailure(exception);
+    private void handleDashboardRefreshFailure(String message, boolean initialLoad) {
+        if (applicationSession.getCurrentUser().filter(this::isAdmin).isPresent()) {
+            handleAdminRefreshFailure(message);
         }
 
-        String message = exception == null || exception.getMessage() == null || exception.getMessage().isBlank()
+        String resolvedMessage = message == null || message.isBlank()
                 ? "Dashboard data is temporarily unavailable."
-                : exception.getMessage();
-        if (!initialLoad || message.equals(lastDashboardRefreshFailureMessage)) {
-            lastDashboardRefreshFailureMessage = message;
+                : message;
+        if (!initialLoad || resolvedMessage.equals(lastDashboardRefreshFailureMessage)) {
+            lastDashboardRefreshFailureMessage = resolvedMessage;
             return;
         }
 
-        lastDashboardRefreshFailureMessage = message;
-        Platform.runLater(() -> showAlert(
+        lastDashboardRefreshFailureMessage = resolvedMessage;
+        showAlert(
                 Alert.AlertType.WARNING,
                 "Dashboard opened with partial data",
-                message
-        ));
+                resolvedMessage
+        );
+    }
+
+    private void handleAuctionDetailRefreshFailure(String message) {
+        if (message.equals(lastAuctionDetailFailureMessage)) {
+            return;
+        }
+        lastAuctionDetailFailureMessage = message;
+        showAlert(Alert.AlertType.WARNING, "Auction details unavailable", message);
+    }
+
+    private void handleSellerDetailRefreshFailure(String message) {
+        if (message.equals(lastSellerDetailFailureMessage)) {
+            return;
+        }
+        lastSellerDetailFailureMessage = message;
+        showAlert(Alert.AlertType.WARNING, "Seller item details unavailable", message);
+    }
+
+    private String refreshFailureMessage(Throwable throwable) {
+        return refreshFailureMessage(throwable, "Dashboard data is temporarily unavailable.");
+    }
+
+    private String refreshFailureMessage(Throwable throwable, String fallback) {
+        Throwable current = throwable;
+        while (current.getCause() != null && (current instanceof java.util.concurrent.CompletionException
+                || current instanceof java.util.concurrent.ExecutionException)) {
+            current = current.getCause();
+        }
+        return current.getMessage() == null || current.getMessage().isBlank()
+                ? fallback
+                : current.getMessage();
     }
 
     private void startRefreshLoop() {
-        stopRefreshLoop();
-        refreshTimeline = new Timeline(new KeyFrame(Duration.seconds(1), event -> refreshViewSafely(false)));
+        refreshTimeline = new Timeline(new KeyFrame(Duration.millis(REFRESH_INTERVAL_MILLIS), event -> refreshViewAsync(false)));
         refreshTimeline.setCycleCount(Timeline.INDEFINITE);
         refreshTimeline.play();
     }
 
     private void stopRefreshLoop() {
+        refreshActive = false;
         if (refreshTimeline != null) {
             refreshTimeline.stop();
             refreshTimeline = null;
         }
+        refreshExecutor.shutdownNow();
+        selectionDetailExecutor.shutdownNow();
     }
 
     private User currentUser() {
@@ -1709,8 +2098,12 @@ public class DashboardController {
     }
 
     private List<Bid> bidHistory(String itemId) {
-        return useApi()
-                ? apiClient.getBidHistory(apiToken(), itemId)
+        return bidHistory(useApi(), useApi() ? apiToken() : null, itemId);
+    }
+
+    private List<Bid> bidHistory(boolean useApi, String apiToken, String itemId) {
+        return useApi
+                ? apiClient.getBidHistory(apiToken, itemId)
                 : dashboardService.getBidHistory(itemId);
     }
 
@@ -1720,6 +2113,42 @@ public class DashboardController {
 
     private boolean isAdmin(User user) {
         return "ADMIN".equalsIgnoreCase(user.getRole());
+    }
+
+    private boolean isOpenStatus(String status) {
+        String normalizedStatus = normalizeStatus(status);
+        return !"FINISHED".equals(normalizedStatus)
+                && !"PAID".equals(normalizedStatus)
+                && !"CANCELLED".equals(normalizedStatus);
+    }
+
+    private String normalizeStatus(String value) {
+        return value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private String normalizeText(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String statusStyleClass(String status) {
+        return switch (status) {
+            case "RUNNING" -> "status-running";
+            case "FINISHED" -> "status-finished";
+            case "PAID" -> "status-paid";
+            case "CANCELLED" -> "status-cancelled";
+            default -> "status-open";
+        };
+    }
+
+    private String eligibleStyleClass(String value) {
+        String normalizedValue = normalizeText(value);
+        if ("entered".equals(normalizedValue)) {
+            return "eligible-entered";
+        }
+        if ("can enter".equals(normalizedValue)) {
+            return "eligible-ready";
+        }
+        return "eligible-blocked";
     }
 
     private String value(String text) {
@@ -1836,7 +2265,7 @@ public class DashboardController {
         }
         try {
             action.run();
-            refreshView();
+            refreshViewAsync(false);
             showAlert(Alert.AlertType.INFORMATION, title, "Settlement was updated.");
         } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
             showAlert(Alert.AlertType.WARNING, title + " failed", e.getMessage());
@@ -1847,17 +2276,80 @@ public class DashboardController {
         applicationSession.replaceCurrentUser(apiClient.getCurrentUser(apiToken()));
     }
 
-    private void refreshApiUserSnapshot() {
-        if (!useApi()) {
-            return;
+    private record DashboardLoadContext(boolean useApi, String apiToken, User currentUser) {
+    }
+
+    private record DashboardSnapshot(
+            User refreshedUser,
+            List<String> notificationLines,
+            List<AuctionEligibilityEntry> auctionEntries,
+            List<Item> sellerItems,
+            AdminSectionSnapshot adminSection
+    ) {
+    }
+
+    private record AdminSectionSnapshot(
+            boolean admin,
+            List<User> users,
+            List<Item> pendingItems,
+            List<String> settlementLines,
+            List<AuctionSettlement> settlementItems,
+            String failureMessage
+    ) {
+        private static AdminSectionSnapshot notAdmin() {
+            return new AdminSectionSnapshot(false, List.of(), List.of(), List.of(), List.of(), null);
         }
 
-        String previousRole = value(currentUser().getRole());
-        refreshApiCurrentUser();
-        String currentRole = value(currentUser().getRole());
-        if (!previousRole.equalsIgnoreCase(currentRole)) {
-            configureRoleTabs();
-            bindCurrentUserFields();
+        private static AdminSectionSnapshot success(
+                List<User> users,
+                List<Item> pendingItems,
+                List<String> settlementLines,
+                List<AuctionSettlement> settlementItems
+        ) {
+            return new AdminSectionSnapshot(true, users, pendingItems, settlementLines, settlementItems, null);
+        }
+
+        private static AdminSectionSnapshot failure(String failureMessage) {
+            return new AdminSectionSnapshot(true, List.of(), List.of(), List.of(), List.of(), failureMessage);
+        }
+    }
+
+    private record AuctionSelectionLoadContext(
+            long requestId,
+            boolean useApi,
+            String apiToken,
+            String currentUserId,
+            String itemId
+    ) {
+    }
+
+    private record AuctionDetailSectionSnapshot(
+            long requestId,
+            String itemId,
+            List<Bid> bidHistory,
+            SettlementButtonState settlementButtonState
+    ) {
+    }
+
+    private record SellerSelectionLoadContext(
+            long requestId,
+            boolean useApi,
+            String apiToken,
+            String itemId
+    ) {
+    }
+
+    private record SellerSelectionDetailSnapshot(
+            long requestId,
+            String itemId,
+            List<String> bidHistoryLines,
+            boolean canShip
+    ) {
+    }
+
+    private record SettlementButtonState(boolean admitDisabled, boolean confirmDisabled) {
+        private static SettlementButtonState disabled() {
+            return new SettlementButtonState(true, true);
         }
     }
 

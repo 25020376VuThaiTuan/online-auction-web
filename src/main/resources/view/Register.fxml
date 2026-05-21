@@ -13,6 +13,8 @@
       prefHeight="520.0"
       prefWidth="780.0"
       spacing="14.0"
+      id="registerRoot"
+      stylesheets="@marketplace.css"
       xmlns="http://javafx.com/javafx/21"
       xmlns:fx="http://javafx.com/fxml/1"
       fx:controller="org.example.controller.RegisterController">
@@ -20,8 +22,8 @@
         <Insets top="28.0" right="28.0" bottom="28.0" left="28.0"/>
     </padding>
 
-    <Label style="-fx-font-size: 28px; -fx-font-weight: bold;" text="Create Account"/>
-    <Label maxWidth="520.0" text="Create a bidder or seller account." wrapText="true"/>
+    <Label styleClass="page-title" text="Create Account"/>
+    <Label maxWidth="520.0" styleClass="support-copy" text="Create a bidder or seller account." wrapText="true"/>
 
     <ChoiceBox fx:id="accountRoleChoiceBox" maxWidth="340.0"/>
     <TextField fx:id="fullNameField" maxWidth="340.0" promptText="Full name"/>

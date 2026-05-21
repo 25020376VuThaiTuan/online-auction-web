@@ -9,6 +9,7 @@ import javafx.scene.control.TextField;
 import org.example.client.AuctionApiClient;
 import org.example.service.MarketplaceDashboardService;
 import org.example.state.ApplicationSession;
+import org.example.util.AccountInputValidator;
 import org.example.util.SceneNavigator;
 
 public class RegisterController {
@@ -46,20 +47,28 @@ public class RegisterController {
         String fullName = value(fullNameField.getText());
         String username = value(usernameField.getText());
         String email = value(emailField.getText());
-        String password = value(passwordField.getText());
-        String confirmPassword = value(confirmPasswordField.getText());
+        String password = passwordField.getText() == null ? "" : passwordField.getText();
+        String confirmPassword = confirmPasswordField.getText() == null ? "" : confirmPasswordField.getText();
 
-        if (username.isBlank() || password.isBlank() || email.isBlank()) {
-            showAlert(Alert.AlertType.WARNING, "Missing fields", "Username, email, and password are required.");
-            return;
-        }
         if (!password.equals(confirmPassword)) {
             showAlert(Alert.AlertType.WARNING, "Password mismatch", "Confirm password must match the password.");
             return;
         }
 
         try {
-            boolean usedLocalFallback = register(accountRole, username, password, email, fullName);
+            AccountInputValidator.RegistrationInput registration = AccountInputValidator.validateRegistration(
+                    username,
+                    password,
+                    email,
+                    fullName
+            );
+            boolean usedLocalFallback = register(
+                    accountRole,
+                    registration.username(),
+                    registration.password(),
+                    registration.email(),
+                    registration.fullName()
+            );
             if (usedLocalFallback) {
                 showAlert(
                         Alert.AlertType.INFORMATION,

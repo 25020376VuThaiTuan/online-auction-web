@@ -1,7 +1,5 @@
 package org.example.controller;
 
-import javafx.animation.KeyFrame;
-import javafx.animation.Timeline;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
@@ -18,7 +16,6 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.scene.layout.VBox;
-import javafx.util.Duration;
 import org.example.auction.AuctionDepositResult;
 import org.example.auction.AuctionRules;
 import org.example.auction.AuctionSettlement;
@@ -36,21 +33,31 @@ import org.example.service.MarketplaceDashboardService;
 import org.example.service.AuctionWorkflowService;
 import org.example.state.ApplicationSession;
 import org.example.util.AuctionDisplayFormatter;
+import org.example.util.BackgroundExecutorFactory;
 import org.example.util.ResponsiveViewSupport;
 import org.example.util.SceneNavigator;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class AuctionController {
     private static final java.time.Duration WALLET_PIN_TRUST_DURATION = java.time.Duration.ofMinutes(120);
+    private static final int REFRESH_INTERVAL_MILLIS = 2_000;
 
     private final AuctionApiClient apiClient = AuctionApiClient.getInstance();
     private final AuctionWorkflowService workflowService = AuctionWorkflowService.getInstance();
     private final MarketplaceDashboardService dashboardService = MarketplaceDashboardService.getInstance();
     private final ApplicationSession applicationSession = ApplicationSession.getInstance();
+    private final ExecutorService refreshExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("auction-detail-refresh");
+    private final AtomicBoolean refreshInFlight = new AtomicBoolean(false);
 
-    private Timeline refreshTimeline;
+    private javafx.animation.Timeline refreshTimeline;
     private String selectedAuctionId;
+    private volatile boolean refreshActive;
+    private String lastRefreshFailureMessage;
 
     @FXML
     private Label userLabel;
@@ -134,7 +141,8 @@ public class AuctionController {
         });
 
         userLabel.setText("Signed in as: " + applicationSession.getCurrentUserLabel());
-        refreshView();
+        refreshActive = true;
+        refreshViewAsync(true);
         startRefreshLoop();
     }
 
@@ -178,14 +186,14 @@ public class AuctionController {
                     );
 
             if (!result.accepted()) {
-                refreshView();
+                refreshViewAsync(false);
                 showAlert(Alert.AlertType.WARNING, "Bid rejected", result.message());
                 return;
             }
 
             bidAmountCombo.setValue(null);
             bidAmountCombo.getEditor().clear();
-            refreshView();
+            refreshViewAsync(false);
             showAlert(Alert.AlertType.INFORMATION, "Bid accepted", result.message());
         } catch (NumberFormatException e) {
             showAlert(Alert.AlertType.WARNING, "Invalid amount", "Enter a valid numeric bid amount.");
@@ -219,7 +227,7 @@ public class AuctionController {
                         walletPin
                 );
             }
-            refreshView();
+            refreshViewAsync(false);
             showAlert(result.accepted() ? Alert.AlertType.INFORMATION : Alert.AlertType.WARNING,
                     result.accepted() ? "Deposit locked" : "Deposit not locked",
                     result.message());
@@ -279,77 +287,126 @@ public class AuctionController {
         SceneNavigator.switchScene(placeBidButton, "/view/Login.fxml", "Online Auction System");
     }
 
-    private void refreshView() {
-        if (useApi()) {
-            refreshViewFromApi();
+    private void refreshViewAsync(boolean initialLoad) {
+        if (!refreshActive || !refreshInFlight.compareAndSet(false, true)) {
             return;
+        }
+
+        CompletableFuture
+                .supplyAsync(this::loadAuctionViewSnapshot, refreshExecutor)
+                .whenComplete((snapshot, throwable) -> Platform.runLater(() -> {
+                    try {
+                        if (!refreshActive) {
+                            return;
+                        }
+                        if (throwable != null) {
+                            handleRefreshFailure(refreshFailureMessage(throwable), initialLoad);
+                            return;
+                        }
+                        if (snapshot.missingAuction()) {
+                            showAlert(Alert.AlertType.WARNING, "Auction missing", "The selected auction no longer exists.");
+                            handleBack();
+                            return;
+                        }
+                        applyAuctionViewSnapshot(snapshot);
+                        lastRefreshFailureMessage = null;
+                    } finally {
+                        refreshInFlight.set(false);
+                    }
+                }));
+    }
+
+    private AuctionViewSnapshot loadAuctionViewSnapshot() {
+        if (useApi()) {
+            return loadAuctionViewSnapshotFromApi();
         }
 
         workflowService.refreshFromStoreIfChanged();
         Item item = workflowService.findItemById(selectedAuctionId).orElse(null);
         if (item == null) {
-            showAlert(Alert.AlertType.WARNING, "Auction missing", "The selected auction no longer exists.");
-            handleBack();
-            return;
+            return AuctionViewSnapshot.missing();
         }
 
         AuctionSummary summary = workflowService.getSummary(selectedAuctionId);
-        itemNameLabel.setText(item.getItemName());
-        descriptionLabel.setText(item.getDescription());
-        statusLabel.setText(summary.status().name().replace('_', ' '));
-        currentPriceLabel.setText(AuctionDisplayFormatter.formatCurrency(summary.currentPrice()));
-        minimumBidLabel.setText(AuctionDisplayFormatter.formatCurrency(summary.minimumNextBid()));
-        endTimeLabel.setText(item.getEndTimeString());
-        timeRemainingLabel.setText(AuctionDisplayFormatter.formatRemainingTime(summary.secondsRemaining()));
-        bidEntryTimeRemainingLabel.setText("Time remaining: " + AuctionDisplayFormatter.formatRemainingTime(summary.secondsRemaining()));
-        bidTable.setItems(FXCollections.observableArrayList(workflowService.getBidHistory(selectedAuctionId)));
-        bidTable.refresh();
-
-        // This guard enforces the rubric rule: only active auctions accept bids.
         boolean depositConfirmed = applicationSession.getCurrentUser()
                 .map(user -> dashboardService.hasConfirmedEntryDeposit(selectedAuctionId, user))
                 .orElse(false);
         double requiredDeposit = AuctionRules.requiredDeposit(summary.currentPrice());
-        depositLabel.setText("Entry deposit: " + AuctionDisplayFormatter.formatCurrency(requiredDeposit)
-                + (depositConfirmed ? " locked" : " not locked"));
         boolean canBid = summary.status() == AuctionStatus.RUNNING
                 && applicationSession.getCurrentUser().isPresent()
                 && depositConfirmed;
-        bidAmountCombo.setDisable(!canBid);
-        placeBidButton.setDisable(!canBid);
-        confirmEntryButton.setDisable(!applicationSession.getCurrentUser().isPresent()
-                || summary.status().isFinished()
-                || depositConfirmed);
-        refreshLocalSettlementActions();
-        
-        refreshBidAmountSuggestions(summary.minimumNextBid());
+        AuctionSettlement settlement = dashboardService.getSettlement(selectedAuctionId).orElse(null);
+        String currentUserId = applicationSession.getCurrentUser().map(user -> user.getId()).orElse("");
+        SettlementState settlementState = localSettlementState(settlement, currentUserId);
+
+        return new AuctionViewSnapshot(
+                false,
+                item.getItemName(),
+                item.getDescription(),
+                summary.status().name(),
+                summary.currentPrice(),
+                summary.minimumNextBid(),
+                item.getEndTimeString(),
+                summary.secondsRemaining(),
+                workflowService.getBidHistory(selectedAuctionId),
+                requiredDeposit,
+                depositConfirmed,
+                canBid,
+                !applicationSession.getCurrentUser().isPresent() || summary.status().isFinished() || depositConfirmed,
+                settlementState.summary(),
+                settlementState.admitDisabled(),
+                settlementState.confirmDisabled()
+        );
     }
 
-    private void refreshViewFromApi() {
+    private AuctionViewSnapshot loadAuctionViewSnapshotFromApi() {
         AuctionDetail detail = apiClient.getAuction(apiToken(), selectedAuctionId);
-        itemNameLabel.setText(detail.itemName());
-        descriptionLabel.setText(detail.description());
-        statusLabel.setText(detail.status().replace('_', ' '));
-        currentPriceLabel.setText(AuctionDisplayFormatter.formatCurrency(detail.currentPrice()));
-        minimumBidLabel.setText(AuctionDisplayFormatter.formatCurrency(detail.minimumNextBid()));
-        endTimeLabel.setText(detail.displayEndTime());
-        timeRemainingLabel.setText(AuctionDisplayFormatter.formatRemainingTime(detail.secondsRemaining()));
-        bidEntryTimeRemainingLabel.setText("Time remaining: " + AuctionDisplayFormatter.formatRemainingTime(detail.secondsRemaining()));
-        bidTable.setItems(FXCollections.observableArrayList(apiClient.getBidHistory(apiToken(), selectedAuctionId)));
-        bidTable.refresh();
-
-        depositLabel.setText("Entry deposit: " + AuctionDisplayFormatter.formatCurrency(detail.requiredDeposit())
-                + (detail.depositConfirmed() ? " locked" : " not locked"));
         boolean canBid = "RUNNING".equalsIgnoreCase(detail.status())
                 && applicationSession.getCurrentUser().isPresent()
                 && detail.depositConfirmed();
-        bidAmountCombo.setDisable(!canBid);
-        placeBidButton.setDisable(!canBid);
-        confirmEntryButton.setDisable(!applicationSession.getCurrentUser().isPresent()
-                || isFinishedStatus(detail.status())
-                || detail.depositConfirmed());
-        refreshApiSettlementActions();
-        refreshBidAmountSuggestions(detail.minimumNextBid());
+        SettlementDetail settlement = apiClient.getSettlement(apiToken(), selectedAuctionId);
+        String currentUserId = applicationSession.getCurrentUser().map(user -> user.getId()).orElse("");
+        SettlementState settlementState = apiSettlementState(settlement, currentUserId);
+        return new AuctionViewSnapshot(
+                false,
+                detail.itemName(),
+                detail.description(),
+                detail.status(),
+                detail.currentPrice(),
+                detail.minimumNextBid(),
+                detail.displayEndTime(),
+                detail.secondsRemaining(),
+                apiClient.getBidHistory(apiToken(), selectedAuctionId),
+                detail.requiredDeposit(),
+                detail.depositConfirmed(),
+                canBid,
+                !applicationSession.getCurrentUser().isPresent() || isFinishedStatus(detail.status()) || detail.depositConfirmed(),
+                settlementState.summary(),
+                settlementState.admitDisabled(),
+                settlementState.confirmDisabled()
+        );
+    }
+
+    private void applyAuctionViewSnapshot(AuctionViewSnapshot snapshot) {
+        itemNameLabel.setText(snapshot.itemName());
+        descriptionLabel.setText(snapshot.description());
+        statusLabel.setText(snapshot.status().replace('_', ' '));
+        currentPriceLabel.setText(AuctionDisplayFormatter.formatCurrency(snapshot.currentPrice()));
+        minimumBidLabel.setText(AuctionDisplayFormatter.formatCurrency(snapshot.minimumNextBid()));
+        endTimeLabel.setText(snapshot.displayEndTime());
+        timeRemainingLabel.setText(AuctionDisplayFormatter.formatRemainingTime(snapshot.secondsRemaining()));
+        bidEntryTimeRemainingLabel.setText("Time remaining: " + AuctionDisplayFormatter.formatRemainingTime(snapshot.secondsRemaining()));
+        bidTable.setItems(FXCollections.observableArrayList(snapshot.bids()));
+        bidTable.refresh();
+
+        depositLabel.setText("Entry deposit: " + AuctionDisplayFormatter.formatCurrency(snapshot.requiredDeposit())
+                + (snapshot.depositConfirmed() ? " locked" : " not locked"));
+        bidAmountCombo.setDisable(!snapshot.canBid());
+        placeBidButton.setDisable(!snapshot.canBid());
+        confirmEntryButton.setDisable(snapshot.confirmEntryDisabled());
+        settlementLabel.setText(snapshot.settlementSummary());
+        setBuyerSettlementButtonsDisabled(snapshot.admitResultDisabled(), snapshot.confirmReceivedDisabled());
+        refreshBidAmountSuggestions(snapshot.minimumNextBid());
     }
 
     private String selectedBidAmountText() {
@@ -428,44 +485,44 @@ public class AuctionController {
     }
 
     private void startRefreshLoop() {
-        // The detail screen refreshes itself so status, timers, and bid history stay near real-time.
-        refreshTimeline = new Timeline(new KeyFrame(Duration.seconds(1), event -> refreshView()));
-        refreshTimeline.setCycleCount(Timeline.INDEFINITE);
+        // The timer only triggers a background refresh so bid history and timers stay current without blocking the UI.
+        refreshTimeline = new javafx.animation.Timeline(
+                new javafx.animation.KeyFrame(javafx.util.Duration.millis(REFRESH_INTERVAL_MILLIS), event -> refreshViewAsync(false))
+        );
+        refreshTimeline.setCycleCount(javafx.animation.Animation.INDEFINITE);
         refreshTimeline.play();
     }
 
-    private void refreshLocalSettlementActions() {
-        AuctionSettlement settlement = dashboardService.getSettlement(selectedAuctionId).orElse(null);
-        String currentUserId = applicationSession.getCurrentUser().map(user -> user.getId()).orElse("");
+    private SettlementState localSettlementState(AuctionSettlement settlement, String currentUserId) {
         if (settlement == null) {
-            settlementLabel.setText("Settlement: N/A");
-            setBuyerSettlementButtonsDisabled(true, true);
-            return;
+            return new SettlementState("Settlement: N/A", true, true);
         }
 
-        settlementLabel.setText("Settlement: " + settlement.getDisplaySummary());
         boolean isWinner = settlement.getWinnerBidderId().equals(currentUserId);
-        admitResultButton.setDisable(!isWinner
-                || settlement.getStatus() != AuctionSettlementStatus.AWAITING_WINNER_ADMISSION);
+        boolean admitDisabled = !isWinner
+                || settlement.getStatus() != AuctionSettlementStatus.AWAITING_WINNER_ADMISSION;
         boolean awaitingBuyer = isWinner
                 && settlement.getStatus() == AuctionSettlementStatus.AWAITING_BUYER_CONFIRMATION;
-        confirmReceivedButton.setDisable(!awaitingBuyer);
+        return new SettlementState(
+                "Settlement: " + settlement.getDisplaySummary(),
+                admitDisabled,
+                !awaitingBuyer
+        );
     }
 
-    private void refreshApiSettlementActions() {
-        SettlementDetail settlement = apiClient.getSettlement(apiToken(), selectedAuctionId);
-        String currentUserId = applicationSession.getCurrentUser().map(user -> user.getId()).orElse("");
+    private SettlementState apiSettlementState(SettlementDetail settlement, String currentUserId) {
         if (settlement == null) {
-            settlementLabel.setText("Settlement: N/A");
-            setBuyerSettlementButtonsDisabled(true, true);
-            return;
+            return new SettlementState("Settlement: N/A", true, true);
         }
 
-        settlementLabel.setText("Settlement: " + settlement.displaySummary());
         boolean isWinner = settlement.winnerBidderId().equals(currentUserId);
-        admitResultButton.setDisable(!isWinner || !"AWAITING_WINNER_ADMISSION".equals(settlement.status()));
+        boolean admitDisabled = !isWinner || !"AWAITING_WINNER_ADMISSION".equals(settlement.status());
         boolean awaitingBuyer = isWinner && "AWAITING_BUYER_CONFIRMATION".equals(settlement.status());
-        confirmReceivedButton.setDisable(!awaitingBuyer);
+        return new SettlementState(
+                "Settlement: " + settlement.displaySummary(),
+                admitDisabled,
+                !awaitingBuyer
+        );
     }
 
     private void setBuyerSettlementButtonsDisabled(boolean admitDisabled, boolean confirmDisabled) {
@@ -481,10 +538,10 @@ public class AuctionController {
         }
         try {
             action.run();
-            refreshView();
+            refreshViewAsync(false);
             showAlert(Alert.AlertType.INFORMATION, title, "Settlement was updated.");
         } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
-            refreshView();
+            refreshViewAsync(false);
             showAlert(Alert.AlertType.WARNING, title + " failed", e.getMessage());
         }
     }
@@ -500,9 +557,35 @@ public class AuctionController {
     }
 
     private void stopRefreshLoop() {
+        refreshActive = false;
         if (refreshTimeline != null) {
             refreshTimeline.stop();
+            refreshTimeline = null;
         }
+        refreshExecutor.shutdownNow();
+    }
+
+    private void handleRefreshFailure(String message, boolean initialLoad) {
+        if (!initialLoad && message.equals(lastRefreshFailureMessage)) {
+            return;
+        }
+        lastRefreshFailureMessage = message;
+        showAlert(
+                initialLoad ? Alert.AlertType.WARNING : Alert.AlertType.INFORMATION,
+                initialLoad ? "Could not load auction" : "Auction view refresh failed",
+                message
+        );
+    }
+
+    private String refreshFailureMessage(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null && (current instanceof java.util.concurrent.CompletionException
+                || current instanceof java.util.concurrent.ExecutionException)) {
+            current = current.getCause();
+        }
+        return current.getMessage() == null || current.getMessage().isBlank()
+                ? "Auction details could not be refreshed."
+                : current.getMessage();
     }
 
     private void showAlert(Alert.AlertType type, String title, String content) {
@@ -520,5 +603,48 @@ public class AuctionController {
     private String apiToken() {
         return applicationSession.getApiToken()
                 .orElseThrow(() -> new IllegalStateException("No API token in session."));
+    }
+
+    private record AuctionViewSnapshot(
+            boolean missingAuction,
+            String itemName,
+            String description,
+            String status,
+            double currentPrice,
+            double minimumNextBid,
+            String displayEndTime,
+            long secondsRemaining,
+            List<Bid> bids,
+            double requiredDeposit,
+            boolean depositConfirmed,
+            boolean canBid,
+            boolean confirmEntryDisabled,
+            String settlementSummary,
+            boolean admitResultDisabled,
+            boolean confirmReceivedDisabled
+    ) {
+        private static AuctionViewSnapshot missing() {
+            return new AuctionViewSnapshot(
+                    true,
+                    "",
+                    "",
+                    "",
+                    0.0,
+                    0.0,
+                    "N/A",
+                    0L,
+                    List.of(),
+                    0.0,
+                    false,
+                    false,
+                    true,
+                    "Settlement: N/A",
+                    true,
+                    true
+            );
+        }
+    }
+
+    private record SettlementState(String summary, boolean admitDisabled, boolean confirmDisabled) {
     }
 }

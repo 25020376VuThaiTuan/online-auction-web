@@ -9,6 +9,7 @@ import org.example.model.User;
 import org.example.repository.DemoUserRepository;
 import org.example.repository.JdbcUserRepository;
 import org.example.repository.UserRepository;
+import org.example.util.AccountInputValidator;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -52,7 +53,7 @@ public final class AuthenticationService {
     }
 
     public User loginOrThrow(String username, String password) throws UserNotFound, InvalidPasswordException {
-        String normalizedUsername = normalize(username);
+        String normalizedUsername = AccountInputValidator.normalizeUsername(username);
         String safePassword = password == null ? "" : password.trim();
 
         if (normalizedUsername.isEmpty() || safePassword.isEmpty()) {
@@ -92,44 +93,54 @@ public final class AuthenticationService {
     }
 
     public synchronized User registerManualBidder(String username, String password, String email, String fullName) {
-        String normalizedUsername = normalize(username);
-        if (normalizedUsername.isEmpty() || password == null || password.isBlank()) {
-            throw new IllegalArgumentException("Username and password are required.");
-        }
-        if (findByUsername(normalizedUsername).isPresent()) {
+        AccountInputValidator.RegistrationInput registration = AccountInputValidator.validateRegistration(
+                username,
+                password,
+                email,
+                fullName
+        );
+        if (findByUsername(registration.username()).isPresent()) {
             throw new IllegalArgumentException("Username is already registered.");
+        }
+        if (findByEmail(registration.email()).isPresent()) {
+            throw new IllegalArgumentException("Email address is already registered.");
         }
 
         Bidder bidder = new Bidder(
                 "U-BID-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
-                normalizedUsername,
-                password.trim(),
-                email == null ? "" : email.trim(),
+                registration.username(),
+                registration.password(),
+                registration.email(),
                 0.0
         );
         bidder.setRole("BIDDER");
-        bidder.setFullName(fullName);
+        bidder.setFullName(registration.fullName());
         saveUserAcrossRepositories(bidder);
         return bidder;
     }
 
     public synchronized User registerManualSeller(String username, String password, String email, String fullName) {
-        String normalizedUsername = normalize(username);
-        if (normalizedUsername.isEmpty() || password == null || password.isBlank()) {
-            throw new IllegalArgumentException("Username and password are required.");
-        }
-        if (findByUsername(normalizedUsername).isPresent()) {
+        AccountInputValidator.RegistrationInput registration = AccountInputValidator.validateRegistration(
+                username,
+                password,
+                email,
+                fullName
+        );
+        if (findByUsername(registration.username()).isPresent()) {
             throw new IllegalArgumentException("Username is already registered.");
+        }
+        if (findByEmail(registration.email()).isPresent()) {
+            throw new IllegalArgumentException("Email address is already registered.");
         }
 
         Seller seller = new Seller(
                 "U-SEL-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
-                normalizedUsername,
-                password.trim(),
-                email == null ? "" : email.trim()
+                registration.username(),
+                registration.password(),
+                registration.email()
         );
         seller.setRole("SELLER");
-        seller.setFullName(fullName);
+        seller.setFullName(registration.fullName());
         saveUserAcrossRepositories(seller);
         return seller;
     }
@@ -143,7 +154,7 @@ public final class AuthenticationService {
         Map<String, User> usersByUsername = new LinkedHashMap<>();
         for (UserRepository repository : repositories) {
             for (User user : repository.findAll()) {
-                String normalizedUsername = normalize(user == null ? null : user.getUsername());
+                String normalizedUsername = AccountInputValidator.normalizeUsername(user == null ? null : user.getUsername());
                 if (normalizedUsername.isEmpty()) {
                     continue;
                 }
@@ -163,8 +174,22 @@ public final class AuthenticationService {
         return Optional.empty();
     }
 
+    public synchronized Optional<User> findByEmail(String email) {
+        String normalizedEmail = email == null ? "" : email.trim().toLowerCase();
+        if (normalizedEmail.isEmpty()) {
+            return Optional.empty();
+        }
+        for (UserRepository repository : repositories) {
+            Optional<User> user = repository.findByEmail(normalizedEmail);
+            if (user.isPresent()) {
+                return user;
+            }
+        }
+        return Optional.empty();
+    }
+
     public synchronized Optional<User> findByUsername(String username) {
-        String normalizedUsername = normalize(username);
+        String normalizedUsername = AccountInputValidator.normalizeUsername(username);
         for (UserRepository repository : repositories) {
             Optional<User> user = repository.findByUsername(normalizedUsername);
             if (user.isPresent()) {
@@ -199,10 +224,6 @@ public final class AuthenticationService {
             return "Demo accounts: bidder/bid123, seller/sell123, admin/admin123. You can also create a new account.";
         }
         return "Use an existing account or create a new bidder or seller account.";
-    }
-
-    private String normalize(String username) {
-        return username == null ? "" : username.trim().toLowerCase();
     }
 
     private void saveUserAcrossRepositories(User user) {

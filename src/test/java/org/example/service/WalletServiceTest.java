@@ -74,10 +74,11 @@ class WalletServiceTest {
     void linkedAccountsCanBecomePrimaryAndMoveMoney() {
         Bidder bidder = bidder("LINKED-ACCOUNTS", 100.0);
         walletService.setPin(bidder, "4567");
+        String accountHolderName = bidder.getFullName();
 
         WalletSummary first = walletService.addLinkedAccount(
                 bidder,
-                "Checking",
+                accountHolderName,
                 "Demo Provider",
                 "1234567890",
                 false,
@@ -89,7 +90,7 @@ class WalletServiceTest {
 
         WalletSummary second = walletService.addLinkedAccount(
                 bidder,
-                "Savings",
+                accountHolderName,
                 "Second Provider",
                 "999900001111",
                 60.0,
@@ -97,7 +98,7 @@ class WalletServiceTest {
                 "4567"
         );
         String primaryAccountId = second.linkedAccounts().stream()
-                .filter(account -> account.accountName().equals("Savings"))
+                .filter(account -> account.providerName().equals("Second Provider"))
                 .findFirst()
                 .orElseThrow()
                 .id();
@@ -135,13 +136,30 @@ class WalletServiceTest {
 
         assertThrows(IllegalArgumentException.class, () -> walletService.addLinkedAccount(
                 bidder,
-                "Checking",
+                bidder.getFullName(),
                 "Provider",
                 "22223333",
                 -1.0,
                 true,
                 "2468"
         ));
+    }
+
+    @Test
+    void linkedAccountNameMustMatchAccountHolderFullName() {
+        Bidder bidder = bidder("NAME-MATCH", 100.0);
+        walletService.setPin(bidder, "8642");
+
+        IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, () -> walletService.addLinkedAccount(
+                bidder,
+                "Different Holder",
+                "Provider",
+                "55556666",
+                true,
+                "8642"
+        ));
+
+        assertEquals("Bank account name must match the account holder full name.", exception.getMessage());
     }
 
     @Test
@@ -161,7 +179,7 @@ class WalletServiceTest {
     void topUpRequiresBankAccountBalance() {
         Bidder bidder = bidder("BANK-BALANCE", 100.0);
         walletService.setPin(bidder, "1357");
-        WalletSummary summary = walletService.addLinkedAccount(bidder, "Checking", "Provider", "22223333", true, "1357");
+        WalletSummary summary = walletService.addLinkedAccount(bidder, bidder.getFullName(), "Provider", "22223333", true, "1357");
         String accountId = summary.linkedAccounts().getFirst().id();
 
         assertThrows(IllegalArgumentException.class, () -> walletService.receiveMoney(bidder, accountId, 1.0, "1357"));
@@ -188,14 +206,15 @@ class WalletServiceTest {
     void removingPrimaryAccountPromotesAnotherAccount() {
         Bidder bidder = bidder("REMOVE-ACCOUNT", 100.0);
         walletService.setPin(bidder, "6789");
-        WalletSummary first = walletService.addLinkedAccount(bidder, "Primary", "Provider", "11112222", true, "6789");
-        WalletSummary second = walletService.addLinkedAccount(bidder, "Backup", "Provider", "33334444", false, "6789");
+        String accountHolderName = bidder.getFullName();
+        WalletSummary first = walletService.addLinkedAccount(bidder, accountHolderName, "Provider One", "11112222", true, "6789");
+        WalletSummary second = walletService.addLinkedAccount(bidder, accountHolderName, "Provider Two", "33334444", false, "6789");
 
         String primaryId = first.linkedAccounts().getFirst().id();
         WalletSummary afterRemoval = walletService.removeLinkedAccount(bidder, primaryId, "6789");
 
         assertEquals(1, afterRemoval.linkedAccounts().size());
-        assertEquals("Backup", afterRemoval.linkedAccounts().getFirst().accountName());
+        assertEquals("Provider Two", afterRemoval.linkedAccounts().getFirst().providerName());
         assertTrue(afterRemoval.linkedAccounts().getFirst().primary());
         assertEquals(2, second.linkedAccounts().size());
     }
@@ -207,7 +226,7 @@ class WalletServiceTest {
                 username,
                 "secret",
                 username + "@test.local",
-                "Wallet Test " + label
+                "Wallet Test " + label + " " + suffix
         );
         bidder.setBalance(balance);
         authenticationService.updateUser(bidder);

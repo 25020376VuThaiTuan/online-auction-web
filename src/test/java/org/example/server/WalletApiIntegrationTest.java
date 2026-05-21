@@ -52,7 +52,7 @@ class WalletApiIntegrationTest {
         request("PATCH", "/users/me/wallet/pin", token, Map.of("newPin", "2468"));
 
         Map<String, Object> accountResponse = request("POST", "/users/me/wallet/accounts", token, Map.of(
-                "accountName", "Integration Account",
+                "accountName", login.fullName(),
                 "providerName", "Integration Provider",
                 "accountReference", "1234567890",
                 "initialBalance", 30.0,
@@ -111,17 +111,19 @@ class WalletApiIntegrationTest {
 
     private LoginResult login() throws Exception {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String fullName = "Integration Bidder " + suffix;
         Map<String, Object> response = request("POST", "/auth/register", null, Map.of(
                 "username", "bidder_" + suffix,
                 "password", "bid123",
                 "email", "bidder_" + suffix + "@test.local",
-                "fullName", "Integration Bidder"
+                "fullName", fullName
         ));
         Map<?, ?> user = (Map<?, ?>) response.get("user");
         return new LoginResult(
                 String.valueOf(response.get("token")),
                 String.valueOf(user.get("id")),
-                ((Number) user.get("balance")).doubleValue()
+                ((Number) user.get("balance")).doubleValue(),
+                fullName
         );
     }
 
@@ -144,6 +146,6 @@ class WalletApiIntegrationTest {
         return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
-    private record LoginResult(String token, String userId, double balance) {
+    private record LoginResult(String token, String userId, double balance, String fullName) {
     }
 }

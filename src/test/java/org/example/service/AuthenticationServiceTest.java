@@ -128,6 +128,81 @@ class AuthenticationServiceTest {
         assertEquals("PRIMARY-ADMIN", users.getFirst().getId());
     }
 
+    @Test
+    void registrationRejectsInvalidEmailFormat() {
+        AuthenticationService service = new AuthenticationService(List.of(DemoUserRepository.createEmpty()));
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.registerManualBidder("new_user", "secure123", "not-an-email", "New User")
+        );
+
+        assertEquals("Email address format is invalid.", exception.getMessage());
+    }
+
+    @Test
+    void registrationRejectsShortPasswords() {
+        AuthenticationService service = new AuthenticationService(List.of(DemoUserRepository.createEmpty()));
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.registerManualBidder("new_user", "12345", "new@test.local", "New User")
+        );
+
+        assertEquals("Password must be at least 6 characters.", exception.getMessage());
+    }
+
+    @Test
+    void registrationRejectsUnsupportedUsernameCharacters() {
+        AuthenticationService service = new AuthenticationService(List.of(DemoUserRepository.createEmpty()));
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.registerManualSeller("bad user!", "secure123", "seller@test.local", "Seller")
+        );
+
+        assertEquals(
+                "Username must be 3-32 characters and use only letters, numbers, dot, underscore, or hyphen.",
+                exception.getMessage()
+        );
+    }
+
+    @Test
+    void registrationRejectsMissingFullName() {
+        AuthenticationService service = new AuthenticationService(List.of(DemoUserRepository.createEmpty()));
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.registerManualBidder("new_user", "secure123", "new@test.local", " ")
+        );
+
+        assertEquals("Full name is required.", exception.getMessage());
+    }
+
+    @Test
+    void registrationAllowsFullNameThatMatchesUsernameAfterNormalization() {
+        AuthenticationService service = new AuthenticationService(List.of(DemoUserRepository.createEmpty()));
+
+        User user = service.registerManualSeller("john.doe", "secure123", "seller@test.local", "John Doe");
+
+        assertEquals("john.doe", user.getUsername());
+        assertEquals("John Doe", user.getFullName());
+    }
+
+    @Test
+    void registrationRejectsDuplicateEmailAddresses() {
+        InMemoryUserRepository repository = new InMemoryUserRepository();
+        repository.save(new Bidder("U-BID-001", "first_user", "secure123", "shared@test.local", 0.0));
+        AuthenticationService service = new AuthenticationService(List.of(repository));
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.registerManualSeller("second_user", "secure123", "shared@test.local", "Seller Two")
+        );
+
+        assertEquals("Email address is already registered.", exception.getMessage());
+    }
+
     private static class InMemoryUserRepository implements UserRepository {
         private final Map<String, User> usersByUsername = new LinkedHashMap<>();
 
@@ -137,6 +212,17 @@ class AuthenticationServiceTest {
                 return Optional.empty();
             }
             return Optional.ofNullable(usersByUsername.get(username.trim().toLowerCase()));
+        }
+
+        @Override
+        public Optional<User> findByEmail(String email) {
+            if (email == null) {
+                return Optional.empty();
+            }
+            String normalizedEmail = email.trim().toLowerCase();
+            return usersByUsername.values().stream()
+                    .filter(user -> user.getEmail() != null && user.getEmail().trim().toLowerCase().equals(normalizedEmail))
+                    .findFirst();
         }
 
         @Override

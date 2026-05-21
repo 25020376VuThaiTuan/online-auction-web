@@ -53,6 +53,10 @@ public class AuctionListEntry {
         return endTimeString;
     }
 
+    public long getRemainingSeconds() {
+        return remainingSeconds;
+    }
+
     public String getRemainingTime() {
         return AuctionDisplayFormatter.formatRemainingTime(remainingSeconds);
     }

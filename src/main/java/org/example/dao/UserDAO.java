@@ -10,6 +10,7 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.SQLIntegrityConstraintViolationException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.List;
@@ -65,6 +66,18 @@ public class UserDAO implements AutoCloseable {
         String sql = USER_SELECT + " WHERE LOWER(u.username) = LOWER(?)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, username);
+            ResultSet rs = ps.executeQuery();
+            if (rs.next()) {
+                return Optional.of(mapUser(rs));
+            }
+        }
+        return Optional.empty();
+    }
+
+    public Optional<User> findByEmail(String email) throws SQLException {
+        String sql = USER_SELECT + " WHERE LOWER(u.email) = LOWER(?)";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, email);
             ResultSet rs = ps.executeQuery();
             if (rs.next()) {
                 return Optional.of(mapUser(rs));
@@ -131,10 +144,14 @@ public class UserDAO implements AutoCloseable {
             if (originalAutoCommit) {
                 conn.setAutoCommit(false);
             }
-            String persistentUserId = resolvePersistentUserId(user);
-            upsertUserRow(user, persistentUserId);
-            saveRoleProfile(user, persistentUserId);
-            saveProfileAddress(user, persistentUserId);
+            UserTarget userTarget = resolveUserTarget(user);
+            if (userTarget.insert()) {
+                insertUserRow(user, userTarget.userId());
+            } else {
+                updateUserRow(user, userTarget.userId());
+            }
+            saveRoleProfile(user, userTarget.userId());
+            saveProfileAddress(user, userTarget.userId());
             if (originalAutoCommit) {
                 conn.commit();
             }
@@ -150,7 +167,7 @@ public class UserDAO implements AutoCloseable {
         }
     }
 
-    private void upsertUserRow(User user, String userId) throws SQLException {
+    private void insertUserRow(User user, String userId) throws SQLException {
         String sql = """
                 INSERT INTO users (
                     id,
@@ -162,13 +179,6 @@ public class UserDAO implements AutoCloseable {
                     phone,
                     avatar_url
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                    email = VALUES(email),
-                    password_hash = VALUES(password_hash),
-                    role = VALUES(role),
-                    full_name = VALUES(full_name),
-                    phone = VALUES(phone),
-                    avatar_url = VALUES(avatar_url)
                 """;
 
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -184,18 +194,49 @@ public class UserDAO implements AutoCloseable {
         }
     }
 
-    private String resolvePersistentUserId(User user) throws SQLException {
+    private void updateUserRow(User user, String userId) throws SQLException {
+        String sql = """
+                UPDATE users
+                SET username = ?,
+                    email = ?,
+                    password_hash = ?,
+                    role = ?,
+                    full_name = ?,
+                    phone = ?,
+                    avatar_url = ?
+                WHERE id = ?
+                """;
+
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, user.getUsername());
+            ps.setString(2, safeEmail(user));
+            ps.setString(3, user.getPassword());
+            ps.setString(4, safeRole(user.getRole()));
+            ps.setString(5, emptyToNull(user.getFullName()));
+            ps.setString(6, emptyToNull(user.getPhoneNumber()));
+            ps.setString(7, emptyToNull(user.getAvatarUrl()));
+            ps.setString(8, userId);
+            ps.executeUpdate();
+        }
+    }
+
+    private UserTarget resolveUserTarget(User user) throws SQLException {
         Optional<String> existingById = findUserId("id = ?", user.getId());
-        if (existingById.isPresent()) {
-            return existingById.get();
-        }
-
         Optional<String> existingByUsername = findUserId("LOWER(username) = LOWER(?)", user.getUsername());
-        if (existingByUsername.isPresent()) {
-            return existingByUsername.get();
+        Optional<String> existingByEmail = findUserId("LOWER(email) = LOWER(?)", safeEmail(user));
+
+        if (existingById.isPresent() && existingByUsername.isPresent()
+                && !existingById.get().equals(existingByUsername.get())) {
+            throw duplicateValue("Username is already registered.");
         }
 
-        return user.getId();
+        String persistentUserId = existingById.or(() -> existingByUsername).orElse(user.getId());
+        boolean insert = existingById.isEmpty() && existingByUsername.isEmpty();
+        if (existingByEmail.isPresent() && !existingByEmail.get().equals(persistentUserId)) {
+            throw duplicateValue("Email address is already registered.");
+        }
+
+        return new UserTarget(persistentUserId, insert);
     }
 
     private Optional<String> findUserId(String whereClause, String value) throws SQLException {
@@ -324,6 +365,13 @@ public class UserDAO implements AutoCloseable {
 
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private SQLIntegrityConstraintViolationException duplicateValue(String message) {
+        return new SQLIntegrityConstraintViolationException(message);
+    }
+
+    private record UserTarget(String userId, boolean insert) {
     }
 
     @Override

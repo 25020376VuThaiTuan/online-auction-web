@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AuctionApiClientTest {
@@ -77,6 +78,41 @@ class AuctionApiClientTest {
             Map<String, Object> payload = ApiJson.parseObject(requestBody.get());
             assertEquals(125.5, ((Number) payload.get("initialBalance")).doubleValue());
             assertEquals(125.5, summary.linkedAccounts().getFirst().balance());
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void nonJsonErrorResponsesStillProduceHelpfulFailures() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/auth/me", exchange -> {
+            byte[] response = "temporary upstream failure".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/plain");
+            exchange.sendResponseHeaders(502, response.length);
+            try (var responseBody = exchange.getResponseBody()) {
+                responseBody.write(response);
+            }
+        });
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            System.setProperty("auction.api.baseUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/api");
+            AuctionApiClient client = newApiClient();
+
+            AuctionApiClient.ApiClientException exception = assertThrows(
+                    AuctionApiClient.ApiClientException.class,
+                    () -> client.getCurrentUser("token")
+            );
+
+            assertEquals("temporary upstream failure", exception.getMessage());
+            assertEquals(502, exception.getStatusCode());
         } finally {
             if (previousBaseUrl == null) {
                 System.clearProperty("auction.api.baseUrl");

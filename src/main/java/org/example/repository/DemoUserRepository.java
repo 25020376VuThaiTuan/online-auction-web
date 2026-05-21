@@ -43,6 +43,17 @@ public class DemoUserRepository implements UserRepository {
     }
 
     @Override
+    public synchronized Optional<User> findByEmail(String email) {
+        String normalizedEmail = normalizeEmail(email);
+        if (normalizedEmail.isEmpty()) {
+            return Optional.empty();
+        }
+        return usersByUsername.values().stream()
+                .filter(user -> normalizedEmail.equals(normalizeEmail(user.getEmail())))
+                .findFirst();
+    }
+
+    @Override
     public synchronized Optional<User> findById(String userId) {
         return usersByUsername.values().stream()
                 .filter(user -> user.getId().equals(userId))
@@ -138,5 +149,9 @@ public class DemoUserRepository implements UserRepository {
 
     private static String normalize(String username) {
         return username == null ? "" : username.trim().toLowerCase();
+    }
+
+    private static String normalizeEmail(String email) {
+        return email == null ? "" : email.trim().toLowerCase();
     }
 }

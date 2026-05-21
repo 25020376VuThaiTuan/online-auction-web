@@ -30,7 +30,7 @@ class ApiPayloadFactoryTest {
                 username,
                 "secret",
                 username + "@test.local",
-                "Test Bidder"
+                "Test Bidder " + suffix
         );
         bidder.setBalance(1_000.0);
         AuthenticationService.getInstance().updateUser(bidder);

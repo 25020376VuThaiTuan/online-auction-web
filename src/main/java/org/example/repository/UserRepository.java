@@ -8,6 +8,10 @@ import java.util.Optional;
 public interface UserRepository {
     Optional<User> findByUsername(String username);
 
+    default Optional<User> findByEmail(String email) {
+        return Optional.empty();
+    }
+
     default Optional<User> findById(String userId) {
         return Optional.empty();
     }

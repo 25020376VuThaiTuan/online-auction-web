@@ -13,6 +13,7 @@ public final class AccountInputValidator {
     private static final int PASSWORD_MAX_LENGTH = 72;
     private static final int EMAIL_MAX_LENGTH = 254;
     private static final int FULL_NAME_MAX_LENGTH = 120;
+    private static final Pattern IDENTITY_COMPARISON_PATTERN = Pattern.compile("[^a-z0-9]+");
 
     private AccountInputValidator() {
     }
@@ -41,6 +42,9 @@ public final class AccountInputValidator {
         if (safeEmail.length() > EMAIL_MAX_LENGTH || !EMAIL_PATTERN.matcher(safeEmail).matches()) {
             throw new IllegalArgumentException("Email address format is invalid.");
         }
+        if (safeFullName.isEmpty()) {
+            throw new IllegalArgumentException("Full name is required.");
+        }
         if (rawPassword.isBlank()) {
             throw new IllegalArgumentException("Password is required.");
         }
@@ -56,12 +60,20 @@ public final class AccountInputValidator {
         if (safeFullName.length() > FULL_NAME_MAX_LENGTH) {
             throw new IllegalArgumentException("Full name must be 120 characters or fewer.");
         }
-
         return new RegistrationInput(normalizedUsername, safePassword, safeEmail, safeFullName);
     }
 
     public static String normalizeUsername(String username) {
         return username == null ? "" : username.trim().toLowerCase(Locale.ROOT);
+    }
+
+    public static String normalizeFullName(String fullName) {
+        return value(fullName);
+    }
+
+    public static String normalizeIdentityLabel(String value) {
+        String normalized = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+        return IDENTITY_COMPARISON_PATTERN.matcher(normalized).replaceAll("");
     }
 
     private static String value(String text) {

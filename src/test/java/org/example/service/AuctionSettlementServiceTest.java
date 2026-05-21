@@ -181,7 +181,7 @@ class AuctionSettlementServiceTest {
                 label + "_" + suffix,
                 "password",
                 label + "_" + suffix + "@example.test",
-                "Test Bidder"
+                "Test Bidder " + suffix
         );
     }
 
@@ -191,7 +191,7 @@ class AuctionSettlementServiceTest {
                 label + "_" + suffix,
                 "password",
                 label + "_" + suffix + "@example.test",
-                "Test Seller"
+                "Test Seller " + suffix
         );
     }
 
@@ -204,7 +204,7 @@ class AuctionSettlementServiceTest {
                 label + "_" + suffix + "@example.test"
         );
         admin.setRole("ADMIN");
-        admin.setFullName("Test Admin");
+        admin.setFullName("Test Admin " + suffix);
         authenticationService.updateUser(admin);
         return admin;
     }
