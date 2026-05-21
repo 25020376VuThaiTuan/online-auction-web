@@ -332,6 +332,7 @@ public final class AuctionWorkflowService {
         String prefix = type == null || type.isBlank()
                 ? "ITEM"
                 : type.trim().substring(0, Math.min(4, type.trim().length())).toUpperCase();
+        assert type != null;
         Item item = ItemFactory.createItem(
                 type,
                 prefix + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),

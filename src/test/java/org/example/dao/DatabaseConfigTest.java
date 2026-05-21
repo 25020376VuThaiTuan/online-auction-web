@@ -1,5 +1,6 @@
 package org.example.dao;
 
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -23,6 +24,7 @@ class DatabaseConfigTest {
                 "password"
         );
 
+        Assertions.assertNotNull(problem);
         assertTrue(problem.contains("separate values"));
     }
 }

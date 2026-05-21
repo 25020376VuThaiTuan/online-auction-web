@@ -2,6 +2,7 @@ package org.example.server;
 
 import org.example.dao.DatabaseConfig;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -259,6 +260,7 @@ class AuctionApiServerMainTest {
                 databaseEnvironment("jdbc:mysql://db.example.com:3306/auctiondb", " auction ", " secret ")
         );
 
+        Assertions.assertNotNull(config);
         assertEquals("jdbc:mysql://db.example.com:3306/auctiondb", config.jdbcUrl());
         assertEquals("auction", config.username());
         assertEquals(" secret ", config.password());
