@@ -27,7 +27,7 @@ public abstract class User extends Entity {
 
     @Override
     public String getId() {
-        return id;
+        return super.getId();
     }
 
     public String getUsername() {

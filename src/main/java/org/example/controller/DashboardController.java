@@ -2076,14 +2076,11 @@ public class DashboardController {
 
     private void applySellerSelectionState(Item item, boolean canShip) {
         User user = currentUser();
-        boolean sellerCanAct = user != null
-                && item != null
-                && item.getSellerId() != null
-                && item.getSellerId().equalsIgnoreCase(user.getId());
+        boolean sellerCanAct = item != null && item.getSellerId() != null && item.getSellerId().equalsIgnoreCase(user.getId());
         boolean hasItem = item != null;
-        sellerStartAuctionButton.setDisable(!sellerCanAct || !hasItem);
-        sellerFinishAuctionButton.setDisable(!sellerCanAct || !hasItem);
-        sellerMarkShippedButton.setDisable(!sellerCanAct || !hasItem || !canShip);
+        sellerStartAuctionButton.setDisable(!sellerCanAct);
+        sellerFinishAuctionButton.setDisable(!sellerCanAct);
+        sellerMarkShippedButton.setDisable(!sellerCanAct || !canShip);
     }
 
     private void refreshSellerSelectionAsync(Item item) {

@@ -2,6 +2,7 @@ package org.example.model;
 
 import java.io.IOException;
 import java.io.ObjectInputStream;
+import java.io.Serial;
 import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -9,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 
 public class AuctionStore implements Serializable {
+    @Serial
     private static final long serialVersionUID = 1L;
 
     private List<Item> items;
@@ -45,6 +47,7 @@ public class AuctionStore implements Serializable {
         return copyNestedListMap(autoBidsByItemId);
     }
 
+    @Serial
     private void readObject(ObjectInputStream inputStream) throws IOException, ClassNotFoundException {
         inputStream.defaultReadObject();
         items = copyList(items);

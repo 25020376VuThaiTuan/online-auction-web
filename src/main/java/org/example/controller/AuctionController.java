@@ -573,7 +573,7 @@ public class AuctionController {
         try {
             return dashboardService.findUserById(safeBidderId)
                     .map(user -> user.getFullName())
-                    .filter(name -> name != null && !name.isBlank())
+                    .filter(name -> !name.isBlank())
                     .orElse(safeBidderId);
         } catch (RuntimeException ignored) {
             return safeBidderId;

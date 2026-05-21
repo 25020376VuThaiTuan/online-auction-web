@@ -114,7 +114,7 @@ class ControllerApiFallbackTest {
 
         @Override
         public Optional<org.example.model.User> findByEmail(String email) {
-            return Optional.empty();
+            return UserRepository.super.findByEmail(email);
         }
 
         @Override
