@@ -92,7 +92,7 @@ public class BidDAO implements AutoCloseable {
                 SELECT id, bidder_id, amount, placed_at
                 FROM bids
                 WHERE auction_id = ?
-                ORDER BY placed_at ASC, amount ASC
+                ORDER BY placed_at ASC, amount ASC, id ASC
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, itemId);
@@ -144,10 +144,25 @@ public class BidDAO implements AutoCloseable {
         return Optional.empty();
     }
 
+    public boolean deleteAutoBid(String bidderId, String itemId) throws SQLException {
+        ensureSchema();
+        String sql = "DELETE FROM auto_bids WHERE bidder_id = ? AND auction_id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, bidderId);
+            ps.setString(2, itemId);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
     public List<AutoBid> getAllAutoBidsForItem(String itemId) throws SQLException {
         ensureSchema();
         List<AutoBid> autoBids = new ArrayList<>();
-        String sql = "SELECT id, bidder_id, max_limit, bid_increment FROM auto_bids WHERE auction_id = ?";
+        String sql = """
+                SELECT id, bidder_id, max_limit, bid_increment
+                FROM auto_bids
+                WHERE auction_id = ?
+                ORDER BY id ASC
+                """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, itemId);
             ResultSet rs = ps.executeQuery();

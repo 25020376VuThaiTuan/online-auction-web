@@ -7,6 +7,7 @@ import org.example.model.AutoBid;
 import org.example.model.Bidder;
 import org.example.model.Item;
 import org.example.model.ItemFactory;
+import org.example.model.Seller;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
@@ -88,5 +89,70 @@ class AuctionWorkflowServiceAutoBidTest {
         ));
         assertEquals(50.0, AuctionWorkflowService.nextAutoBidAmount(40.0, autoBid, bidder.getAvailableBalance()), 0.001);
         assertEquals(0.0, AuctionWorkflowService.nextAutoBidAmount(45.0, autoBid, bidder.getAvailableBalance()), 0.001);
+    }
+
+    @Test
+    void itemCreatorCannotBidEvenWithDepositAndBalance() {
+        Item item = item("ITEM-CREATOR-BLOCK");
+        Bidder creator = new Bidder("creator-user", "creator", "secret", "creator@example.test", 500.0);
+        creator.setRole("BIDDER");
+        item.setSellerId(creator.getId());
+        AuctionSummary summary = runningSummary(item);
+
+        BidValidationResult result = AuctionWorkflowService.bidAuthorizationFailure(
+                item,
+                summary,
+                creator,
+                60.0,
+                true,
+                creator.getAvailableBalance()
+        );
+
+        assertNotNull(result);
+        assertTrue(result.message().contains("creators cannot bid"));
+    }
+
+    @Test
+    void nonCreatorSellerCanBidAfterConfirmingEntryDeposit() {
+        Item item = item("ITEM-SELLER-CAN-BID");
+        item.setSellerId("creator-user");
+        Seller seller = new Seller("seller-user", "seller", "secret", "seller@example.test");
+        seller.setRole("SELLER");
+
+        assertNull(AuctionWorkflowService.bidAuthorizationFailure(
+                item,
+                runningSummary(item),
+                seller,
+                60.0,
+                true,
+                500.0
+        ));
+    }
+
+    private Item item(String id) {
+        return ItemFactory.createItem(
+                "electronics",
+                id,
+                "Authorization Test",
+                "Test item",
+                40.0,
+                LocalDateTime.now().minusMinutes(1),
+                LocalDateTime.now().plusMinutes(10),
+                "Brand",
+                1
+        );
+    }
+
+    private AuctionSummary runningSummary(Item item) {
+        return new AuctionSummary(
+                item.getId(),
+                item.getItemName(),
+                AuctionStatus.RUNNING,
+                item.getCurrentPrice(),
+                50.0,
+                600L,
+                0,
+                null
+        );
     }
 }

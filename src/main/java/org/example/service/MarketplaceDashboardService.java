@@ -9,7 +9,6 @@ import org.example.auction.BidValidationResult;
 import org.example.auction.UserNotification;
 import org.example.model.ApprovalStatus;
 import org.example.model.Bid;
-import org.example.model.Bidder;
 import org.example.model.Item;
 import org.example.model.User;
 import org.example.model.WalletAuthorization;
@@ -62,7 +61,7 @@ public final class MarketplaceDashboardService {
     public List<AuctionEligibilityEntry> getAuctionEligibilityEntries(User user) {
         synchronizeAuctionOutcomes();
         List<AuctionEligibilityEntry> entries = new ArrayList<>();
-        double availableBalance = user instanceof Bidder bidder ? bidder.getAvailableBalance() : 0.0;
+        double availableBalance = user == null ? 0.0 : walletService.getWalletSnapshot(user).availableBalance();
 
         for (Item item : auctionWorkflowService.getAllItems()) {
             if (!item.isApproved()) {
@@ -72,7 +71,10 @@ public final class MarketplaceDashboardService {
             double requiredDeposit = AuctionRules.requiredDeposit(summary.currentPrice());
             double minimumBid = summary.minimumNextBid();
             boolean hasDeposit = settlementService.hasEntryDeposit(item.getId(), user);
-            boolean canEnter = !summary.status().isFinished() && (hasDeposit || availableBalance >= requiredDeposit);
+            boolean isCreator = user != null && item.getSellerId() != null
+                    && item.getSellerId().equalsIgnoreCase(user.getId());
+            boolean canEnter = !isCreator && !summary.status().isFinished()
+                    && (hasDeposit || availableBalance >= requiredDeposit);
             entries.add(new AuctionEligibilityEntry(
                     item.getId(),
                     item.getItemName(),
@@ -210,6 +212,12 @@ public final class MarketplaceDashboardService {
         walletService.requirePin(user, walletPin);
         synchronizeAuctionOutcomes();
         return auctionWorkflowService.registerAutoBid(itemId, user, maxLimit, bidIncrement);
+    }
+
+    public boolean disableAutoBidWithDeposit(String itemId, User user, String walletPin) {
+        walletService.requirePin(user, walletPin);
+        synchronizeAuctionOutcomes();
+        return auctionWorkflowService.disableAutoBid(itemId, user);
     }
 
     public List<Bid> getBidHistory(String itemId) {
@@ -388,7 +396,7 @@ public final class MarketplaceDashboardService {
         if (actor == null || item == null) {
             return false;
         }
-        return isAdmin(actor) || item.getSellerId().equals(actor.getId());
+        return item.getSellerId() != null && item.getSellerId().equalsIgnoreCase(actor.getId());
     }
 
     private boolean isAdmin(User user) {

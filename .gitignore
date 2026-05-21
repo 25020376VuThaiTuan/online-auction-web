@@ -39,3 +39,11 @@ build/
 .DS_Store
 
 data.dat
+
+# Local launch environment files may contain database passwords or API secrets.
+.env
+.env.*
+!.env.example
+scripts/*.env
+scripts/*.env.local
+!scripts/*.env.example

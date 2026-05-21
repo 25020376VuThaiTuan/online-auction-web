@@ -21,6 +21,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AuctionSettlementServiceTest {
@@ -149,6 +151,11 @@ class AuctionSettlementServiceTest {
 
         settlementService.admitWinnerResult(item.getId(), winner);
         assertTrue(hasNotification(seller, itemName, "Buyer admitted result"));
+        IllegalStateException adminAttempt = assertThrows(
+                IllegalStateException.class,
+                () -> settlementService.markGoodsShipped(item.getId(), auditAdmin)
+        );
+        assertTrue(adminAttempt.getMessage().contains("Only the item seller"));
         long winnerHoldCountBeforeShipping = countTransactions(winner, "BID_HOLD");
         settlementService.markGoodsShipped(item.getId(), seller);
         assertEquals(settlement.getRemainingPaymentDue(), walletService.getWalletSnapshot(winner).lockedBalance(), 0.001);
@@ -164,6 +171,52 @@ class AuctionSettlementServiceTest {
         assertEquals(expectedAdminFee, transactionTotal("ADMIN_FEE") - adminFeeTotalBefore, 0.001);
     }
 
+    @Test
+    void itemCreatorCannotLockEntryDeposit() {
+        User seller = seller("seller_creator_block");
+        Item item = item("Creator Deposit Block");
+        item.setSellerId(seller.getId());
+
+        AuctionDepositResult result = settlementService.lockEntryDeposit(item, runningSummary(item), seller);
+
+        assertFalse(result.accepted());
+        assertTrue(result.message().contains("creators cannot enter"));
+    }
+
+    @Test
+    void sellerAccountCanWinAuctionTheyDidNotCreate() {
+        User winner = seller("seller_winner");
+        User seller = seller("seller_owner");
+        topUp(winner, 10_000.0);
+
+        Item item = item("Seller Winner");
+        item.setSellerId(seller.getId());
+        assertTrue(settlementService.lockEntryDeposit(item, runningSummary(item), winner).accepted());
+
+        List<Bid> bidHistory = List.of(
+                new Bid("BID-W-" + UUID.randomUUID(), winner.getId(), item.getId(), 140.0, LocalDateTime.now().minusMinutes(1))
+        );
+        item.setCurrentPrice(140.0);
+        AuctionSummary finishedSummary = new AuctionSummary(
+                item.getId(),
+                item.getItemName(),
+                AuctionStatus.FINISHED,
+                item.getCurrentPrice(),
+                150.0,
+                0L,
+                bidHistory.size(),
+                winner.getId()
+        );
+
+        AuctionSettlement settlement = settlementService.finalizeAuction(item, finishedSummary, bidHistory).orElseThrow();
+        settlementService.admitWinnerResult(item.getId(), winner);
+        settlementService.markGoodsShipped(item.getId(), seller);
+        AuctionSettlement releasedSettlement = settlementService.confirmGoodsReceived(item.getId(), winner);
+
+        assertEquals(AuctionSettlementStatus.PAYMENT_RELEASED, releasedSettlement.getStatus());
+        assertEquals(settlement.getWinningBidAmount(), walletService.getWalletSnapshot(seller).balance(), 0.001);
+    }
+
     private boolean hasNotification(User user, String itemName, String expectedText) {
         return settlementService.getNotificationsFor(user).stream()
                 .map(UserNotification::getDisplayText)
@@ -173,6 +226,37 @@ class AuctionSettlementServiceTest {
     private void topUp(Bidder bidder, double amount) {
         bidder.setBalance(bidder.getBalance() + amount);
         authenticationService.updateUser(bidder);
+    }
+
+    private void topUp(User user, double amount) {
+        walletService.recordSystemEvent(user, "ADJUSTMENT", amount, null, "Test wallet top up.");
+    }
+
+    private Item item(String label) {
+        return ItemFactory.createItem(
+                "electronics",
+                "TEST-" + UUID.randomUUID().toString().substring(0, 8),
+                label + " " + UUID.randomUUID().toString().substring(0, 8),
+                "Test item",
+                100.0,
+                LocalDateTime.now().minusMinutes(10),
+                LocalDateTime.now().plusMinutes(10),
+                "Brand",
+                12
+        );
+    }
+
+    private AuctionSummary runningSummary(Item item) {
+        return new AuctionSummary(
+                item.getId(),
+                item.getItemName(),
+                AuctionStatus.RUNNING,
+                item.getCurrentPrice(),
+                110.0,
+                60L,
+                0,
+                null
+        );
     }
 
     private Bidder bidder(String label) {

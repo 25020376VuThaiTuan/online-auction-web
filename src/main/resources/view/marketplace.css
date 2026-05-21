@@ -72,6 +72,26 @@
     -fx-padding: 18;
 }
 
+.bid-side-panel {
+    -fx-background-color: rgba(255, 252, 246, 0.88);
+    -fx-background-radius: 20;
+    -fx-border-color: rgba(120, 86, 42, 0.16);
+    -fx-border-radius: 20;
+    -fx-padding: 16;
+}
+
+.winner-value {
+    -fx-font-weight: bold;
+    -fx-text-fill: #1e6d45;
+}
+
+.bid-notification-list {
+    -fx-background-color: rgba(255, 252, 246, 0.94);
+    -fx-background-radius: 14;
+    -fx-border-color: rgba(120, 86, 42, 0.16);
+    -fx-border-radius: 14;
+}
+
 .filter-bar {
     -fx-background-color: rgba(249, 241, 226, 0.9);
     -fx-background-radius: 16;

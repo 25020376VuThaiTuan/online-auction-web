@@ -10,6 +10,7 @@ import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListView;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
@@ -38,7 +39,10 @@ import org.example.util.ResponsiveViewSupport;
 import org.example.util.SceneNavigator;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -46,6 +50,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class AuctionController {
     private static final java.time.Duration WALLET_PIN_TRUST_DURATION = java.time.Duration.ofMinutes(120);
     private static final int REFRESH_INTERVAL_MILLIS = 2_000;
+    private static final DateTimeFormatter BID_NOTIFICATION_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM HH:mm:ss");
 
     private final AuctionApiClient apiClient = AuctionApiClient.getInstance();
     private final AuctionWorkflowService workflowService = AuctionWorkflowService.getInstance();
@@ -91,6 +96,12 @@ public class AuctionController {
 
     @FXML
     private Label settlementLabel;
+
+    @FXML
+    private Label currentWinnerLabel;
+
+    @FXML
+    private ListView<String> bidNotificationList;
 
     @FXML
     private TableView<Bid> bidTable;
@@ -191,10 +202,12 @@ public class AuctionController {
                 return;
             }
 
-            bidAmountCombo.setValue(null);
-            bidAmountCombo.getEditor().clear();
+            String bidderName = applicationSession.getCurrentUser()
+                    .map(user -> user.getFullName())
+                    .orElse(applicationSession.getCurrentUserLabel());
+            addBidActivityNotification(bidderName, bidAmount, LocalDateTime.now(), "accepted");
+            readyBidAmountInput(AuctionRules.minimumNextBid(bidAmount), true);
             refreshViewAsync(false);
-            showAlert(Alert.AlertType.INFORMATION, "Bid accepted", result.message());
         } catch (NumberFormatException e) {
             showAlert(Alert.AlertType.WARNING, "Invalid amount", "Enter a valid numeric bid amount.");
         } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
@@ -398,6 +411,7 @@ public class AuctionController {
         bidEntryTimeRemainingLabel.setText("Time remaining: " + AuctionDisplayFormatter.formatRemainingTime(snapshot.secondsRemaining()));
         bidTable.setItems(FXCollections.observableArrayList(snapshot.bids()));
         bidTable.refresh();
+        applyBidStatusViews(snapshot.bids());
 
         depositLabel.setText("Entry deposit: " + AuctionDisplayFormatter.formatCurrency(snapshot.requiredDeposit())
                 + (snapshot.depositConfirmed() ? " locked" : " not locked"));
@@ -406,7 +420,7 @@ public class AuctionController {
         confirmEntryButton.setDisable(snapshot.confirmEntryDisabled());
         settlementLabel.setText(snapshot.settlementSummary());
         setBuyerSettlementButtonsDisabled(snapshot.admitResultDisabled(), snapshot.confirmReceivedDisabled());
-        refreshBidAmountSuggestions(snapshot.minimumNextBid());
+        refreshBidAmountSuggestions(snapshot.minimumNextBid(), snapshot.canBid());
     }
 
     private String selectedBidAmountText() {
@@ -471,7 +485,7 @@ public class AuctionController {
         return Double.parseDouble(normalized);
     }
 
-    private void refreshBidAmountSuggestions(double minimumNextBid) {
+    private void refreshBidAmountSuggestions(double minimumNextBid, boolean canBid) {
         bidAmountCombo.setPromptText("Min " + AuctionDisplayFormatter.formatCurrency(minimumNextBid));
         if (bidAmountCombo.getItems().isEmpty()
                 || !bidAmountCombo.getItems().get(0).equals(String.valueOf(minimumNextBid))) {
@@ -482,6 +496,110 @@ public class AuctionController {
                     String.valueOf(minimumNextBid + 100)
             ));
         }
+        if (canBid) {
+            readyBidAmountInput(minimumNextBid, false);
+        }
+    }
+
+    private void readyBidAmountInput(double minimumBid, boolean force) {
+        if (bidAmountCombo == null || bidAmountCombo.isDisabled()) {
+            return;
+        }
+
+        String currentAmount = selectedBidAmountText();
+        if (!force && !currentAmount.isBlank()) {
+            try {
+                if (parseAmount(currentAmount) >= minimumBid) {
+                    return;
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        String formattedAmount = formatAmountInput(minimumBid);
+        bidAmountCombo.setValue(formattedAmount);
+        if (bidAmountCombo.getEditor() != null) {
+            bidAmountCombo.getEditor().setText(formattedAmount);
+        }
+    }
+
+    private String formatAmountInput(double amount) {
+        return String.format(Locale.US, "%.2f", amount);
+    }
+
+    private void applyBidStatusViews(List<Bid> bids) {
+        List<Bid> safeBids = bids == null ? List.of() : bids;
+        if (safeBids.isEmpty()) {
+            currentWinnerLabel.setText("Current winner: No bids yet");
+            bidNotificationList.setItems(FXCollections.observableArrayList());
+            return;
+        }
+
+        Bid winningBid = safeBids.get(safeBids.size() - 1);
+        currentWinnerLabel.setText("Current winner: "
+                + displayBidderName(winningBid.getBidderId())
+                + " - "
+                + AuctionDisplayFormatter.formatCurrency(winningBid.getAmount())
+                + " at "
+                + formatBidNotificationTime(winningBid.getBidTime()));
+
+        List<String> lines = new ArrayList<>();
+        for (int index = safeBids.size() - 1; index >= 0 && lines.size() < 10; index--) {
+            lines.add(formatBidNotificationLine(safeBids.get(index)));
+        }
+        bidNotificationList.setItems(FXCollections.observableArrayList(lines));
+    }
+
+    private String formatBidNotificationLine(Bid bid) {
+        return formatBidNotificationTime(bid.getBidTime())
+                + " - "
+                + displayBidderName(bid.getBidderId())
+                + " - "
+                + AuctionDisplayFormatter.formatCurrency(bid.getAmount());
+    }
+
+    private String formatBidNotificationTime(LocalDateTime value) {
+        return value == null ? "N/A" : BID_NOTIFICATION_TIME_FORMATTER.format(value);
+    }
+
+    private String displayBidderName(String bidderId) {
+        String safeBidderId = bidderId == null ? "" : bidderId.trim();
+        if (safeBidderId.isBlank()) {
+            return "Unknown bidder";
+        }
+        var currentUser = applicationSession.getCurrentUser();
+        if (currentUser.isPresent() && safeBidderId.equals(currentUser.get().getId())) {
+            return currentUser.get().getFullName();
+        }
+        try {
+            return dashboardService.findUserById(safeBidderId)
+                    .map(user -> user.getFullName())
+                    .filter(name -> name != null && !name.isBlank())
+                    .orElse(safeBidderId);
+        } catch (RuntimeException ignored) {
+            return safeBidderId;
+        }
+    }
+
+    private void addBidActivityNotification(String bidderName, double amount, LocalDateTime bidTime, String status) {
+        List<String> lines = new ArrayList<>(bidNotificationList.getItems());
+        lines.add(0, formatBidNotificationTime(bidTime)
+                + " - "
+                + bidderName
+                + " - "
+                + AuctionDisplayFormatter.formatCurrency(amount)
+                + " ("
+                + status
+                + ")");
+        if (lines.size() > 10) {
+            lines = new ArrayList<>(lines.subList(0, 10));
+        }
+        bidNotificationList.setItems(FXCollections.observableArrayList(lines));
+        currentWinnerLabel.setText("Current winner: "
+                + bidderName
+                + " - "
+                + AuctionDisplayFormatter.formatCurrency(amount)
+                + " at "
+                + formatBidNotificationTime(bidTime));
     }
 
     private void startRefreshLoop() {

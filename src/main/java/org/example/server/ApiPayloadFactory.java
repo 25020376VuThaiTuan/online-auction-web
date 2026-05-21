@@ -83,6 +83,13 @@ final class ApiPayloadFactory {
         AuctionSummary summary = workflowService.getSummary(itemId);
         double requiredDeposit = AuctionRules.requiredDeposit(summary.currentPrice());
         boolean depositConfirmed = user != null && dashboardService.hasConfirmedEntryDeposit(itemId, user);
+        Bidder bidder = user instanceof Bidder typedBidder ? typedBidder : null;
+        WalletSummary walletSummary = user == null ? null : safeWalletSnapshot(user, bidder);
+        double availableBalance = walletSummary == null ? 0.0 : walletSummary.availableBalance();
+        boolean creator = user != null && item.getSellerId() != null
+                && item.getSellerId().equalsIgnoreCase(user.getId());
+        boolean eligible = !creator && !summary.status().isFinished()
+                && (depositConfirmed || availableBalance >= requiredDeposit);
 
         return jsonObject(
                 "itemId", item.getId(),
@@ -94,7 +101,10 @@ final class ApiPayloadFactory {
                 "currentPrice", summary.currentPrice(),
                 "minimumNextBid", summary.minimumNextBid(),
                 "requiredDeposit", requiredDeposit,
+                "availableBalance", availableBalance,
                 "depositConfirmed", depositConfirmed,
+                "eligible", eligible,
+                "creator", creator,
                 "secondsRemaining", summary.secondsRemaining(),
                 "acceptingBids", summary.status() == AuctionStatus.RUNNING,
                 "totalBids", summary.totalBids(),
@@ -227,6 +237,29 @@ final class ApiPayloadFactory {
                 "availableBalance", availableBalance,
                 "lockedDeposits", lockedDeposits,
                 "wallet", wallet(walletSummary)
+        );
+    }
+
+    Map<String, Object> userListItem(User user) {
+        Bidder bidder = user instanceof Bidder typedBidder ? typedBidder : null;
+        double balance = fallbackBalance(bidder);
+        double lockedBalance = fallbackLockedBalance(bidder);
+        double availableBalance = Math.max(0.0, balance - lockedBalance);
+        Map<String, Double> lockedDeposits = bidder == null ? Map.of() : bidder.getLockedDepositsByAuctionId();
+
+        return jsonObject(
+                "id", user.getId(),
+                "username", user.getUsername(),
+                "email", user.getEmail(),
+                "role", user.getRole(),
+                "fullName", user.getFullName(),
+                "phoneNumber", user.getPhoneNumber(),
+                "address", user.getAddress(),
+                "avatarUrl", user.getAvatarUrl(),
+                "balance", balance,
+                "lockedBalance", lockedBalance,
+                "availableBalance", availableBalance,
+                "lockedDeposits", lockedDeposits
         );
     }
 

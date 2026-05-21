@@ -13,9 +13,27 @@ import org.example.state.ApplicationSession;
 import org.example.util.SceneNavigator;
 
 public class LoginController {
-    private final AuctionApiClient apiClient = AuctionApiClient.getInstance();
-    private final AuthenticationService authenticationService = AuthenticationService.getInstance();
-    private final ApplicationSession applicationSession = ApplicationSession.getInstance();
+    private final AuctionApiClient apiClient;
+    private final AuthenticationService authenticationService;
+    private final ApplicationSession applicationSession;
+
+    public LoginController() {
+        this(
+                AuctionApiClient.getInstance(),
+                AuthenticationService.getInstance(),
+                ApplicationSession.getInstance()
+        );
+    }
+
+    LoginController(
+            AuctionApiClient apiClient,
+            AuthenticationService authenticationService,
+            ApplicationSession applicationSession
+    ) {
+        this.apiClient = apiClient;
+        this.authenticationService = authenticationService;
+        this.applicationSession = applicationSession;
+    }
 
     @FXML
     private TextField usernameField;
@@ -44,21 +62,18 @@ public class LoginController {
         }
 
         try {
-            boolean usedLocalFallback = authenticate(username, password);
-            if (usedLocalFallback) {
-                showAlert(
-                        Alert.AlertType.INFORMATION,
-                        "API unavailable",
-                        "Signed in with local data because the configured API server could not be reached."
-                );
-            }
+            authenticate(username, password);
             SceneNavigator.switchScene(usernameField, "/view/Dashboard.fxml", "Auction Dashboard");
         } catch (UserNotFound e) {
             showAlert(Alert.AlertType.WARNING, "User not found", e.getMessage());
         } catch (InvalidPasswordException e) {
             showAlert(Alert.AlertType.WARNING, "Password incorrect", e.getMessage());
         } catch (AuctionApiClient.ApiClientException e) {
-            showAlert(Alert.AlertType.WARNING, "Server login failed", e.getMessage());
+            showAlert(
+                    Alert.AlertType.WARNING,
+                    AuctionApiClient.isConnectivityFailure(e) ? "API unavailable" : "Server login failed",
+                    e.getMessage()
+            );
         } catch (RuntimeException e) {
             applicationSession.logout();
             showAlert(Alert.AlertType.WARNING, "Dashboard unavailable", failureMessage(e));
@@ -70,24 +85,30 @@ public class LoginController {
         SceneNavigator.switchScene(usernameField, "/view/Register.fxml", "Create Account");
     }
 
-    private boolean authenticate(String username, String password) throws UserNotFound, InvalidPasswordException {
+    void authenticate(String username, String password) throws UserNotFound, InvalidPasswordException {
         if (!apiClient.isEnabled()) {
             applicationSession.login(authenticationService.loginOrThrow(username, password));
-            return false;
+            return;
         }
 
         try {
             AuctionApiClient.AuthResult result = apiClient.login(username, password);
             applicationSession.login(result.user(), result.token());
-            return false;
         } catch (AuctionApiClient.ApiClientException e) {
             if (!AuctionApiClient.isConnectivityFailure(e)) {
                 throw e;
             }
-            var localUser = authenticationService.loginOrThrow(username, password);
-            applicationSession.login(localUser);
-            return true;
+            throw configuredApiUnavailable(e);
         }
+    }
+
+    private AuctionApiClient.ApiClientException configuredApiUnavailable(AuctionApiClient.ApiClientException cause) {
+        return new AuctionApiClient.ApiClientException(
+                "Could not reach the configured auction API server. Check AUCTION_API_BASE_URL and make sure the "
+                        + "API server is running, then try signing in again. Local demo sign-in is used only when "
+                        + "AUCTION_API_BASE_URL is not set.",
+                cause
+        );
     }
 
     private void showAlert(Alert.AlertType type, String title, String content) {

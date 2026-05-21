@@ -133,6 +133,7 @@ public final class AuctionApiHandler implements HttpHandler {
                             "/api/auctions/{id}/finish",
                             "/api/auctions/{id}/bids",
                             "/api/auctions/{id}/auto-bid",
+                            "DELETE /api/auctions/{id}/auto-bid",
                             "/api/settlements",
                             "/api/notifications",
                             "/api/items",
@@ -240,7 +241,7 @@ public final class AuctionApiHandler implements HttpHandler {
 
             List<Map<String, Object>> users = new ArrayList<>();
             for (User user : dashboardService.getAllUsers()) {
-                users.add(payloads.user(user));
+                users.add(payloads.userListItem(user));
             }
             sendJson(exchange, 200, jsonObject(
                     "count", users.size(),
@@ -635,29 +636,48 @@ public final class AuctionApiHandler implements HttpHandler {
         }
 
         if (segments.size() == 3 && "auto-bid".equals(segments.get(2))) {
-            requireMethod(exchange, "POST");
-            Map<String, Object> request = ApiJson.parseObject(readRequestBody(exchange));
-            double maxLimit = ApiJson.requireDouble(request, "maxLimit");
-            double bidIncrement = request.containsKey("bidIncrement")
-                    ? ApiJson.requireDouble(request, "bidIncrement")
-                    : 0.0;
-            if (!dashboardService.registerAutoBidWithDeposit(
-                    itemId,
-                    authenticatedUser,
-                    maxLimit,
-                    bidIncrement,
-                    ApiJson.requireString(request, "walletPin")
-            )) {
-                throw new ApiHttpException(409, "Confirm entry deposit and make sure available balance covers the auto-bid maximum.");
+            if ("POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                Map<String, Object> request = ApiJson.parseObject(readRequestBody(exchange));
+                double maxLimit = ApiJson.requireDouble(request, "maxLimit");
+                double bidIncrement = request.containsKey("bidIncrement")
+                        ? ApiJson.requireDouble(request, "bidIncrement")
+                        : 0.0;
+                if (!dashboardService.registerAutoBidWithDeposit(
+                        itemId,
+                        authenticatedUser,
+                        maxLimit,
+                        bidIncrement,
+                        ApiJson.requireString(request, "walletPin")
+                )) {
+                    throw new ApiHttpException(409, "Confirm entry deposit and make sure available balance covers the auto-bid maximum.");
+                }
+                sendJson(exchange, 201, jsonObject(
+                    "message", "Auto-bid saved.",
+                    "itemId", itemId,
+                    "maxLimit", maxLimit,
+                    "bidIncrement", bidIncrement,
+                    "user", payloads.user(authenticatedUser)
+                ));
+                return;
             }
-            sendJson(exchange, 201, jsonObject(
-                "message", "Auto-bid saved.",
-                "itemId", itemId,
-                "maxLimit", maxLimit,
-                "bidIncrement", bidIncrement,
-                "user", payloads.user(authenticatedUser)
-            ));
-            return;
+
+            if ("DELETE".equalsIgnoreCase(exchange.getRequestMethod())) {
+                Map<String, Object> request = ApiJson.parseObject(readRequestBody(exchange));
+                boolean disabled = dashboardService.disableAutoBidWithDeposit(
+                        itemId,
+                        authenticatedUser,
+                        ApiJson.requireString(request, "walletPin")
+                );
+                sendJson(exchange, 200, jsonObject(
+                        "message", disabled ? "Auto-bid disabled." : "No active auto-bid was found.",
+                        "itemId", itemId,
+                        "disabled", disabled,
+                        "user", payloads.user(authenticatedUser)
+                ));
+                return;
+            }
+
+            throw new ApiHttpException(405, "Method not allowed.");
         }
 
         throw new ApiHttpException(404, "Unknown auction route.");

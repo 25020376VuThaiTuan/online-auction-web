@@ -129,6 +129,38 @@ public class ItemDAO implements AutoCloseable {
         }
     }
 
+    public void updateAuctionProgress(String itemId, double currentPrice, LocalDateTime endTime, String status) throws SQLException {
+        String sql = """
+                UPDATE auctions
+                SET current_price = ?,
+                    end_at = ?,
+                    status = ?,
+                    closed_at = CASE WHEN ? = 'FINISHED' THEN CURRENT_TIMESTAMP ELSE closed_at END,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE item_id = ?
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setDouble(1, currentPrice);
+            ps.setTimestamp(2, timestamp(endTime));
+            ps.setString(3, status);
+            ps.setString(4, status);
+            ps.setString(5, itemId);
+            ps.executeUpdate();
+        }
+    }
+
+    public void lockAuctionForUpdate(String itemId) throws SQLException {
+        String sql = "SELECT id FROM auctions WHERE item_id = ? FOR UPDATE";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, itemId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    throw new SQLException("Auction row not found for item: " + itemId, "42S02", 1146);
+                }
+            }
+        }
+    }
+
     public void updateAuctionWindow(String itemId, LocalDateTime startTime, LocalDateTime endTime, String status) throws SQLException {
         String sql = """
                 UPDATE auctions

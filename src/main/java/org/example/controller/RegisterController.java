@@ -7,15 +7,33 @@ import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
 import org.example.client.AuctionApiClient;
-import org.example.service.MarketplaceDashboardService;
+import org.example.service.AuthenticationService;
 import org.example.state.ApplicationSession;
 import org.example.util.AccountInputValidator;
 import org.example.util.SceneNavigator;
 
 public class RegisterController {
-    private final AuctionApiClient apiClient = AuctionApiClient.getInstance();
-    private final MarketplaceDashboardService dashboardService = MarketplaceDashboardService.getInstance();
-    private final ApplicationSession applicationSession = ApplicationSession.getInstance();
+    private final AuctionApiClient apiClient;
+    private final AuthenticationService authenticationService;
+    private final ApplicationSession applicationSession;
+
+    public RegisterController() {
+        this(
+                AuctionApiClient.getInstance(),
+                AuthenticationService.getInstance(),
+                ApplicationSession.getInstance()
+        );
+    }
+
+    RegisterController(
+            AuctionApiClient apiClient,
+            AuthenticationService authenticationService,
+            ApplicationSession applicationSession
+    ) {
+        this.apiClient = apiClient;
+        this.authenticationService = authenticationService;
+        this.applicationSession = applicationSession;
+    }
 
     @FXML
     private ChoiceBox<String> accountRoleChoiceBox;
@@ -62,22 +80,21 @@ public class RegisterController {
                     email,
                     fullName
             );
-            boolean usedLocalFallback = register(
+            register(
                     accountRole,
                     registration.username(),
                     registration.password(),
                     registration.email(),
                     registration.fullName()
             );
-            if (usedLocalFallback) {
-                showAlert(
-                        Alert.AlertType.INFORMATION,
-                        "API unavailable",
-                        "Account created locally because the configured API server could not be reached."
-                );
-            }
             SceneNavigator.switchScene(usernameField, "/view/Dashboard.fxml", "Auction Dashboard");
-        } catch (IllegalArgumentException | AuctionApiClient.ApiClientException e) {
+        } catch (AuctionApiClient.ApiClientException e) {
+            showAlert(
+                    Alert.AlertType.WARNING,
+                    AuctionApiClient.isConnectivityFailure(e) ? "API unavailable" : "Registration failed",
+                    e.getMessage()
+            );
+        } catch (IllegalArgumentException e) {
             showAlert(Alert.AlertType.WARNING, "Registration failed", e.getMessage());
         }
     }
@@ -91,10 +108,10 @@ public class RegisterController {
         return text == null ? "" : text.trim();
     }
 
-    private boolean register(String accountRole, String username, String password, String email, String fullName) {
+    void register(String accountRole, String username, String password, String email, String fullName) {
         if (!apiClient.isEnabled()) {
             applicationSession.login(registerLocally(accountRole, username, password, email, fullName));
-            return false;
+            return;
         }
 
         try {
@@ -102,14 +119,21 @@ public class RegisterController {
                     ? apiClient.registerManualSeller(username, password, email, fullName)
                     : apiClient.registerManualBidder(username, password, email, fullName);
             applicationSession.login(result.user(), result.token());
-            return false;
         } catch (AuctionApiClient.ApiClientException e) {
             if (!AuctionApiClient.isConnectivityFailure(e)) {
                 throw e;
             }
-            applicationSession.login(registerLocally(accountRole, username, password, email, fullName));
-            return true;
+            throw configuredApiUnavailable(e);
         }
+    }
+
+    private AuctionApiClient.ApiClientException configuredApiUnavailable(AuctionApiClient.ApiClientException cause) {
+        return new AuctionApiClient.ApiClientException(
+                "Could not reach the configured auction API server. Check AUCTION_API_BASE_URL and make sure the "
+                        + "API server is running, then try creating the account again. Local demo registration is "
+                        + "used only when AUCTION_API_BASE_URL is not set.",
+                cause
+        );
     }
 
     private org.example.model.User registerLocally(
@@ -120,8 +144,8 @@ public class RegisterController {
             String fullName
     ) {
         return "SELLER".equalsIgnoreCase(accountRole)
-                ? dashboardService.registerManualSeller(username, password, email, fullName)
-                : dashboardService.registerManualBidder(username, password, email, fullName);
+                ? authenticationService.registerManualSeller(username, password, email, fullName)
+                : authenticationService.registerManualBidder(username, password, email, fullName);
     }
 
     private void showAlert(Alert.AlertType type, String title, String content) {

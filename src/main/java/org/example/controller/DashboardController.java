@@ -28,6 +28,7 @@ import javafx.scene.control.TextField;
 import javafx.scene.layout.VBox;
 import javafx.util.Duration;
 import org.example.auction.AuctionDepositResult;
+import org.example.auction.AuctionRules;
 import org.example.auction.AuctionSettlement;
 import org.example.auction.AuctionSettlementStatus;
 import org.example.auction.BidValidationResult;
@@ -62,6 +63,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class DashboardController {
     private static final DateTimeFormatter CHART_TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
+    private static final DateTimeFormatter BID_NOTIFICATION_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM HH:mm:ss");
     private static final DateTimeFormatter DASHBOARD_DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
     private static final java.time.Duration WALLET_PIN_TRUST_DURATION = java.time.Duration.ofMinutes(120);
     private static final int REFRESH_INTERVAL_MILLIS = 3_000;
@@ -91,6 +93,7 @@ public class DashboardController {
     private String lastDashboardRefreshFailureMessage;
     private String lastAuctionDetailFailureMessage;
     private String lastSellerDetailFailureMessage;
+    private String lastBidHistoryChartSignature;
     private List<AuctionEligibilityEntry> latestAuctionEntries = List.of();
 
     @FXML
@@ -289,6 +292,12 @@ public class DashboardController {
     private Label selectedAuctionEndTimeLabel;
 
     @FXML
+    private Label currentWinnerLabel;
+
+    @FXML
+    private ListView<String> bidNotificationList;
+
+    @FXML
     private Button confirmAuctionEntryButton;
 
     @FXML
@@ -320,6 +329,9 @@ public class DashboardController {
 
     @FXML
     private Button registerAutoBidButton;
+
+    @FXML
+    private Button disableAutoBidButton;
 
     @FXML
     private Button admitDashboardResultButton;
@@ -753,8 +765,8 @@ public class DashboardController {
                 return;
             }
 
-            bidAmountField.clear();
-            showAlert(Alert.AlertType.INFORMATION, "Bid accepted", result.message());
+            addBidActivityNotification(currentUser().getFullName(), amount, LocalDateTime.now(), "accepted");
+            readyBidAmountInput(AuctionRules.minimumNextBid(amount), true);
         } catch (NumberFormatException e) {
             showAlert(Alert.AlertType.WARNING, "Invalid bid", "Bid amount must be numeric.");
         } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
@@ -822,11 +834,35 @@ public class DashboardController {
 
             autoBidMaxField.clear();
             autoBidIncrementField.clear();
-            showAlert(Alert.AlertType.INFORMATION, "Auto-bid saved", "Auto-bid was enabled for this auction.");
+            addBidPanelMessage("Auto-bid enabled up to " + AuctionDisplayFormatter.formatCurrency(maxLimit));
         } catch (NumberFormatException e) {
             showAlert(Alert.AlertType.WARNING, "Invalid auto-bid", "Auto-bid amounts must be numeric.");
         } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
             showAlert(Alert.AlertType.WARNING, "Auto-bid failed", e.getMessage());
+        }
+    }
+
+    @FXML
+    private void handleDisableAutoBidFromDashboard() {
+        AuctionEligibilityEntry selected = selectedAuctionEntry();
+        if (selected == null) {
+            showAlert(Alert.AlertType.WARNING, "Selection required", "Select an item from the item list first.");
+            return;
+        }
+
+        String walletPin = requestWalletPin("Disable Auto-bid");
+        if (walletPin == null) {
+            return;
+        }
+
+        try {
+            boolean disabled = useApi()
+                    ? apiClient.disableAutoBid(apiToken(), selected.getItemId(), walletPin)
+                    : dashboardService.disableAutoBidWithDeposit(selected.getItemId(), currentUser(), walletPin);
+            refreshViewAsync(false);
+            addBidPanelMessage(disabled ? "Auto-bid disabled" : "No active auto-bid to disable");
+        } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
+            showAlert(Alert.AlertType.WARNING, "Auto-bid disable failed", e.getMessage());
         }
     }
 
@@ -1705,6 +1741,9 @@ public class DashboardController {
         boolean canBid = entry.isDepositConfirmed() && "RUNNING".equalsIgnoreCase(entry.getStatus());
         bidAmountField.setDisable(!canBid);
         bidAmountField.setPromptText("Min " + AuctionDisplayFormatter.formatCurrency(entry.getMinimumBid()));
+        if (canBid) {
+            readyBidAmountInput(entry.getMinimumBid(), clearHistory);
+        }
         bidPlusTenButton.setDisable(!canBid);
         bidPlusFiftyButton.setDisable(!canBid);
         bidPlusHundredButton.setDisable(!canBid);
@@ -1713,8 +1752,11 @@ public class DashboardController {
         autoBidMaxField.setPromptText("Max " + AuctionDisplayFormatter.formatCurrency(entry.getAvailableBalance()));
         autoBidIncrementField.setDisable(!canBid);
         registerAutoBidButton.setDisable(!canBid);
+        disableAutoBidButton.setDisable(!canBid);
         if (clearHistory) {
             bidHistoryChart.getData().clear();
+            lastBidHistoryChartSignature = null;
+            clearBidStatusViews();
             applyBuyerSettlementButtons(SettlementButtonState.disabled());
         }
     }
@@ -1738,8 +1780,11 @@ public class DashboardController {
         autoBidIncrementField.clear();
         autoBidIncrementField.setDisable(true);
         registerAutoBidButton.setDisable(true);
+        disableAutoBidButton.setDisable(true);
         confirmAuctionEntryButton.setDisable(true);
         bidHistoryChart.getData().clear();
+        lastBidHistoryChartSignature = null;
+        clearBidStatusViews();
         applyBuyerSettlementButtons(SettlementButtonState.disabled());
     }
 
@@ -1773,14 +1818,149 @@ public class DashboardController {
     }
 
     private void applyBidHistory(List<Bid> bidHistory) {
+        List<Bid> safeHistory = bidHistory == null ? List.of() : bidHistory;
+        applyCurrentWinner(safeHistory);
+        applyBidNotifications(safeHistory);
+        String signature = bidHistoryChartSignature(safeHistory);
+        if (signature.equals(lastBidHistoryChartSignature)) {
+            return;
+        }
+
         XYChart.Series<String, Number> series = new XYChart.Series<>();
         series.setName("Bid history");
-        for (Bid bid : bidHistory) {
-            String label = bid.getBidTime() == null ? "N/A" : CHART_TIME_FORMATTER.format(bid.getBidTime());
+        int index = 1;
+        for (Bid bid : safeHistory) {
+            String timeLabel = bid.getBidTime() == null ? "N/A" : CHART_TIME_FORMATTER.format(bid.getBidTime());
+            String label = String.format(Locale.US, "#%02d %s", index++, timeLabel);
             series.getData().add(new XYChart.Data<>(label, bid.getAmount()));
         }
         bidHistoryChart.getData().clear();
         bidHistoryChart.getData().add(series);
+        lastBidHistoryChartSignature = signature;
+    }
+
+    private void applyCurrentWinner(List<Bid> bidHistory) {
+        if (currentWinnerLabel == null) {
+            return;
+        }
+        if (bidHistory == null || bidHistory.isEmpty()) {
+            currentWinnerLabel.setText("Current winner: No bids yet");
+            return;
+        }
+
+        Bid winningBid = bidHistory.get(bidHistory.size() - 1);
+        currentWinnerLabel.setText("Current winner: "
+                + displayBidderName(winningBid.getBidderId())
+                + " - "
+                + AuctionDisplayFormatter.formatCurrency(winningBid.getAmount())
+                + " at "
+                + formatBidNotificationTime(winningBid.getBidTime()));
+    }
+
+    private void applyBidNotifications(List<Bid> bidHistory) {
+        if (bidNotificationList == null) {
+            return;
+        }
+        if (bidHistory == null || bidHistory.isEmpty()) {
+            bidNotificationList.setItems(FXCollections.observableArrayList());
+            return;
+        }
+
+        List<String> lines = new ArrayList<>();
+        for (int index = bidHistory.size() - 1; index >= 0 && lines.size() < 10; index--) {
+            lines.add(formatBidNotificationLine(bidHistory.get(index)));
+        }
+        bidNotificationList.setItems(FXCollections.observableArrayList(lines));
+    }
+
+    private String formatBidNotificationLine(Bid bid) {
+        return formatBidNotificationTime(bid.getBidTime())
+                + " - "
+                + displayBidderName(bid.getBidderId())
+                + " - "
+                + AuctionDisplayFormatter.formatCurrency(bid.getAmount());
+    }
+
+    private String formatBidNotificationTime(LocalDateTime value) {
+        return value == null ? "N/A" : BID_NOTIFICATION_TIME_FORMATTER.format(value);
+    }
+
+    private String displayBidderName(String bidderId) {
+        String safeBidderId = value(bidderId);
+        if (safeBidderId.isBlank()) {
+            return "Unknown bidder";
+        }
+        var currentUser = applicationSession.getCurrentUser();
+        if (currentUser.isPresent() && safeBidderId.equals(currentUser.get().getId())) {
+            return currentUser.get().getFullName();
+        }
+        try {
+            return dashboardService.findUserById(safeBidderId)
+                    .map(User::getFullName)
+                    .filter(name -> !value(name).isBlank())
+                    .orElse(safeBidderId);
+        } catch (RuntimeException ignored) {
+            return safeBidderId;
+        }
+    }
+
+    private void addBidActivityNotification(String bidderName, double amount, LocalDateTime bidTime, String status) {
+        String line = formatBidNotificationTime(bidTime)
+                + " - "
+                + bidderName
+                + " - "
+                + AuctionDisplayFormatter.formatCurrency(amount)
+                + " ("
+                + status
+                + ")";
+        prependBidPanelLine(line);
+        currentWinnerLabel.setText("Current winner: "
+                + bidderName
+                + " - "
+                + AuctionDisplayFormatter.formatCurrency(amount)
+                + " at "
+                + formatBidNotificationTime(bidTime));
+    }
+
+    private void addBidPanelMessage(String message) {
+        prependBidPanelLine(formatBidNotificationTime(LocalDateTime.now())
+                + " - "
+                + currentUser().getFullName()
+                + " - "
+                + message);
+    }
+
+    private void prependBidPanelLine(String line) {
+        if (bidNotificationList == null) {
+            return;
+        }
+        List<String> lines = new ArrayList<>(bidNotificationList.getItems());
+        lines.add(0, line);
+        if (lines.size() > 10) {
+            lines = new ArrayList<>(lines.subList(0, 10));
+        }
+        bidNotificationList.setItems(FXCollections.observableArrayList(lines));
+    }
+
+    private void clearBidStatusViews() {
+        currentWinnerLabel.setText("Current winner: N/A");
+        bidNotificationList.setItems(FXCollections.observableArrayList());
+    }
+
+    private String bidHistoryChartSignature(List<Bid> bidHistory) {
+        if (bidHistory == null || bidHistory.isEmpty()) {
+            return "";
+        }
+        StringBuilder signature = new StringBuilder();
+        for (Bid bid : bidHistory) {
+            signature.append(value(bid.getId()))
+                    .append(':')
+                    .append(bid.getAmount())
+                    .append(':')
+                    .append(bid.getBidTime() == null ? "" : bid.getBidTime())
+                    .append('|');
+        }
+        return signature.toString();
     }
 
     private void refreshSelectedAuctionDetailAsync(AuctionEligibilityEntry entry) {
@@ -1895,7 +2075,11 @@ public class DashboardController {
     }
 
     private void applySellerSelectionState(Item item, boolean canShip) {
-        boolean sellerCanAct = isSeller(currentUser()) || isAdmin(currentUser());
+        User user = currentUser();
+        boolean sellerCanAct = user != null
+                && item != null
+                && item.getSellerId() != null
+                && item.getSellerId().equalsIgnoreCase(user.getId());
         boolean hasItem = item != null;
         sellerStartAuctionButton.setDisable(!sellerCanAct || !hasItem);
         sellerFinishAuctionButton.setDisable(!sellerCanAct || !hasItem);
@@ -2214,6 +2398,23 @@ public class DashboardController {
 
     private double parseOptionalAmount(String text) {
         return value(text).isBlank() ? 0.0 : parseAmount(text);
+    }
+
+    private void readyBidAmountInput(double minimumBid, boolean force) {
+        if (bidAmountField == null || bidAmountField.isDisabled()) {
+            return;
+        }
+
+        String currentAmount = value(bidAmountField.getText());
+        if (!force && !currentAmount.isBlank()) {
+            try {
+                if (parseAmount(currentAmount) >= minimumBid) {
+                    return;
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        bidAmountField.setText(formatAmountInput(minimumBid));
     }
 
     private void applyBidIncrement(double increment) {

@@ -2,6 +2,59 @@
 
 See [REMOTE_MYSQL_SETUP.md](REMOTE_MYSQL_SETUP.md) for server, schema, firewall, API, and JavaFX client steps.
 
+For repeatable remote-mode launches, copy the safe template once and put your real values in the ignored local env file.
+
+Windows PowerShell:
+
+```powershell
+Copy-Item .\scripts\remote.env.example .\scripts\remote.env
+notepad .\scripts\remote.env
+```
+
+Linux/macOS:
+
+```sh
+cp scripts/remote.env.example scripts/remote.env
+${EDITOR:-vi} scripts/remote.env
+```
+
+Then start the standalone API server in one terminal.
+
+Windows PowerShell:
+
+```powershell
+.\scripts\Start-RemoteApi.ps1
+```
+
+Linux/macOS:
+
+```sh
+sh scripts/start-remote-api.sh
+```
+
+Start the JavaFX client in a second terminal.
+
+Windows PowerShell:
+
+```powershell
+.\scripts\Start-RemoteClient.ps1
+```
+
+Linux/macOS:
+
+```sh
+sh scripts/start-remote-client.sh
+```
+
+If PowerShell blocks local scripts on your machine, run the same scripts with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Start-RemoteApi.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\Start-RemoteClient.ps1
+```
+
+`scripts\remote.env` is ignored by Git. Keep real `AUCTION_DB_PASSWORD` values there, not in committed docs or shell history. The same env file is used by both Windows PowerShell and Linux/macOS shell scripts.
+
 ## Local run commands
 
 Start the JavaFX desktop app with the default developer run path:

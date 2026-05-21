@@ -440,86 +440,97 @@ public final class WalletService {
     }
 
     synchronized double lockDeposit(
-            Bidder bidder,
+            User user,
             String holdKey,
             double totalHoldAmount,
             String referenceId,
             String note
     ) {
-        ensureWallet(bidder, true);
+        ensureWallet(user, true);
         if (holdKey == null || holdKey.isBlank()) {
             throw new IllegalArgumentException("A valid auction reference is required for a wallet hold.");
         }
 
         double safeTotalHoldAmount = roundCurrency(totalHoldAmount);
-        double existingHold = roundCurrency(bidder.getLockedAmount(holdKey));
+        double existingHold = heldAmount(user, holdKey, 0.0);
         double additionalHold = roundCurrency(Math.max(0.0, safeTotalHoldAmount - existingHold));
-        if (additionalHold > availableBalanceOf(bidder)) {
+        if (additionalHold > availableBalanceOf(user)) {
             throw new IllegalArgumentException("Wallet available balance is not enough for this hold.");
         }
 
-        bidder.lockDeposit(holdKey, safeTotalHoldAmount);
-        lockedDepositsFor(bidder).put(holdKey, safeTotalHoldAmount);
-        persistHold(bidder, holdKey, safeTotalHoldAmount, referenceId, note);
-        AuthenticationService.getInstance().updateUser(bidder);
+        if (user instanceof Bidder bidder) {
+            bidder.lockDeposit(holdKey, safeTotalHoldAmount);
+            AuthenticationService.getInstance().updateUser(bidder);
+        }
+        lockedDepositsFor(user).put(holdKey, safeTotalHoldAmount);
+        persistHold(user, holdKey, safeTotalHoldAmount, referenceId, note);
         if (additionalHold > 0.0) {
-            recordLedgerEvent(bidder, "BID_HOLD", additionalHold, referenceId, note);
+            recordLedgerEvent(user, "BID_HOLD", additionalHold, referenceId, note);
         }
         return safeTotalHoldAmount;
     }
 
     synchronized double releaseLockedDeposit(
-            Bidder bidder,
+            User user,
             String holdKey,
             double fallbackAmount,
             String referenceId,
             String note
     ) {
-        return releaseLockedDeposit(bidder, holdKey, fallbackAmount, "BID_RELEASE", referenceId, note);
+        return releaseLockedDeposit(user, holdKey, fallbackAmount, "BID_RELEASE", referenceId, note);
     }
 
     synchronized double releaseLockedDeposit(
-            Bidder bidder,
+            User user,
             String holdKey,
             double fallbackAmount,
             String transactionType,
             String referenceId,
             String note
     ) {
-        ensureWallet(bidder, true);
-        double amount = heldAmount(bidder, holdKey, fallbackAmount);
+        ensureWallet(user, true);
+        double amount = heldAmount(user, holdKey, fallbackAmount);
         if (amount <= 0.0) {
             return 0.0;
         }
 
-        bidder.releaseDeposit(holdKey);
-        lockedDepositsFor(bidder).remove(holdKey);
-        deleteHold(bidder, holdKey);
-        AuthenticationService.getInstance().updateUser(bidder);
-        recordLedgerEvent(bidder, transactionType, amount, referenceId, note);
+        if (user instanceof Bidder bidder) {
+            bidder.releaseDeposit(holdKey);
+            AuthenticationService.getInstance().updateUser(bidder);
+        }
+        lockedDepositsFor(user).remove(holdKey);
+        deleteHold(user, holdKey);
+        recordLedgerEvent(user, transactionType, amount, referenceId, note);
         return amount;
     }
 
     synchronized double captureLockedDeposit(
-            Bidder bidder,
+            User user,
             String holdKey,
             double fallbackAmount,
             String transactionType,
             String referenceId,
             String note
     ) {
-        ensureWallet(bidder, true);
-        double amount = heldAmount(bidder, holdKey, fallbackAmount);
+        ensureWallet(user, true);
+        double amount = heldAmount(user, holdKey, fallbackAmount);
         if (amount <= 0.0) {
             return 0.0;
         }
 
-        bidder.releaseDeposit(holdKey);
-        lockedDepositsFor(bidder).remove(holdKey);
-        deleteHold(bidder, holdKey);
-        applyTransaction(bidder, transactionType, -amount, referenceId, note);
-        AuthenticationService.getInstance().updateUser(bidder);
+        if (user instanceof Bidder bidder) {
+            bidder.releaseDeposit(holdKey);
+            AuthenticationService.getInstance().updateUser(bidder);
+        }
+        lockedDepositsFor(user).remove(holdKey);
+        deleteHold(user, holdKey);
+        applyTransaction(user, transactionType, -amount, referenceId, note);
         return amount;
+    }
+
+    synchronized double lockedAmount(User user, String holdKey) {
+        ensureWallet(user);
+        return heldAmount(user, holdKey, 0.0);
     }
 
     synchronized void recordLedgerEvent(
@@ -665,7 +676,8 @@ public final class WalletService {
         }
         Double cachedBalance = balancesByUserId.get(user.getId());
         double userBalance = balanceOf(user);
-        double initialBalance = preferUserBalance || cachedBalance == null ? userBalance : cachedBalance;
+        boolean useUserBalance = preferUserBalance && user instanceof Bidder;
+        double initialBalance = useUserBalance || cachedBalance == null ? userBalance : cachedBalance;
         if (databaseEnabled()) {
             try (Connection conn = DatabaseConfig.fromEnvironment().openConnection()) {
                 WalletDAO walletDAO = new WalletDAO(conn);
@@ -676,7 +688,7 @@ public final class WalletService {
                     requirePersistedUser(conn, user);
                     walletDAO.ensureWallet(user, initialBalance);
                     double synchronizedBalance = walletDAO.findBalance(user.getId()).orElse(initialBalance);
-                    if (preferUserBalance && differs(synchronizedBalance, userBalance)) {
+                    if (useUserBalance && differs(synchronizedBalance, userBalance)) {
                         walletDAO.updateBalance(user.getId(), userBalance);
                         synchronizedBalance = userBalance;
                     }
@@ -852,7 +864,7 @@ public final class WalletService {
     }
 
     private double availableBalanceOf(User user) {
-        return user instanceof Bidder ? Math.max(0.0, balanceOf(user) - lockedBalanceOf(user)) : balanceOf(user);
+        return Math.max(0.0, balanceOf(user) - lockedBalanceOf(user));
     }
 
     private boolean isAuthorized(User user, String credential) {
@@ -883,11 +895,14 @@ public final class WalletService {
         return Math.max(0.0, after);
     }
 
-    private double heldAmount(Bidder bidder, String holdKey, double fallbackAmount) {
+    private double heldAmount(User user, String holdKey, double fallbackAmount) {
         if (holdKey == null || holdKey.isBlank()) {
             return roundCurrency(fallbackAmount);
         }
-        double lockedAmount = lockedDepositsFor(bidder).getOrDefault(holdKey, bidder.getLockedAmount(holdKey));
+        double lockedAmount = lockedDepositsFor(user).getOrDefault(
+                holdKey,
+                user instanceof Bidder bidder ? bidder.getLockedAmount(holdKey) : 0.0
+        );
         return roundCurrency(lockedAmount > 0.0 ? lockedAmount : fallbackAmount);
     }
 

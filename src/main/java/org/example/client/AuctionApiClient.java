@@ -380,6 +380,13 @@ public final class AuctionApiClient {
         ));
     }
 
+    public boolean disableAutoBid(String token, String itemId, String walletPin) {
+        Map<String, Object> response = request("DELETE", "/auctions/" + itemId + "/auto-bid", token, jsonObject(
+                "walletPin", walletPin
+        ));
+        return booleanValue(response.get("disabled"));
+    }
+
     public void startAuction(String token, String itemId) {
         request("POST", "/auctions/" + itemId + "/start", token, Map.of());
     }
@@ -692,10 +699,16 @@ public final class AuctionApiClient {
         double minimumBid = doubleValue(payload.get("minimumNextBid"));
         double requiredDeposit = AuctionRules.requiredDeposit(currentPrice);
         boolean depositConfirmed = booleanValue(payload.get("depositConfirmed"));
+        double effectiveAvailableBalance = payload.containsKey("availableBalance")
+                ? doubleValue(payload.get("availableBalance"))
+                : availableBalance;
         String status = stringValue(payload.get("status"));
         boolean finished = "FINISHED".equalsIgnoreCase(status)
                 || "PAID".equalsIgnoreCase(status)
                 || "CANCELLED".equalsIgnoreCase(status);
+        boolean eligible = payload.containsKey("eligible")
+                ? booleanValue(payload.get("eligible"))
+                : !finished && (depositConfirmed || effectiveAvailableBalance >= requiredDeposit);
         return new AuctionEligibilityEntry(
                 stringValue(payload.get("itemId")),
                 stringValue(payload.get("itemName")),
@@ -703,8 +716,8 @@ public final class AuctionApiClient {
                 currentPrice,
                 minimumBid,
                 requiredDeposit,
-                availableBalance,
-                !finished && (depositConfirmed || availableBalance >= requiredDeposit),
+                effectiveAvailableBalance,
+                eligible,
                 depositConfirmed,
                 stringValue(payload.get("displayEndTime")),
                 longValue(payload.get("secondsRemaining"))

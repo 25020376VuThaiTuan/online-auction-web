@@ -8,9 +8,9 @@ import org.example.auction.AuctionStatus;
 import org.example.auction.AuctionSummary;
 import org.example.auction.UserNotification;
 import org.example.model.Bid;
-import org.example.model.Bidder;
 import org.example.model.Item;
 import org.example.model.User;
+import org.example.model.WalletSummary;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -46,19 +46,28 @@ public final class AuctionSettlementService {
         if (item == null || summary == null) {
             return AuctionDepositResult.rejected("Auction item was not found.", 0.0, 0.0, null);
         }
-        if (!(user instanceof Bidder bidder)) {
-            return AuctionDepositResult.rejected("Only bidder accounts can enter an auction.", 0.0, 0.0, summary.status());
+        if (user == null) {
+            return AuctionDepositResult.rejected("Authentication required to enter an auction.", 0.0, 0.0, summary.status());
+        }
+        if (item.getSellerId() != null && item.getSellerId().equalsIgnoreCase(user.getId())) {
+            return AuctionDepositResult.rejected(
+                    "Item creators cannot enter their own auctions.",
+                    0.0,
+                    lockedEntryDeposit(item.getId(), user),
+                    summary.status()
+            );
         }
         if (summary.status() == AuctionStatus.FINISHED || summary.status() == AuctionStatus.PAID
                 || summary.status() == AuctionStatus.CANCELLED) {
             return AuctionDepositResult.rejected("This auction is finished and cannot accept a new deposit.",
-                    0.0, bidder.getLockedAmount(item.getId()), summary.status());
+                    0.0, lockedEntryDeposit(item.getId(), user), summary.status());
         }
 
         double requiredDeposit = AuctionRules.requiredDeposit(summary.currentPrice());
         double existingDeposit = lockedEntryDeposit(item.getId(), user);
         double additionalRequired = Math.max(0.0, requiredDeposit - existingDeposit);
-        if (bidder.getAvailableBalance() < additionalRequired) {
+        WalletSummary wallet = walletService.getWalletSnapshot(user);
+        if (wallet.availableBalance() < additionalRequired) {
             return AuctionDepositResult.rejected(
                     "Available balance is lower than the deposit required to enter this auction.",
                     requiredDeposit,
@@ -67,7 +76,7 @@ public final class AuctionSettlementService {
             );
         }
 
-        walletService.lockDeposit(bidder, item.getId(), requiredDeposit, item.getId(),
+        walletService.lockDeposit(user, item.getId(), requiredDeposit, item.getId(),
                 "Entry deposit locked for " + item.getItemName() + ".");
         depositsByAuctionId
                 .computeIfAbsent(item.getId(), ignored -> new LinkedHashMap<>())
@@ -86,14 +95,14 @@ public final class AuctionSettlementService {
     }
 
     public synchronized double lockedEntryDeposit(String itemId, User user) {
-        if (itemId == null || itemId.isBlank() || !(user instanceof Bidder bidder)) {
+        if (itemId == null || itemId.isBlank() || user == null) {
             return 0.0;
         }
 
         double recorded = depositsByAuctionId
                 .getOrDefault(itemId, Map.of())
                 .getOrDefault(user.getId(), 0.0);
-        return Math.max(recorded, bidder.getLockedAmount(itemId));
+        return Math.max(recorded, walletService.lockedAmount(user, itemId));
     }
 
     public synchronized Optional<AuctionSettlement> finalizeAuction(
@@ -197,16 +206,16 @@ public final class AuctionSettlementService {
 
     public synchronized AuctionSettlement markGoodsShipped(String itemId, User sellerOrAdmin) {
         AuctionSettlement settlement = requireSettlement(itemId);
-        requireSellerOrAdmin(settlement, sellerOrAdmin);
+        requireSeller(settlement, sellerOrAdmin);
         if (settlement.getStatus() != AuctionSettlementStatus.AWAITING_SELLER_CONFIRMATION) {
             throw new IllegalStateException("The seller can only confirm sent after the winner admits the result.");
         }
 
         double remainingDue = settlement.getRemainingPaymentDue();
         if (remainingDue > 0.0) {
-            Bidder buyer = findBidder(settlement.getWinnerBidderId())
-                    .orElseThrow(() -> new IllegalStateException("Winning bidder account was not found."));
-            if (buyer.getAvailableBalance() < remainingDue) {
+            User buyer = findUser(settlement.getWinnerBidderId())
+                    .orElseThrow(() -> new IllegalStateException("Winning buyer account was not found."));
+            if (walletService.getWalletSnapshot(buyer).availableBalance() < remainingDue) {
                 notifyAdmins("Payment hold failed",
                         "Buyer " + buyer.getUsername() + " cannot cover " + formatAmount(remainingDue)
                                 + " for " + settlement.getItemName() + ".");
@@ -257,7 +266,7 @@ public final class AuctionSettlementService {
             if (winnerId != null && winnerId.equals(bidderId)) {
                 continue;
             }
-            findBidder(bidderId).ifPresent(bidder -> {
+            findUser(bidderId).ifPresent(bidder -> {
                 double amount = walletService.releaseLockedDeposit(
                         bidder,
                         item.getId(),
@@ -303,12 +312,12 @@ public final class AuctionSettlementService {
     }
 
     private double captureWinnerDeposit(Item item, String winnerId, double recordedDeposit) {
-        Optional<Bidder> bidder = findBidder(winnerId);
+        Optional<User> bidder = findUser(winnerId);
         double safeRecordedDeposit = roundCurrency(recordedDeposit);
         if (bidder.isEmpty()) {
             return safeRecordedDeposit;
         }
-        Bidder winner = bidder.get();
+        User winner = bidder.get();
         double captured = walletService.captureLockedDeposit(
                 winner,
                 item.getId(),
@@ -359,7 +368,7 @@ public final class AuctionSettlementService {
 
     private double captureBuyerPaymentHold(AuctionSettlement settlement) {
         double recordedHold = roundCurrency(settlement.getLockedRemainingPayment());
-        return findBidder(settlement.getWinnerBidderId())
+        return findUser(settlement.getWinnerBidderId())
                 .map(bidder -> {
                     double captured = walletService.captureLockedDeposit(
                             bidder,
@@ -376,7 +385,7 @@ public final class AuctionSettlementService {
 
     private double releaseRemainingPaymentToBuyer(AuctionSettlement settlement) {
         double recordedHold = roundCurrency(settlement.getLockedRemainingPayment());
-        Optional<Bidder> bidder = findBidder(settlement.getWinnerBidderId());
+        Optional<User> bidder = findUser(settlement.getWinnerBidderId());
         if (bidder.isEmpty()) {
             settlement.setLockedRemainingPayment(0.0);
             return recordedHold;
@@ -408,14 +417,13 @@ public final class AuctionSettlementService {
         }
     }
 
-    private void requireSellerOrAdmin(AuctionSettlement settlement, User user) {
+    private void requireSeller(AuctionSettlement settlement, User user) {
         if (user == null) {
             throw new IllegalStateException("Authentication required.");
         }
         boolean ownsItem = settlement.getSellerId().equals(user.getId());
-        boolean admin = "ADMIN".equalsIgnoreCase(user.getRole());
-        if (!ownsItem && !admin) {
-            throw new IllegalStateException("Only the seller or admin can perform this action.");
+        if (!ownsItem) {
+            throw new IllegalStateException("Only the item seller can perform this action.");
         }
     }
 
@@ -423,12 +431,6 @@ public final class AuctionSettlementService {
         if (user == null || !"ADMIN".equalsIgnoreCase(user.getRole())) {
             throw new IllegalStateException("Admin role required.");
         }
-    }
-
-    private Optional<Bidder> findBidder(String userId) {
-        return authenticationService.findById(userId)
-                .filter(Bidder.class::isInstance)
-                .map(Bidder.class::cast);
     }
 
     private Optional<User> findUser(String userId) {

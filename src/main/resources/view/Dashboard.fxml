@@ -239,45 +239,54 @@
                 </Tab>
 
                 <Tab text="Bidding">
-                    <VBox spacing="14.0">
+                    <HBox spacing="14.0">
                         <padding>
                             <Insets top="18.0" right="18.0" bottom="18.0" left="18.0"/>
                         </padding>
-                        <Label fx:id="selectedAuctionLabel" style="-fx-font-size: 18px; -fx-font-weight: bold;" text="Select an auction from Auction List"/>
-                        <Label fx:id="selectedAuctionDepositLabel" text="Deposit required: N/A"/>
-                        <HBox alignment="CENTER_LEFT" spacing="18.0">
-                            <Label fx:id="selectedAuctionTimeRemainingLabel" text="Time left: N/A"/>
-                            <Label fx:id="selectedAuctionEndTimeLabel" text="Ends at: N/A"/>
-                        </HBox>
-                        <LineChart fx:id="bidHistoryChart" animated="false" createSymbols="true" prefHeight="360.0">
-                            <xAxis>
-                                <CategoryAxis label="Bid Time"/>
-                            </xAxis>
-                            <yAxis>
-                                <NumberAxis label="Bid Amount"/>
-                            </yAxis>
-                        </LineChart>
-                        <HBox alignment="CENTER_LEFT" spacing="10.0">
-                            <Pane HBox.hgrow="ALWAYS"/>
-                            <Label fx:id="bidEntryTimeRemainingLabel" text="Time remaining: N/A"/>
-                        </HBox>
-                        <HBox alignment="CENTER_LEFT" spacing="10.0">
-                            <TextField fx:id="bidAmountField" prefWidth="220.0" promptText="Enter bid amount"/>
-                            <Button fx:id="bidPlusTenButton" onAction="#handleAddTenToBid" text="+$10"/>
-                            <Button fx:id="bidPlusFiftyButton" onAction="#handleAddFiftyToBid" text="+$50"/>
-                            <Button fx:id="bidPlusHundredButton" onAction="#handleAddHundredToBid" text="+$100"/>
-                            <Button fx:id="placeDashboardBidButton" onAction="#handlePlaceBidFromDashboard" text="Place Bid"/>
-                        </HBox>
-                        <HBox alignment="CENTER_LEFT" spacing="10.0">
-                            <TextField fx:id="autoBidMaxField" prefWidth="220.0" promptText="Auto-bid max limit"/>
-                            <TextField fx:id="autoBidIncrementField" prefWidth="180.0" promptText="Increment optional"/>
-                            <Button fx:id="registerAutoBidButton" onAction="#handleRegisterAutoBidFromDashboard" text="Enable Auto-bid"/>
-                        </HBox>
-                        <HBox alignment="CENTER_LEFT" spacing="10.0">
-                            <Button fx:id="admitDashboardResultButton" onAction="#handleAdmitDashboardResult" text="Admit Result"/>
-                            <Button fx:id="confirmDashboardReceivedButton" onAction="#handleConfirmDashboardReceived" text="Confirm Received"/>
-                        </HBox>
-                    </VBox>
+                        <VBox spacing="14.0" HBox.hgrow="ALWAYS">
+                            <Label fx:id="selectedAuctionLabel" style="-fx-font-size: 18px; -fx-font-weight: bold;" text="Select an auction from Auction List"/>
+                            <Label fx:id="selectedAuctionDepositLabel" text="Deposit required: N/A"/>
+                            <HBox alignment="CENTER_LEFT" spacing="18.0">
+                                <Label fx:id="selectedAuctionTimeRemainingLabel" text="Time left: N/A"/>
+                                <Label fx:id="selectedAuctionEndTimeLabel" text="Ends at: N/A"/>
+                            </HBox>
+                            <LineChart fx:id="bidHistoryChart" animated="false" createSymbols="true" prefHeight="360.0" VBox.vgrow="ALWAYS">
+                                <xAxis>
+                                    <CategoryAxis label="Bid Time"/>
+                                </xAxis>
+                                <yAxis>
+                                    <NumberAxis label="Bid Amount"/>
+                                </yAxis>
+                            </LineChart>
+                            <HBox alignment="CENTER_LEFT" spacing="10.0">
+                                <Pane HBox.hgrow="ALWAYS"/>
+                                <Label fx:id="bidEntryTimeRemainingLabel" text="Time remaining: N/A"/>
+                            </HBox>
+                            <HBox alignment="CENTER_LEFT" spacing="10.0">
+                                <TextField fx:id="bidAmountField" prefWidth="220.0" promptText="Enter bid amount"/>
+                                <Button fx:id="bidPlusTenButton" onAction="#handleAddTenToBid" text="+$10"/>
+                                <Button fx:id="bidPlusFiftyButton" onAction="#handleAddFiftyToBid" text="+$50"/>
+                                <Button fx:id="bidPlusHundredButton" onAction="#handleAddHundredToBid" text="+$100"/>
+                                <Button fx:id="placeDashboardBidButton" onAction="#handlePlaceBidFromDashboard" text="Place Bid"/>
+                            </HBox>
+                            <HBox alignment="CENTER_LEFT" spacing="10.0">
+                                <TextField fx:id="autoBidMaxField" prefWidth="220.0" promptText="Auto-bid max limit"/>
+                                <TextField fx:id="autoBidIncrementField" prefWidth="180.0" promptText="Increment optional"/>
+                                <Button fx:id="registerAutoBidButton" onAction="#handleRegisterAutoBidFromDashboard" text="Enable Auto-bid"/>
+                                <Button fx:id="disableAutoBidButton" onAction="#handleDisableAutoBidFromDashboard" text="Disable Auto-bid"/>
+                            </HBox>
+                            <HBox alignment="CENTER_LEFT" spacing="10.0">
+                                <Button fx:id="admitDashboardResultButton" onAction="#handleAdmitDashboardResult" text="Admit Result"/>
+                                <Button fx:id="confirmDashboardReceivedButton" onAction="#handleConfirmDashboardReceived" text="Confirm Received"/>
+                            </HBox>
+                        </VBox>
+                        <VBox prefWidth="320.0" spacing="10.0" styleClass="bid-side-panel">
+                            <Label styleClass="section-title" text="Current Winner"/>
+                            <Label fx:id="currentWinnerLabel" styleClass="winner-value" text="Current winner: N/A" wrapText="true"/>
+                            <Label styleClass="section-title" text="Bid Notifications"/>
+                            <ListView fx:id="bidNotificationList" prefHeight="420.0" styleClass="bid-notification-list" VBox.vgrow="ALWAYS"/>
+                        </VBox>
+                    </HBox>
                 </Tab>
 
                 <Tab fx:id="sellerTab" text="Seller">

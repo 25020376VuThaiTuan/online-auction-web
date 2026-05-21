@@ -14,7 +14,6 @@ import org.example.model.ApprovalStatus;
 import org.example.model.AuctionStore;
 import org.example.model.AutoBid;
 import org.example.model.Bid;
-import org.example.model.Bidder;
 import org.example.model.DataManager;
 import org.example.model.Item;
 import org.example.model.ItemFactory;
@@ -148,12 +147,11 @@ public final class AuctionWorkflowService {
                 LocalDateTime.now()
         );
 
-        BidValidationResult result = session.submitBid(bid);
-        if (!result.accepted()) {
-            return result;
-        }
-
         if (usingLocalStore) {
+            BidValidationResult result = session.submitBid(bid);
+            if (!result.accepted()) {
+                return result;
+            }
             recordLocalBid(item, bid);
             processLocalAutoBids(item, session, bid.getBidderId());
             persistLocalStore();
@@ -161,33 +159,56 @@ public final class AuctionWorkflowService {
         }
 
         try {
-            persistAcceptedBid(item, bid, session);
+            return persistAcceptedBid(item, bid);
         } catch (SQLException e) {
             refreshFromStoreIfChanged();
             throw databaseFailure("Database bid persistence failed", e);
         }
-
-        refreshFromStoreIfChanged();
-        return result;
     }
 
-    private void persistAcceptedBid(Item item, Bid bid, AuctionSession session) throws SQLException {
-        DatabaseConfig config = DatabaseConfig.fromEnvironment();
-        try (Connection connection = config.openConnection()) {
+    private BidValidationResult persistAcceptedBid(Item item, Bid bid) throws SQLException {
+        try (Connection connection = DatabaseConfig.fromEnvironment().openConnection()) {
             boolean originalAutoCommit = connection.getAutoCommit();
+            BidValidationResult acceptedResult;
             try {
                 if (originalAutoCommit) {
                     connection.setAutoCommit(false);
                 }
                 try (ItemDAO itemDAO = new ItemDAO(connection);
                      BidDAO bidDAO = new BidDAO(connection)) {
+                    itemDAO.lockAuctionForUpdate(item.getId());
+                    Item lockedItem = itemDAO.getItemById(item.getId());
+                    if (lockedItem == null) {
+                        throw new SQLException("Auction item not found: " + item.getId(), "42S02", 1146);
+                    }
+                    AuctionSession lockedSession = new AuctionSession(
+                            lockedItem,
+                            lockedItem.getStartingPrice(),
+                            lockedItem.getEndTime(),
+                            bidDAO.getBidsForItem(lockedItem.getId())
+                    );
+                    BidValidationResult result = lockedSession.submitBid(bid);
+                    if (!result.accepted()) {
+                        if (originalAutoCommit) {
+                            connection.commit();
+                        }
+                        return result;
+                    }
+                    acceptedResult = result;
                     bidDAO.addBid(bid);
-                    itemDAO.updateCurrentPrice(item.getId(), item.getCurrentPrice());
-                    processAutoBids(item, session, bidDAO, itemDAO, bid.getBidderId());
+                    itemDAO.updateAuctionProgress(
+                            lockedItem.getId(),
+                            lockedSession.getCurrentHighestBid(),
+                            lockedSession.getEndTime(),
+                            lockedSession.getStatus().name()
+                    );
+                    processAutoBids(lockedItem, lockedSession, bidDAO, itemDAO, bid.getBidderId());
                 }
                 if (originalAutoCommit) {
                     connection.commit();
                 }
+                refreshFromStoreIfChanged();
+                return acceptedResult;
             } catch (SQLException e) {
                 if (originalAutoCommit) {
                     connection.rollback();
@@ -209,7 +230,8 @@ public final class AuctionWorkflowService {
             String triggerBidderId
     ) throws SQLException {
         boolean autoBidPlaced = true;
-        while (autoBidPlaced) {
+        int attemptsRemaining = 1_000;
+        while (autoBidPlaced && attemptsRemaining-- > 0) {
             autoBidPlaced = false;
             List<AutoBid> autoBids = bidDAO.getAllAutoBidsForItem(item.getId());
             double currentHighest = session.getCurrentHighestBid();
@@ -233,13 +255,21 @@ public final class AuctionWorkflowService {
                     BidValidationResult res = session.submitBid(nextBid);
                     if (res.accepted()) {
                         bidDAO.addBid(nextBid);
-                        itemDAO.updateCurrentPrice(item.getId(), session.getCurrentHighestBid());
+                        itemDAO.updateAuctionProgress(
+                                item.getId(),
+                                session.getCurrentHighestBid(),
+                                session.getEndTime(),
+                                session.getStatus().name()
+                        );
                         triggerBidderId = ab.getBidderId();
                         autoBidPlaced = true;
                         break; // Re-evaluate all auto-bids after a successful bid
                     }
                 }
             }
+        }
+        if (attemptsRemaining <= 0) {
+            throw new SQLException("Auto-bid processing did not settle for item: " + item.getId());
         }
     }
 
@@ -395,11 +425,84 @@ public final class AuctionWorkflowService {
             return true;
         }
 
-        try (BidDAO bidDAO = BidDAO.fromEnvironment()) {
-            bidDAO.addOrUpdateAutoBid(new AutoBid(0, user.getId(), itemId, maxLimit, bidIncrement));
+        try (Connection connection = DatabaseConfig.fromEnvironment().openConnection()) {
+            boolean originalAutoCommit = connection.getAutoCommit();
+            try {
+                if (originalAutoCommit) {
+                    connection.setAutoCommit(false);
+                }
+                try (ItemDAO itemDAO = new ItemDAO(connection);
+                     BidDAO bidDAO = new BidDAO(connection)) {
+                    itemDAO.lockAuctionForUpdate(itemId);
+                    bidDAO.addOrUpdateAutoBid(new AutoBid(0, user.getId(), itemId, maxLimit, bidIncrement));
+                }
+                if (originalAutoCommit) {
+                    connection.commit();
+                }
+            } catch (SQLException e) {
+                if (originalAutoCommit) {
+                    connection.rollback();
+                }
+                throw e;
+            } finally {
+                if (originalAutoCommit) {
+                    connection.setAutoCommit(true);
+                }
+            }
             return true;
         } catch (SQLException e) {
             throw databaseFailure("Database auto-bid save failed", e);
+        }
+    }
+
+    public synchronized boolean disableAutoBid(String itemId, User user) {
+        ensureInitialized();
+        if (user == null || itemId == null || itemId.isBlank()) {
+            return false;
+        }
+
+        Optional<Item> item = findItemInternal(itemId);
+        if (item.isEmpty()) {
+            return false;
+        }
+
+        if (usingLocalStore) {
+            List<AutoBid> autoBids = autoBidsByItemId.computeIfAbsent(itemId, ignored -> new ArrayList<>());
+            boolean removed = autoBids.removeIf(autoBid -> autoBid.getBidderId().equals(user.getId()));
+            if (removed) {
+                persistLocalStore();
+            }
+            return removed;
+        }
+
+        try (Connection connection = DatabaseConfig.fromEnvironment().openConnection()) {
+            boolean originalAutoCommit = connection.getAutoCommit();
+            try {
+                if (originalAutoCommit) {
+                    connection.setAutoCommit(false);
+                }
+                boolean removed;
+                try (ItemDAO itemDAO = new ItemDAO(connection);
+                     BidDAO bidDAO = new BidDAO(connection)) {
+                    itemDAO.lockAuctionForUpdate(itemId);
+                    removed = bidDAO.deleteAutoBid(user.getId(), itemId);
+                }
+                if (originalAutoCommit) {
+                    connection.commit();
+                }
+                return removed;
+            } catch (SQLException e) {
+                if (originalAutoCommit) {
+                    connection.rollback();
+                }
+                throw e;
+            } finally {
+                if (originalAutoCommit) {
+                    connection.setAutoCommit(true);
+                }
+            }
+        } catch (SQLException e) {
+            throw databaseFailure("Database auto-bid disable failed", e);
         }
     }
 
@@ -463,7 +566,8 @@ public final class AuctionWorkflowService {
 
     private void processLocalAutoBids(Item item, AuctionSession session, String triggerBidderId) {
         boolean autoBidPlaced = true;
-        while (autoBidPlaced) {
+        int attemptsRemaining = 1_000;
+        while (autoBidPlaced && attemptsRemaining-- > 0) {
             autoBidPlaced = false;
             List<AutoBid> autoBids = autoBidsByItemId.getOrDefault(item.getId(), List.of());
             double currentHighest = session.getCurrentHighestBid();
@@ -493,6 +597,9 @@ public final class AuctionWorkflowService {
                     }
                 }
             }
+        }
+        if (attemptsRemaining <= 0) {
+            throw new IllegalStateException("Auto-bid processing did not settle for item: " + item.getId());
         }
     }
 
@@ -539,9 +646,20 @@ public final class AuctionWorkflowService {
         AuctionStatus status = summary == null ? AuctionStatus.OPEN : summary.status();
         LocalDateTime effectiveEndTime = item == null ? null : item.getEndTime();
 
-        if (!(user instanceof Bidder)) {
+        if (user == null) {
             return BidValidationResult.rejected(
-                    "Only bidder accounts can place bids.",
+                    "Authentication required to place bids.",
+                    amount,
+                    currentPrice,
+                    minimumNextBid,
+                    status,
+                    effectiveEndTime
+            );
+        }
+
+        if (item != null && item.getSellerId() != null && item.getSellerId().equalsIgnoreCase(user.getId())) {
+            return BidValidationResult.rejected(
+                    "Item creators cannot bid on their own auctions.",
                     amount,
                     currentPrice,
                     minimumNextBid,
@@ -580,14 +698,14 @@ public final class AuctionWorkflowService {
     }
 
     private boolean hasEntryDeposit(String itemId, User user) {
-        return user instanceof Bidder && settlementService.hasEntryDeposit(itemId, user);
+        return user != null && settlementService.hasEntryDeposit(itemId, user);
     }
 
     private double availableBalance(User user) {
-        if (!(user instanceof Bidder bidder)) {
+        if (user == null) {
             return 0.0;
         }
-        WalletSummary wallet = walletService.getWalletSnapshot(bidder);
+        WalletSummary wallet = walletService.getWalletSnapshot(user);
         return wallet.availableBalance();
     }
 
@@ -595,9 +713,7 @@ public final class AuctionWorkflowService {
         if (autoBid == null || autoBid.getBidderId() == null || autoBid.getBidderId().isBlank()) {
             return 0.0;
         }
-        Optional<Bidder> bidder = authenticationService.findById(autoBid.getBidderId())
-                .filter(Bidder.class::isInstance)
-                .map(Bidder.class::cast);
+        Optional<User> bidder = authenticationService.findById(autoBid.getBidderId());
         if (bidder.isEmpty()) {
             return 0.0;
         }
