@@ -51,12 +51,6 @@
                                 minHeight="40.0"
                                 onAction="#handleLogin"
                                 text="Login"/>
-                        <Button fx:id="testConnectionButton"
-                                maxWidth="1.7976931348623157E308"
-                                minHeight="38.0"
-                                onAction="#handleTestConnection"
-                                text="Test Connection"/>
-
                         <FlowPane alignment="CENTER" hgap="10.0" prefWrapLength="320.0" vgap="8.0">
                             <Label text="Need a new account?"/>
                             <Button onAction="#handleOpenRegistration" text="Create Account"/>

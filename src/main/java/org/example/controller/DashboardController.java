@@ -58,6 +58,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -77,6 +78,7 @@ public class DashboardController {
     private final ApplicationSession applicationSession = ApplicationSession.getInstance();
     private final ExecutorService refreshExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("dashboard-refresh");
     private final ExecutorService selectionDetailExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("dashboard-selection-refresh");
+    private final ExecutorService connectionTestExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("api-connection-test");
     private final AtomicBoolean refreshInFlight = new AtomicBoolean(false);
 
     private Timeline refreshTimeline;
@@ -106,6 +108,9 @@ public class DashboardController {
 
     @FXML
     private Label signedInUserLabel;
+
+    @FXML
+    private Button testConnectionButton;
 
     @FXML
     private Label roleLabel;
@@ -442,6 +447,35 @@ public class DashboardController {
         refreshActive = true;
         refreshViewAsync(true);
         startRefreshLoop();
+    }
+
+    @FXML
+    private void handleTestConnection() {
+        if (!apiClient.isEnabled()) {
+            showAlert(
+                    Alert.AlertType.INFORMATION,
+                    "API not configured",
+                    "AUCTION_API_BASE_URL is not set. The app is using local demo data."
+            );
+            return;
+        }
+
+        String previousText = testConnectionButton.getText();
+        testConnectionButton.setText("Testing...");
+        testConnectionButton.setDisable(true);
+
+        CompletableFuture
+                .supplyAsync(apiClient::testConnection, connectionTestExecutor)
+                .whenComplete((result, throwable) -> Platform.runLater(() -> {
+                    testConnectionButton.setText(previousText);
+                    testConnectionButton.setDisable(false);
+
+                    if (throwable == null) {
+                        showConnectionSuccess(result);
+                    } else {
+                        showConnectionFailure(unwrapCompletionException(throwable));
+                    }
+                }));
     }
 
     @FXML
@@ -2270,6 +2304,36 @@ public class DashboardController {
         showAlert(Alert.AlertType.WARNING, "Seller item details unavailable", message);
     }
 
+    private void showConnectionSuccess(AuctionApiClient.ConnectionTestResult result) {
+        String serverTime = result.serverTime().isBlank() ? "" : "\nServer time: " + result.serverTime();
+        showAlert(
+                Alert.AlertType.INFORMATION,
+                "API connection successful",
+                "Connected to " + result.baseUrl() + "." + serverTime
+        );
+    }
+
+    private void showConnectionFailure(Throwable failure) {
+        if (failure instanceof AuctionApiClient.ApiClientException apiFailure) {
+            showAlert(
+                    Alert.AlertType.WARNING,
+                    AuctionApiClient.isConnectivityFailure(apiFailure) ? "API unavailable" : "API health check failed",
+                    apiFailure.getMessage()
+            );
+            return;
+        }
+
+        showAlert(Alert.AlertType.WARNING, "API health check failed", refreshFailureMessage(failure));
+    }
+
+    private Throwable unwrapCompletionException(Throwable throwable) {
+        Throwable current = throwable;
+        while (current instanceof CompletionException && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
     private String refreshFailureMessage(Throwable throwable) {
         return refreshFailureMessage(throwable, "Dashboard data is temporarily unavailable.");
     }
@@ -2299,6 +2363,7 @@ public class DashboardController {
         }
         refreshExecutor.shutdownNow();
         selectionDetailExecutor.shutdownNow();
+        connectionTestExecutor.shutdownNow();
     }
 
     private User currentUser() {

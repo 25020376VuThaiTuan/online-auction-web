@@ -38,6 +38,7 @@
             <Label styleClass="page-title" text="Auction Dashboard"/>
             <Pane HBox.hgrow="ALWAYS"/>
             <Label fx:id="signedInUserLabel" wrapText="true"/>
+            <Button fx:id="testConnectionButton" onAction="#handleTestConnection" text="Test Connection"/>
             <Button onAction="#handleLogout" text="Logout"/>
         </HBox>
     </top>
