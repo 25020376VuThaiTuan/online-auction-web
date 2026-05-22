@@ -4,6 +4,7 @@ import org.example.model.Admin;
 import org.example.model.Bidder;
 import org.example.model.Seller;
 import org.example.model.User;
+import org.example.util.CredentialHasher;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -20,9 +21,9 @@ public class DemoUserRepository implements UserRepository {
         if (!seedDefaults) {
             return;
         }
-        seedUser(createBidder("U-BID-001", "bidder", "bid123", "bidder@demo.local", 10_000.0, "Primary Bidder"));
-        seedUser(createSeller("U-SEL-001", "seller", "sell123", "seller@demo.local", "Primary Seller"));
-        seedUser(createAdmin("U-ADM-001", "admin", "admin123", "admin@demo.local", "Primary Admin"));
+        seedUser(createBidder("U-BID-001", "bidder", CredentialHasher.hash("bid123"), "bidder@demo.local", 10_000.0, "Primary Bidder"));
+        seedUser(createSeller("U-SEL-001", "seller", CredentialHasher.hash("sell123"), "seller@demo.local", "Primary Seller"));
+        seedUser(createAdmin("U-ADM-001", "admin", CredentialHasher.hash("admin123"), "admin@demo.local", "Primary Admin"));
     }
 
     public static DemoUserRepository getInstance() {
@@ -135,11 +136,11 @@ public class DemoUserRepository implements UserRepository {
     private User convertRole(User source, String role) {
         String safeRole = role == null ? "BIDDER" : role.trim().toUpperCase();
         User converted = switch (safeRole) {
-            case "ADMIN" -> new Admin(source.getId(), source.getUsername(), source.getPassword(), source.getEmail());
-            case "SELLER" -> new Seller(source.getId(), source.getUsername(), source.getPassword(), source.getEmail());
-            case "BIDDER" -> new Bidder(source.getId(), source.getUsername(), source.getPassword(), source.getEmail(),
+            case "ADMIN" -> new Admin(source.getId(), source.getUsername(), source.getPasswordHash(), source.getEmail());
+            case "SELLER" -> new Seller(source.getId(), source.getUsername(), source.getPasswordHash(), source.getEmail());
+            case "BIDDER" -> new Bidder(source.getId(), source.getUsername(), source.getPasswordHash(), source.getEmail(),
                     source instanceof Bidder bidder ? bidder.getBalance() : 0.0);
-            default -> new Bidder(source.getId(), source.getUsername(), source.getPassword(), source.getEmail(),
+            default -> new Bidder(source.getId(), source.getUsername(), source.getPasswordHash(), source.getEmail(),
                     source instanceof Bidder bidder ? bidder.getBalance() : 0.0);
         };
         converted.copyProfileFrom(source);

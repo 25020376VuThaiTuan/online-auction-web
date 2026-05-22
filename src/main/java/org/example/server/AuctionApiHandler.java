@@ -21,16 +21,22 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class AuctionApiHandler implements HttpHandler {
     private static final DateTimeFormatter ISO_DATE_TIME = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
+    private static final int MAX_REQUEST_BYTES = 64 * 1024;
 
     private final AuthenticationService authenticationService;
     private final AuctionWorkflowService workflowService;
@@ -38,6 +44,8 @@ public final class AuctionApiHandler implements HttpHandler {
     private final ApiPayloadFactory payloads;
     private final ApiSessionService sessionService;
     private final AuctionRealtimeBroker realtimeBroker;
+    private final SimpleRateLimiter loginRateLimiter = new SimpleRateLimiter(10, Duration.ofMinutes(1));
+    private final SimpleRateLimiter walletRecoveryRateLimiter = new SimpleRateLimiter(5, Duration.ofMinutes(15));
 
     public AuctionApiHandler(
             AuthenticationService authenticationService,
@@ -90,9 +98,11 @@ public final class AuctionApiHandler implements HttpHandler {
                     "timestamp", formatDateTime(LocalDateTime.now())
             ));
         } catch (Exception e) {
+            String errorId = UUID.randomUUID().toString();
+            System.err.println("API error " + errorId + ": " + e.getMessage());
             sendJson(exchange, 500, jsonObject(
                     "error", "Internal server error.",
-                    "detail", e.getMessage(),
+                    "errorId", errorId,
                     "status", 500,
                     "timestamp", formatDateTime(LocalDateTime.now())
             ));
@@ -139,7 +149,7 @@ public final class AuctionApiHandler implements HttpHandler {
                             "/api/items",
                             "/api/items/pending",
                             "/api/items/{id}/approval",
-                            "/api/events/stream?token={token}"
+                            "/api/events/stream"
                     )
             ));
             return;
@@ -173,6 +183,7 @@ public final class AuctionApiHandler implements HttpHandler {
             Map<String, Object> request = ApiJson.parseObject(readRequestBody(exchange));
             String username = ApiJson.requireString(request, "username");
             String password = ApiJson.requireString(request, "password");
+            requireRateLimit(loginRateLimiter, clientKey(exchange, username), "Too many login attempts. Try again later.");
 
             try {
                 User user = authenticationService.loginOrThrow(username, password);
@@ -185,7 +196,7 @@ public final class AuctionApiHandler implements HttpHandler {
                 ));
                 return;
             } catch (UserNotFound | InvalidPasswordException e) {
-                throw new ApiHttpException(401, e.getMessage());
+                throw new ApiHttpException(401, "Invalid username or password.");
             }
         }
 
@@ -314,6 +325,7 @@ public final class AuctionApiHandler implements HttpHandler {
 
         if (segments.size() == 4 && "me".equals(segments.get(1)) && "wallet".equals(segments.get(2)) && "recovery".equals(segments.get(3))) {
             requireMethod(exchange, "POST");
+            requireRateLimit(walletRecoveryRateLimiter, clientKey(exchange, currentUser.getId()), "Too many wallet recovery attempts. Try again later.");
             sendJson(exchange, 202, jsonObject(
                     "recovery", payloads.walletRecovery(dashboardService.requestWalletPinRecovery(currentUser))
             ));
@@ -814,7 +826,7 @@ public final class AuctionApiHandler implements HttpHandler {
         }
 
         requireMethod(exchange, "GET");
-        User user = requireAuthenticatedUser(exchange, true);
+        User user = requireAuthenticatedUser(exchange, queryTokensAllowed());
         Headers headers = exchange.getResponseHeaders();
         headers.set("Content-Type", "text/event-stream; charset=UTF-8");
         headers.set("Cache-Control", "no-cache");
@@ -878,8 +890,24 @@ public final class AuctionApiHandler implements HttpHandler {
         }
     }
 
+    private void requireRateLimit(SimpleRateLimiter rateLimiter, String key, String message) {
+        if (!rateLimiter.allow(key)) {
+            throw new ApiHttpException(429, message);
+        }
+    }
+
+    private String clientKey(HttpExchange exchange, String discriminator) {
+        String remoteAddress = exchange.getRemoteAddress() == null
+                ? "unknown"
+                : exchange.getRemoteAddress().getAddress().getHostAddress();
+        return remoteAddress + ":" + (discriminator == null ? "" : discriminator.trim().toLowerCase());
+    }
+
     private String readRequestBody(HttpExchange exchange) throws IOException {
-        byte[] payload = exchange.getRequestBody().readAllBytes();
+        byte[] payload = exchange.getRequestBody().readNBytes(MAX_REQUEST_BYTES + 1);
+        if (payload.length > MAX_REQUEST_BYTES) {
+            throw new ApiHttpException(413, "Request body is too large.");
+        }
         return new String(payload, StandardCharsets.UTF_8);
     }
 
@@ -890,7 +918,7 @@ public final class AuctionApiHandler implements HttpHandler {
         List<String> segments = new ArrayList<>();
         for (String token : tokens) {
             if (!token.isBlank()) {
-                segments.add(token);
+                segments.add(URLDecoder.decode(token, StandardCharsets.UTF_8));
             }
         }
         return segments;
@@ -942,9 +970,26 @@ public final class AuctionApiHandler implements HttpHandler {
     }
 
     private void addCorsHeaders(Headers headers) {
-        headers.set("Access-Control-Allow-Origin", "*");
+        headers.set("Access-Control-Allow-Origin", allowedCorsOrigin());
         headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
         headers.set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+        headers.set("Vary", "Origin");
+    }
+
+    private boolean queryTokensAllowed() {
+        String configured = System.getProperty("auction.api.allowQueryTokens");
+        if (configured == null || configured.isBlank()) {
+            configured = System.getenv("AUCTION_API_ALLOW_QUERY_TOKENS");
+        }
+        return configured != null && Boolean.parseBoolean(configured.trim());
+    }
+
+    private String allowedCorsOrigin() {
+        String configured = System.getProperty("auction.api.allowedOrigin");
+        if (configured == null || configured.isBlank()) {
+            configured = System.getenv("AUCTION_API_ALLOWED_ORIGIN");
+        }
+        return configured == null || configured.isBlank() ? "*" : configured.trim();
     }
 
     private String formatDateTime(LocalDateTime value) {
@@ -1006,6 +1051,30 @@ public final class AuctionApiHandler implements HttpHandler {
 
         private int statusCode() {
             return statusCode;
+        }
+    }
+
+    private static final class SimpleRateLimiter {
+        private final int maxAttempts;
+        private final long windowMillis;
+        private final Map<String, Deque<Long>> attemptsByKey = new ConcurrentHashMap<>();
+
+        private SimpleRateLimiter(int maxAttempts, Duration window) {
+            this.maxAttempts = Math.max(1, maxAttempts);
+            this.windowMillis = Math.max(1_000L, window == null ? 60_000L : window.toMillis());
+        }
+
+        private synchronized boolean allow(String key) {
+            long now = System.currentTimeMillis();
+            Deque<Long> attempts = attemptsByKey.computeIfAbsent(key == null ? "" : key, ignored -> new ArrayDeque<>());
+            while (!attempts.isEmpty() && now - attempts.peekFirst() > windowMillis) {
+                attempts.removeFirst();
+            }
+            if (attempts.size() >= maxAttempts) {
+                return false;
+            }
+            attempts.addLast(now);
+            return true;
         }
     }
 }

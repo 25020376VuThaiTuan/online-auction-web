@@ -250,7 +250,7 @@
                                 <Label fx:id="selectedAuctionTimeRemainingLabel" text="Time left: N/A"/>
                                 <Label fx:id="selectedAuctionEndTimeLabel" text="Ends at: N/A"/>
                             </HBox>
-                            <LineChart fx:id="bidHistoryChart" animated="false" createSymbols="true" prefHeight="360.0" VBox.vgrow="ALWAYS">
+                            <LineChart fx:id="bidHistoryChart" animated="true" createSymbols="true" prefHeight="360.0" VBox.vgrow="ALWAYS">
                                 <xAxis>
                                     <CategoryAxis label="Bid Time"/>
                                 </xAxis>

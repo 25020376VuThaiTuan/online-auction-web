@@ -19,7 +19,7 @@ public class AuctionSession implements AuctionSubject {
     private volatile double currentHighestBid;
     private volatile LocalDateTime endTime;
 
-    private final ReentrantLock lock = new ReentrantLock();
+    private final ReentrantLock lock = new ReentrantLock(true);
 
     public AuctionSession(Item item, double startingPrice, LocalDateTime endTime) {
         this(item, startingPrice, endTime, List.of());

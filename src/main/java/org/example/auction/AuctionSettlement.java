@@ -15,8 +15,8 @@ public final class AuctionSettlement {
     private final double buyerPremiumAmount;
     private final double totalBuyerDue;
     private final double remainingPaymentDue;
-    private final double adminDepositShare;
-    private final double sellerDepositShare;
+    private final double adminCommission;
+    private final double sellerPayout;
     private final LocalDateTime finishedAt;
 
     private AuctionSettlementStatus status;
@@ -41,8 +41,8 @@ public final class AuctionSettlement {
             double buyerPremiumAmount,
             double totalBuyerDue,
             double remainingPaymentDue,
-            double adminDepositShare,
-            double sellerDepositShare,
+            double adminCommission,
+            double sellerPayout,
             LocalDateTime finishedAt
     ) {
         this.itemId = itemId;
@@ -54,8 +54,8 @@ public final class AuctionSettlement {
         this.buyerPremiumAmount = buyerPremiumAmount;
         this.totalBuyerDue = totalBuyerDue;
         this.remainingPaymentDue = remainingPaymentDue;
-        this.adminDepositShare = adminDepositShare;
-        this.sellerDepositShare = sellerDepositShare;
+        this.adminCommission = adminCommission;
+        this.sellerPayout = sellerPayout;
         this.finishedAt = finishedAt == null ? LocalDateTime.now() : finishedAt;
         this.status = AuctionSettlementStatus.AWAITING_WINNER_ADMISSION;
     }
@@ -96,12 +96,12 @@ public final class AuctionSettlement {
         return remainingPaymentDue;
     }
 
-    public double getAdminDepositShare() {
-        return adminDepositShare;
+    public double getAdminCommission() {
+        return adminCommission;
     }
 
-    public double getSellerDepositShare() {
-        return sellerDepositShare;
+    public double getSellerPayout() {
+        return sellerPayout;
     }
 
     public LocalDateTime getFinishedAt() {

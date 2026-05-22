@@ -109,6 +109,10 @@ public final class MarketplaceDashboardService {
         return walletService.getWallet(user, walletPin);
     }
 
+    public WalletSummary getWalletSnapshot(User user) {
+        return walletService.getWalletSnapshot(user);
+    }
+
     public WalletAuthorization authorizeWallet(User user, String walletPin, Duration duration) {
         return walletService.authorize(user, walletPin, duration);
     }

@@ -23,9 +23,11 @@ import org.example.viewmodel.AuctionListEntry;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -110,8 +112,15 @@ public final class AuctionApiClient {
     }
 
     public User getCurrentUser(String token) {
+        return getCurrentUserSnapshot(token).user();
+    }
+
+    public CurrentUserSnapshot getCurrentUserSnapshot(String token) {
         Map<String, Object> response = request("GET", "/auth/me", token, null);
-        return userFromResponse(response);
+        return new CurrentUserSnapshot(
+                userFromResponse(response),
+                walletSnapshotFromUserResponse(response)
+        );
     }
 
     public User updateProfile(String token, String fullName, String phoneNumber, String address) {
@@ -214,14 +223,14 @@ public final class AuctionApiClient {
     }
 
     public WalletSummary setPrimaryWalletAccount(String token, String accountId, String walletPin) {
-        Map<String, Object> response = request("POST", "/users/me/wallet/accounts/" + accountId + "/primary", token, jsonObject(
+        Map<String, Object> response = request("POST", "/users/me/wallet/accounts/" + segment(accountId) + "/primary", token, jsonObject(
                 "walletPin", walletPin
         ));
         return walletFromResponse(response);
     }
 
     public WalletSummary removeWalletAccount(String token, String accountId, String walletPin) {
-        Map<String, Object> response = request("DELETE", "/users/me/wallet/accounts/" + accountId, token, jsonObject(
+        Map<String, Object> response = request("DELETE", "/users/me/wallet/accounts/" + segment(accountId), token, jsonObject(
                 "walletPin", walletPin
         ));
         return walletFromResponse(response);
@@ -246,7 +255,7 @@ public final class AuctionApiClient {
     }
 
     public User updateUserRole(String token, String userId, String role) {
-        Map<String, Object> response = request("PATCH", "/users/" + userId + "/role", token, jsonObject(
+        Map<String, Object> response = request("PATCH", "/users/" + segment(userId) + "/role", token, jsonObject(
                 "role", role
         ));
         Object user = response.get("user");
@@ -276,7 +285,7 @@ public final class AuctionApiClient {
     }
 
     public AuctionDetail getAuction(String token, String itemId) {
-        Map<String, Object> response = request("GET", "/auctions/" + itemId, token, null);
+        Map<String, Object> response = request("GET", "/auctions/" + segment(itemId), token, null);
         Object auction = response.get("auction");
         if (!(auction instanceof Map<?, ?> map)) {
             throw new ApiClientException("API response did not include auction details.");
@@ -285,7 +294,7 @@ public final class AuctionApiClient {
     }
 
     public List<Bid> getBidHistory(String token, String itemId) {
-        Map<String, Object> response = request("GET", "/auctions/" + itemId + "/bids", token, null);
+        Map<String, Object> response = request("GET", "/auctions/" + segment(itemId) + "/bids", token, null);
         return objectList(response.get("bids")).stream()
                 .map(this::buildBid)
                 .toList();
@@ -331,7 +340,7 @@ public final class AuctionApiClient {
     }
 
     public Item updateItemApproval(String token, String itemId, ApprovalStatus approvalStatus) {
-        Map<String, Object> response = request("PATCH", "/items/" + itemId + "/approval", token, jsonObject(
+        Map<String, Object> response = request("PATCH", "/items/" + segment(itemId) + "/approval", token, jsonObject(
                 "approvalStatus", approvalStatus.name()
         ));
         Object item = response.get("item");
@@ -343,7 +352,7 @@ public final class AuctionApiClient {
     }
 
     public BidValidationResult placeBid(String token, String itemId, double amount, String walletPin) {
-        Map<String, Object> response = requestBusinessResult("POST", "/auctions/" + itemId + "/bids", token, jsonObject(
+        Map<String, Object> response = requestBusinessResult("POST", "/auctions/" + segment(itemId) + "/bids", token, jsonObject(
                 "amount", amount,
                 "walletPin", walletPin
         ));
@@ -355,7 +364,7 @@ public final class AuctionApiClient {
     }
 
     public EntryDepositResponse confirmAuctionEntry(String token, String itemId, String walletPin) {
-        Map<String, Object> response = requestBusinessResult("POST", "/auctions/" + itemId + "/entry-deposit", token, jsonObject(
+        Map<String, Object> response = requestBusinessResult("POST", "/auctions/" + segment(itemId) + "/entry-deposit", token, jsonObject(
                 "walletPin", walletPin
         ));
         return new EntryDepositResponse(
@@ -373,7 +382,7 @@ public final class AuctionApiClient {
     }
 
     public void registerAutoBid(String token, String itemId, double maxLimit, double bidIncrement, String walletPin) {
-        request("POST", "/auctions/" + itemId + "/auto-bid", token, jsonObject(
+        request("POST", "/auctions/" + segment(itemId) + "/auto-bid", token, jsonObject(
                 "maxLimit", maxLimit,
                 "bidIncrement", bidIncrement,
                 "walletPin", walletPin
@@ -381,22 +390,22 @@ public final class AuctionApiClient {
     }
 
     public boolean disableAutoBid(String token, String itemId, String walletPin) {
-        Map<String, Object> response = request("DELETE", "/auctions/" + itemId + "/auto-bid", token, jsonObject(
+        Map<String, Object> response = request("DELETE", "/auctions/" + segment(itemId) + "/auto-bid", token, jsonObject(
                 "walletPin", walletPin
         ));
         return booleanValue(response.get("disabled"));
     }
 
     public void startAuction(String token, String itemId) {
-        request("POST", "/auctions/" + itemId + "/start", token, Map.of());
+        request("POST", "/auctions/" + segment(itemId) + "/start", token, Map.of());
     }
 
     public void finishAuction(String token, String itemId) {
-        request("POST", "/auctions/" + itemId + "/finish", token, Map.of());
+        request("POST", "/auctions/" + segment(itemId) + "/finish", token, Map.of());
     }
 
     public SettlementDetail getSettlement(String token, String itemId) {
-        Map<String, Object> response = request("GET", "/auctions/" + itemId + "/settlement", token, null);
+        Map<String, Object> response = request("GET", "/auctions/" + segment(itemId) + "/settlement", token, null);
         Object settlement = response.get("settlement");
         return settlement instanceof Map<?, ?> map ? buildSettlementDetail(castMap(map)) : null;
     }
@@ -406,7 +415,7 @@ public final class AuctionApiClient {
     }
 
     public SettlementDetail admitWinnerResult(String token, String itemId, String walletPin) {
-        Map<String, Object> response = request("POST", "/auctions/" + itemId + "/settlement/admit-result", token, jsonObject(
+        Map<String, Object> response = request("POST", "/auctions/" + segment(itemId) + "/settlement/admit-result", token, jsonObject(
                 "walletPin", walletPin
         ));
         return buildSettlementFromResponse(response);
@@ -417,7 +426,7 @@ public final class AuctionApiClient {
     }
 
     public SettlementDetail markGoodsShipped(String token, String itemId, String walletPin) {
-        Map<String, Object> response = request("POST", "/auctions/" + itemId + "/settlement/ship", token, jsonObject(
+        Map<String, Object> response = request("POST", "/auctions/" + segment(itemId) + "/settlement/ship", token, jsonObject(
                 "walletPin", walletPin
         ));
         return buildSettlementFromResponse(response);
@@ -428,7 +437,7 @@ public final class AuctionApiClient {
     }
 
     public SettlementDetail confirmGoodsReceived(String token, String itemId, String walletPin) {
-        Map<String, Object> response = request("POST", "/auctions/" + itemId + "/settlement/confirm-received", token, jsonObject(
+        Map<String, Object> response = request("POST", "/auctions/" + segment(itemId) + "/settlement/confirm-received", token, jsonObject(
                 "walletPin", walletPin
         ));
         return buildSettlementFromResponse(response);
@@ -439,7 +448,7 @@ public final class AuctionApiClient {
     }
 
     public SettlementDetail reportGoodsNotReceived(String token, String itemId, String reason, String walletPin) {
-        Map<String, Object> response = request("POST", "/auctions/" + itemId + "/settlement/report-not-received", token, jsonObject(
+        Map<String, Object> response = request("POST", "/auctions/" + segment(itemId) + "/settlement/report-not-received", token, jsonObject(
                 "reason", reason,
                 "walletPin", walletPin
         ));
@@ -451,7 +460,7 @@ public final class AuctionApiClient {
     }
 
     public SettlementDetail adminUnfreezePayment(String token, String itemId, String walletPin) {
-        Map<String, Object> response = request("POST", "/auctions/" + itemId + "/settlement/admin-unfreeze", token, jsonObject(
+        Map<String, Object> response = request("POST", "/auctions/" + segment(itemId) + "/settlement/admin-unfreeze", token, jsonObject(
                 "walletPin", walletPin
         ));
         return buildSettlementFromResponse(response);
@@ -462,7 +471,7 @@ public final class AuctionApiClient {
     }
 
     public SettlementDetail adminKeepPaymentFrozen(String token, String itemId, String walletPin) {
-        Map<String, Object> response = request("POST", "/auctions/" + itemId + "/settlement/admin-freeze", token, jsonObject(
+        Map<String, Object> response = request("POST", "/auctions/" + segment(itemId) + "/settlement/admin-freeze", token, jsonObject(
                 "walletPin", walletPin
         ));
         return buildSettlementFromResponse(response);
@@ -483,7 +492,7 @@ public final class AuctionApiClient {
     }
 
     public List<WalletTransaction> getWalletAuditTransactions(String token, String userId) {
-        Map<String, Object> response = request("GET", "/users/" + userId + "/wallet/transactions", token, null);
+        Map<String, Object> response = request("GET", "/users/" + segment(userId) + "/wallet/transactions", token, null);
         return objectList(response.get("transactions")).stream()
                 .map(this::buildWalletTransaction)
                 .toList();
@@ -584,6 +593,15 @@ public final class AuctionApiClient {
             throw new ApiClientException("API response did not include a user.");
         }
         return buildUser(castMap(map));
+    }
+
+    private WalletSummary walletSnapshotFromUserResponse(Map<String, Object> response) {
+        Object user = response.get("user");
+        if (!(user instanceof Map<?, ?> userMap)) {
+            return null;
+        }
+        Object wallet = userMap.get("wallet");
+        return wallet instanceof Map<?, ?> walletMap ? buildWalletSummary(castMap(walletMap)) : null;
     }
 
     private WalletSummary walletFromResponse(Map<String, Object> response) {
@@ -797,6 +815,7 @@ public final class AuctionApiClient {
         return new SettlementDetail(
                 stringValue(payload.get("itemId")),
                 stringValue(payload.get("itemName")),
+                stringValue(payload.get("sellerId")),
                 stringValue(payload.get("status")),
                 stringValue(payload.get("winnerBidderId")),
                 doubleValue(payload.get("winningBidAmount")),
@@ -804,7 +823,11 @@ public final class AuctionApiClient {
                 doubleValue(payload.get("buyerPremiumAmount")),
                 doubleValue(payload.get("totalBuyerDue")),
                 doubleValue(payload.get("remainingPaymentDue")),
+                doubleValue(payload.get("adminCommission")),
+                doubleValue(payload.get("sellerPayout")),
                 doubleValue(payload.get("lockedRemainingPayment")),
+                doubleValue(payload.get("sellerReleasedAmount")),
+                doubleValue(payload.get("buyerRefundedAmount")),
                 stringValue(payload.get("buyerConfirmationDeadline")),
                 stringValue(payload.get("displaySummary"))
         );
@@ -856,6 +879,11 @@ public final class AuctionApiClient {
 
     private String formatDateTime(LocalDateTime value) {
         return value == null ? null : ISO_DATE_TIME.format(value);
+    }
+
+    private String segment(String value) {
+        return URLEncoder.encode(value == null ? "" : value, StandardCharsets.UTF_8)
+                .replace("+", "%20");
     }
 
     @SuppressWarnings("unchecked")
@@ -945,6 +973,7 @@ public final class AuctionApiClient {
     public record SettlementDetail(
             String itemId,
             String itemName,
+            String sellerId,
             String status,
             String winnerBidderId,
             double winningBidAmount,
@@ -952,10 +981,17 @@ public final class AuctionApiClient {
             double buyerPremiumAmount,
             double totalBuyerDue,
             double remainingPaymentDue,
+            double adminCommission,
+            double sellerPayout,
             double lockedRemainingPayment,
+            double sellerReleasedAmount,
+            double buyerRefundedAmount,
             String buyerConfirmationDeadline,
             String displaySummary
     ) {
+    }
+
+    public record CurrentUserSnapshot(User user, WalletSummary wallet) {
     }
 
     public static class ApiClientException extends RuntimeException {

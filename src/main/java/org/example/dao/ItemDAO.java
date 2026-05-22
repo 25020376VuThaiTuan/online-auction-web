@@ -3,6 +3,7 @@ package org.example.dao;
 import org.example.model.ApprovalStatus;
 import org.example.model.Item;
 import org.example.model.ItemFactory;
+import org.example.util.MoneyUtils;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -123,7 +124,7 @@ public class ItemDAO implements AutoCloseable {
     public void updateCurrentPrice(String itemId, double newPrice) throws SQLException {
         String sql = "UPDATE auctions SET current_price = ?, updated_at = CURRENT_TIMESTAMP WHERE item_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setDouble(1, newPrice);
+            ps.setBigDecimal(1, MoneyUtils.toDatabaseAmount(newPrice));
             ps.setString(2, itemId);
             ps.executeUpdate();
         }
@@ -140,7 +141,7 @@ public class ItemDAO implements AutoCloseable {
                 WHERE item_id = ?
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setDouble(1, currentPrice);
+            ps.setBigDecimal(1, MoneyUtils.toDatabaseAmount(currentPrice));
             ps.setTimestamp(2, timestamp(endTime));
             ps.setString(3, status);
             ps.setString(4, status);
@@ -266,8 +267,8 @@ public class ItemDAO implements AutoCloseable {
             ps.setString(1, item.getId());
             ps.setString(2, item.getId());
             ps.setString(3, item.getSellerId());
-            ps.setDouble(4, item.getStartingPrice());
-            ps.setDouble(5, item.getCurrentPrice());
+            ps.setBigDecimal(4, MoneyUtils.toDatabaseAmount(item.getStartingPrice()));
+            ps.setBigDecimal(5, MoneyUtils.toDatabaseAmount(item.getCurrentPrice()));
             ps.setTimestamp(6, timestamp(item.getStartTime()));
             ps.setTimestamp(7, timestamp(item.getEndTime()));
             ps.setString(8, toAuctionStatus(item.getApprovalStatus()));
@@ -358,8 +359,8 @@ public class ItemDAO implements AutoCloseable {
         String id = rs.getString("id");
         String name = rs.getString("title");
         String desc = rs.getString("description");
-        double startingPrice = rs.getDouble("starting_price");
-        double currentPrice = rs.getDouble("current_price");
+        double startingPrice = MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("starting_price"));
+        double currentPrice = MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("current_price"));
         String sellerId = rs.getString("seller_id");
         Timestamp startTs = rs.getTimestamp("start_at");
         Timestamp endTs = rs.getTimestamp("end_at");

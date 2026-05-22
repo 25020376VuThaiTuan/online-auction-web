@@ -20,6 +20,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class AuctionApiServerMain {
     private static final String HOST = "0.0.0.0";
@@ -48,7 +50,7 @@ public final class AuctionApiServerMain {
     );
     private static final List<RequiredTable> SELF_HEALING_DATABASE_SCHEMA = List.of(
             new RequiredTable("auto_bids", List.of("id", "auction_id", "bidder_id", "max_limit", "bid_increment")),
-            new RequiredTable("wallet_accounts", List.of("user_id", "balance", "pin_hash")),
+            new RequiredTable("wallet_accounts", List.of("user_id", "balance", "pin_hash", "pin_recovery_code")),
             new RequiredTable("wallet_linked_accounts", List.of(
                     "id", "user_id", "account_name", "provider_name", "account_reference", "balance", "is_primary"
             )),
@@ -81,7 +83,7 @@ public final class AuctionApiServerMain {
                 new AuctionRealtimeBroker()
         );
 
-        ExecutorService executor = Executors.newFixedThreadPool(resolveWorkerThreads());
+        ExecutorService executor = createRequestExecutor();
         server.createContext("/api", apiHandler);
         server.setExecutor(executor);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -242,6 +244,36 @@ public final class AuctionApiServerMain {
         }
     }
 
+    static ExecutorService createRequestExecutor() {
+        if (virtualThreadsEnabled()) {
+            ThreadFactory threadFactory = Thread.ofVirtual()
+                    .name("auction-api-request-", 1)
+                    .factory();
+            return Executors.newThreadPerTaskExecutor(threadFactory);
+        }
+        return Executors.newFixedThreadPool(
+                resolveWorkerThreads(),
+                namedPlatformThreadFactory("auction-api-worker-")
+        );
+    }
+
+    static boolean virtualThreadsEnabled() {
+        String rawValue = System.getProperty("auction.api.virtualThreads");
+        if (rawValue == null || rawValue.isBlank()) {
+            rawValue = System.getenv("AUCTION_API_VIRTUAL_THREADS");
+        }
+        return rawValue == null || rawValue.isBlank() || Boolean.parseBoolean(rawValue.trim());
+    }
+
+    private static ThreadFactory namedPlatformThreadFactory(String prefix) {
+        AtomicInteger counter = new AtomicInteger(1);
+        return runnable -> {
+            Thread thread = new Thread(runnable, prefix + counter.getAndIncrement());
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+
     private static HttpServer createServer(PortSelection portSelection) throws IOException {
         if (portSelection.explicit()) {
             try {
@@ -305,6 +337,7 @@ public final class AuctionApiServerMain {
         verifyDatabaseSchema(connection, CORE_REQUIRED_DATABASE_SCHEMA);
         verifyDatabaseSchema(connection, SELF_HEALING_DATABASE_SCHEMA);
         verifyWalletTransactionSchema(connection);
+        verifyWalletRecoveryCodeColumn(connection);
     }
 
     static void verifyDatabaseSchema(Connection connection, List<RequiredTable> requiredTables) throws SQLException {
@@ -363,6 +396,28 @@ public final class AuctionApiServerMain {
     static boolean isWalletTransactionSchemaCompatible(List<String> actualColumns) {
         return hasAllColumns(actualColumns, MODERN_WALLET_TRANSACTION_COLUMNS)
                 || hasAllColumns(actualColumns, LEGACY_WALLET_TRANSACTION_COLUMNS);
+    }
+
+    static void verifyWalletRecoveryCodeColumn(Connection connection) throws SQLException {
+        DatabaseMetaData metaData = connection.getMetaData();
+        String catalog = connection.getCatalog();
+        try (ResultSet resultSet = metaData.getColumns(catalog, null, "wallet_accounts", "pin_recovery_code")) {
+            if (!resultSet.next()) {
+                throw new SQLException(
+                        "Missing required column 'wallet_accounts.pin_recovery_code'. Apply schema.sql and migrations before starting the API server.",
+                        "42S22",
+                        1054
+                );
+            }
+            int columnSize = resultSet.getInt("COLUMN_SIZE");
+            if (columnSize < 255) {
+                throw new SQLException(
+                        "Column 'wallet_accounts.pin_recovery_code' must be at least 255 characters for hashed recovery codes. Apply migration V6.",
+                        "42S22",
+                        1054
+                );
+            }
+        }
     }
 
     private static IOException databasePreflightFailure(String message) {

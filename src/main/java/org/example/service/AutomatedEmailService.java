@@ -30,7 +30,7 @@ public final class AutomatedEmailService {
         String body = "Your wallet PIN recovery code is " + recoveryCode
                 + ". It expires in 15 minutes. Requested at " + LocalDateTime.now() + ".";
         if (!hasSmtpConfig()) {
-            System.out.println("Automated wallet PIN recovery email prepared for " + email + " with code " + recoveryCode + ".");
+            System.out.println("Automated wallet PIN recovery email prepared for " + email + ".");
             return;
         }
 

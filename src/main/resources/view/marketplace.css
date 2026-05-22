@@ -178,6 +178,30 @@
     -fx-border-radius: 18;
 }
 
+.live-bid-chart {
+    -fx-padding: 8;
+}
+
+.live-bid-chart .chart-series-line {
+    -fx-stroke: #2563eb;
+    -fx-stroke-width: 2.5px;
+}
+
+.live-bid-chart .chart-line-symbol {
+    -fx-background-color: #2563eb, white;
+    -fx-background-radius: 7px;
+    -fx-padding: 5px;
+}
+
+.live-bid-chart .chart-line-symbol.latest-bid-point {
+    -fx-background-color: #16a34a, white;
+    -fx-padding: 7px;
+}
+
+.live-bid-chart .chart-plot-background {
+    -fx-background-color: rgba(255, 255, 255, 0.72);
+}
+
 .table-view .column-header-background {
     -fx-background-color: linear-gradient(to right, #e8d6bd 0%, #ecdcc7 100%);
     -fx-background-radius: 18 18 0 0;

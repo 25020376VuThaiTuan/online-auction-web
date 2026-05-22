@@ -3,6 +3,8 @@ package org.example.dao;
 import org.example.model.User;
 import org.example.model.WalletLinkedAccount;
 import org.example.model.WalletTransaction;
+import org.example.util.CredentialHasher;
+import org.example.util.MoneyUtils;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -45,7 +47,7 @@ public class WalletDAO implements AutoCloseable {
                     user_id VARCHAR(36) PRIMARY KEY,
                     balance DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
                     pin_hash VARCHAR(255) NULL,
-                    pin_recovery_code VARCHAR(32) NULL,
+                    pin_recovery_code VARCHAR(255) NULL,
                     pin_recovery_expires_at DATETIME NULL,
                     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -55,6 +57,7 @@ public class WalletDAO implements AutoCloseable {
                         CHECK (balance >= 0)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """);
+        execute("ALTER TABLE wallet_accounts MODIFY pin_recovery_code VARCHAR(255) NULL");
         execute("""
                 CREATE TABLE IF NOT EXISTS wallet_linked_accounts (
                     id VARCHAR(36) PRIMARY KEY,
@@ -142,7 +145,7 @@ public class WalletDAO implements AutoCloseable {
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, user.getId());
-            ps.setDouble(2, Math.max(0.0, initialBalance));
+            ps.setBigDecimal(2, MoneyUtils.toDatabaseAmount(initialBalance));
             ps.executeUpdate();
         }
     }
@@ -153,7 +156,7 @@ public class WalletDAO implements AutoCloseable {
             ps.setString(1, userId);
             ResultSet rs = ps.executeQuery();
             if (rs.next()) {
-                return Optional.of(rs.getDouble("balance"));
+                return Optional.of(MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("balance")));
             }
         }
         return Optional.empty();
@@ -165,7 +168,7 @@ public class WalletDAO implements AutoCloseable {
             ps.setString(1, userId);
             ResultSet rs = ps.executeQuery();
             if (rs.next()) {
-                return Optional.of(rs.getDouble("balance"));
+                return Optional.of(MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("balance")));
             }
         }
         return Optional.empty();
@@ -175,7 +178,7 @@ public class WalletDAO implements AutoCloseable {
         double safeBalance = Math.max(0.0, balance);
         String sql = "UPDATE wallet_accounts SET balance = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setDouble(1, safeBalance);
+            ps.setBigDecimal(1, MoneyUtils.toDatabaseAmount(safeBalance));
             ps.setString(2, userId);
             ps.executeUpdate();
         }
@@ -186,7 +189,7 @@ public class WalletDAO implements AutoCloseable {
                 WHERE user_id = ?
                 """;
         try (PreparedStatement ps = conn.prepareStatement(profileSql)) {
-            ps.setDouble(1, safeBalance);
+            ps.setBigDecimal(1, MoneyUtils.toDatabaseAmount(safeBalance));
             ps.setString(2, userId);
             ps.executeUpdate();
         }
@@ -243,7 +246,7 @@ public class WalletDAO implements AutoCloseable {
             }
             String storedCode = rs.getString("pin_recovery_code");
             Timestamp expiresAt = rs.getTimestamp("pin_recovery_expires_at");
-            if (storedCode == null || expiresAt == null || !storedCode.equals(recoveryCode)) {
+            if (storedCode == null || expiresAt == null || !recoveryCodeAccepted(recoveryCode, storedCode)) {
                 return false;
             }
             if (expiresAt.toLocalDateTime().isBefore(LocalDateTime.now())) {
@@ -283,7 +286,7 @@ public class WalletDAO implements AutoCloseable {
             ps.setString(1, userId);
             ps.setString(2, holdKey);
             ps.setString(3, blankToNull(referenceId));
-            ps.setDouble(4, Math.max(0.0, amount));
+            ps.setBigDecimal(4, MoneyUtils.toDatabaseAmount(amount));
             ps.setString(5, note);
             ps.executeUpdate();
         }
@@ -310,7 +313,7 @@ public class WalletDAO implements AutoCloseable {
             ps.setString(1, userId);
             ResultSet rs = ps.executeQuery();
             while (rs.next()) {
-                holds.put(rs.getString("hold_key"), rs.getDouble("amount"));
+                holds.put(rs.getString("hold_key"), MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("amount")));
             }
         }
         return holds;
@@ -336,9 +339,9 @@ public class WalletDAO implements AutoCloseable {
                 ps.setString(2, transaction.userId());
                 ps.setString(3, blankToNull(transaction.referenceId()));
                 ps.setString(4, transaction.transactionType());
-                ps.setDouble(5, transaction.amount());
-                ps.setDouble(6, transaction.balanceBefore());
-                ps.setDouble(7, transaction.balanceAfter());
+                ps.setBigDecimal(5, MoneyUtils.toDatabaseAmount(transaction.amount()));
+                ps.setBigDecimal(6, MoneyUtils.toDatabaseAmount(transaction.balanceBefore()));
+                ps.setBigDecimal(7, MoneyUtils.toDatabaseAmount(transaction.balanceAfter()));
                 ps.setString(8, transaction.note());
                 ps.setTimestamp(9, Timestamp.valueOf(transaction.createdAt()));
                 ps.executeUpdate();
@@ -363,9 +366,9 @@ public class WalletDAO implements AutoCloseable {
             ps.setString(1, transaction.userId());
             ps.setString(2, null);
             ps.setString(3, transaction.transactionType());
-            ps.setDouble(4, transaction.amount());
-            ps.setDouble(5, transaction.balanceBefore());
-            ps.setDouble(6, transaction.balanceAfter());
+            ps.setBigDecimal(4, MoneyUtils.toDatabaseAmount(transaction.amount()));
+            ps.setBigDecimal(5, MoneyUtils.toDatabaseAmount(transaction.balanceBefore()));
+            ps.setBigDecimal(6, MoneyUtils.toDatabaseAmount(transaction.balanceAfter()));
             ps.setString(7, transaction.note());
             ps.setTimestamp(8, Timestamp.valueOf(transaction.createdAt()));
             ps.executeUpdate();
@@ -394,7 +397,7 @@ public class WalletDAO implements AutoCloseable {
             ps.setString(3, account.accountName());
             ps.setString(4, account.providerName());
             ps.setString(5, account.accountReference());
-            ps.setDouble(6, account.balance());
+            ps.setBigDecimal(6, MoneyUtils.toDatabaseAmount(account.balance()));
             ps.setBoolean(7, account.primary());
             ps.setTimestamp(8, Timestamp.valueOf(account.createdAt()));
             ps.executeUpdate();
@@ -419,7 +422,7 @@ public class WalletDAO implements AutoCloseable {
                         rs.getString("account_name"),
                         rs.getString("provider_name"),
                         rs.getString("account_reference"),
-                        rs.getDouble("balance"),
+                        MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("balance")),
                         rs.getBoolean("is_primary"),
                         rs.getTimestamp("created_at").toLocalDateTime()
                 ));
@@ -440,7 +443,7 @@ public class WalletDAO implements AutoCloseable {
             ps.setString(2, accountId);
             ResultSet rs = ps.executeQuery();
             if (rs.next()) {
-                return Optional.of(rs.getDouble("balance"));
+                return Optional.of(MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("balance")));
             }
         }
         return Optional.empty();
@@ -453,7 +456,7 @@ public class WalletDAO implements AutoCloseable {
                 WHERE user_id = ? AND id = ?
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setDouble(1, Math.max(0.0, balance));
+            ps.setBigDecimal(1, MoneyUtils.toDatabaseAmount(balance));
             ps.setString(2, userId);
             ps.setString(3, accountId);
             ps.executeUpdate();
@@ -494,9 +497,9 @@ public class WalletDAO implements AutoCloseable {
                         rs.getString("id"),
                         rs.getString("user_id"),
                         rs.getString("transaction_type"),
-                        rs.getDouble("amount"),
-                        rs.getDouble("balance_before"),
-                        rs.getDouble("balance_after"),
+                        MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("amount")),
+                        MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("balance_before")),
+                        MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("balance_after")),
                         rs.getString("reference_id"),
                         rs.getString("note"),
                         rs.getTimestamp("created_at").toLocalDateTime()
@@ -516,9 +519,9 @@ public class WalletDAO implements AutoCloseable {
                         rs.getString("id"),
                         rs.getString("user_id"),
                         rs.getString("transaction_type"),
-                        rs.getDouble("amount"),
-                        rs.getDouble("balance_before"),
-                        rs.getDouble("balance_after"),
+                        MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("amount")),
+                        MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("balance_before")),
+                        MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("balance_after")),
                         rs.getString("reference_id"),
                         rs.getString("note"),
                         rs.getTimestamp("created_at").toLocalDateTime()
@@ -584,6 +587,15 @@ public class WalletDAO implements AutoCloseable {
 
     private String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    private boolean recoveryCodeAccepted(String recoveryCode, String storedCode) {
+        if (recoveryCode == null || recoveryCode.isBlank() || storedCode == null || storedCode.isBlank()) {
+            return false;
+        }
+        return CredentialHasher.isHashed(storedCode)
+                ? CredentialHasher.verify(recoveryCode, storedCode)
+                : recoveryCode.equals(storedCode);
     }
 
     @Override

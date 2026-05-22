@@ -2,7 +2,7 @@ package org.example.model;
 
 public abstract class User extends Entity {
     private String username;
-    private String password;
+    private String passwordHash;
     private String email;
     private String fullName;
     private String phoneNumber;
@@ -13,7 +13,7 @@ public abstract class User extends Entity {
     public User(String id, String username, String password, String email) {
         super(id);
         this.username = username;
-        this.password = password;
+        this.passwordHash = password;
         this.email = email;
     }
 
@@ -35,7 +35,11 @@ public abstract class User extends Entity {
     }
 
     public String getPassword() {
-        return password;
+        return passwordHash;
+    }
+
+    public String getPasswordHash() {
+        return passwordHash;
     }
 
     public String getEmail() {

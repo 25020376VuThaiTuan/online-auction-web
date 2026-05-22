@@ -10,6 +10,7 @@ import org.example.repository.DemoUserRepository;
 import org.example.repository.JdbcUserRepository;
 import org.example.repository.UserRepository;
 import org.example.util.AccountInputValidator;
+import org.example.util.CredentialHasher;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -70,8 +71,10 @@ public final class AuthenticationService {
             }
             usernameFound = true;
 
-            if (safePassword.equals(candidate.get().getPassword())) {
-                User authenticatedUser = synchronizeWithPrimaryRepository(candidate.get(), repository);
+            User candidateUser = candidate.get();
+            if (credentialMatches(safePassword, candidateUser.getPasswordHash())) {
+                User userForAuthentication = ensureHashedCredential(candidateUser, safePassword, repository);
+                User authenticatedUser = synchronizeWithPrimaryRepository(userForAuthentication, repository);
                 recordLogin(authenticatedUser);
                 return authenticatedUser;
             }
@@ -109,7 +112,7 @@ public final class AuthenticationService {
         Bidder bidder = new Bidder(
                 "U-BID-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
                 registration.username(),
-                registration.password(),
+                CredentialHasher.hash(registration.password()),
                 registration.email(),
                 0.0
         );
@@ -136,7 +139,7 @@ public final class AuthenticationService {
         Seller seller = new Seller(
                 "U-SEL-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase(),
                 registration.username(),
-                registration.password(),
+                CredentialHasher.hash(registration.password()),
                 registration.email()
         );
         seller.setRole("SELLER");
@@ -296,6 +299,52 @@ public final class AuthenticationService {
         return repositories;
     }
 
+    private boolean credentialMatches(String submittedPassword, String storedCredential) {
+        if (CredentialHasher.isHashed(storedCredential)) {
+            return CredentialHasher.verify(submittedPassword, storedCredential);
+        }
+        return submittedPassword.equals(storedCredential);
+    }
+
+    private User ensureHashedCredential(User user, String submittedPassword, UserRepository sourceRepository) {
+        if (user == null || CredentialHasher.isHashed(user.getPasswordHash())) {
+            return user;
+        }
+
+        User upgradedUser = copyWithCredential(user, CredentialHasher.hash(submittedPassword));
+        if (sourceRepository != null) {
+            boolean updated = sourceRepository.update(upgradedUser);
+            if (!updated) {
+                sourceRepository.save(upgradedUser);
+            }
+        }
+        return upgradedUser;
+    }
+
+    private User copyWithCredential(User source, String credential) {
+        User copy = switch (safeRole(source.getRole())) {
+            case "ADMIN" -> new Admin(source.getId(), source.getUsername(), credential, source.getEmail());
+            case "SELLER" -> new Seller(source.getId(), source.getUsername(), credential, source.getEmail());
+            case "BIDDER" -> new Bidder(
+                    source.getId(),
+                    source.getUsername(),
+                    credential,
+                    source.getEmail(),
+                    source instanceof Bidder bidder ? bidder.getBalance() : 0.0
+            );
+            default -> new Bidder(
+                    source.getId(),
+                    source.getUsername(),
+                    credential,
+                    source.getEmail(),
+                    source instanceof Bidder bidder ? bidder.getBalance() : 0.0
+            );
+        };
+        copy.copyProfileFrom(source);
+        copy.setRole(source.getRole());
+        return copy;
+    }
+
     private UserRepository primaryPersistentRepository() {
         if (repositories.isEmpty()) {
             return null;
@@ -305,21 +354,21 @@ public final class AuthenticationService {
     }
 
     private static Bidder defaultBidder() {
-        Bidder bidder = new Bidder("U-BID-001", "bidder", "bid123", "bidder@demo.local", 10_000.0);
+        Bidder bidder = new Bidder("U-BID-001", "bidder", CredentialHasher.hash("bid123"), "bidder@demo.local", 10_000.0);
         bidder.setRole("BIDDER");
         bidder.setFullName("Primary Bidder");
         return bidder;
     }
 
     private static Seller defaultSeller() {
-        Seller seller = new Seller("U-SEL-001", "seller", "sell123", "seller@demo.local");
+        Seller seller = new Seller("U-SEL-001", "seller", CredentialHasher.hash("sell123"), "seller@demo.local");
         seller.setRole("SELLER");
         seller.setFullName("Primary Seller");
         return seller;
     }
 
     private static Admin defaultAdmin() {
-        Admin admin = new Admin("U-ADM-001", "admin", "admin123", "admin@demo.local");
+        Admin admin = new Admin("U-ADM-001", "admin", CredentialHasher.hash("admin123"), "admin@demo.local");
         admin.setRole("ADMIN");
         admin.setFullName("Primary Admin");
         return admin;
@@ -330,6 +379,10 @@ public final class AuthenticationService {
             return false;
         }
         return repositories.stream().anyMatch(repository -> repository == DemoUserRepository.getInstance());
+    }
+
+    private static String safeRole(String role) {
+        return role == null || role.isBlank() ? "BIDDER" : role.trim().toUpperCase();
     }
 
     private static boolean resolveDemoAccountsEnabled() {

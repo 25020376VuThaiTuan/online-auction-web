@@ -6,6 +6,7 @@ import org.example.model.Bidder;
 import org.example.model.User;
 import org.example.repository.DemoUserRepository;
 import org.example.repository.UserRepository;
+import org.example.util.CredentialHasher;
 import org.junit.jupiter.api.Test;
 
 import java.util.LinkedHashMap;
@@ -67,7 +68,7 @@ class AuthenticationServiceTest {
 
         assertEquals("PRIMARY-ADMIN", loggedIn.getId());
         assertEquals("ADMIN", loggedIn.getRole());
-        assertEquals("admin123", loggedIn.getPassword());
+        assertTrue(CredentialHasher.verify("admin123", loggedIn.getPassword()));
     }
 
     @Test
@@ -90,7 +91,7 @@ class AuthenticationServiceTest {
 
         User admin = primaryRepository.findByUsername("admin").orElseThrow();
         assertEquals("ADMIN", admin.getRole());
-        assertEquals("admin123", admin.getPassword());
+        assertTrue(CredentialHasher.verify("admin123", admin.getPassword()));
     }
 
     @Test
@@ -187,6 +188,7 @@ class AuthenticationServiceTest {
 
         assertEquals("john.doe", user.getUsername());
         assertEquals("John Doe", user.getFullName());
+        assertTrue(CredentialHasher.verify("secure123", user.getPassword()));
     }
 
     @Test

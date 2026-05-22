@@ -25,12 +25,14 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 
 public final class AuctionWorkflowService {
     private static final AuctionWorkflowService INSTANCE = new AuctionWorkflowService();
@@ -41,11 +43,13 @@ public final class AuctionWorkflowService {
     private final AuctionSettlementService settlementService = AuctionSettlementService.getInstance();
     private final WalletService walletService = WalletService.getInstance();
     
-    private boolean initialized;
+    private final ConcurrentHashMap<String, ReentrantLock> itemLocks = new ConcurrentHashMap<>();
+    
+    private volatile boolean initialized;
     private boolean usingLocalStore;
     private List<Item> items = new ArrayList<>();
-    private Map<String, List<Bid>> bidHistoryByItemId = new HashMap<>();
-    private Map<String, List<AutoBid>> autoBidsByItemId = new HashMap<>();
+    private Map<String, List<Bid>> bidHistoryByItemId = new ConcurrentHashMap<>();
+    private Map<String, List<AutoBid>> autoBidsByItemId = new ConcurrentHashMap<>();
 
     private AuctionWorkflowService() {
     }
@@ -54,7 +58,11 @@ public final class AuctionWorkflowService {
         return INSTANCE;
     }
 
-    public synchronized List<AuctionListEntry> getAuctionListEntries() {
+    private ReentrantLock getLock(String itemId) {
+        return itemLocks.computeIfAbsent(itemId, k -> new ReentrantLock(true));
+    }
+
+    public List<AuctionListEntry> getAuctionListEntries() {
         ensureInitialized();
         refreshFromStoreIfChanged();
 
@@ -77,13 +85,13 @@ public final class AuctionWorkflowService {
         return entries;
     }
 
-    public synchronized List<Item> getAllItems() {
+    public List<Item> getAllItems() {
         ensureInitialized();
         refreshFromStoreIfChanged();
         return new ArrayList<>(items);
     }
 
-    public synchronized List<Item> getPendingApprovalItems() {
+    public List<Item> getPendingApprovalItems() {
         ensureInitialized();
         refreshFromStoreIfChanged();
         return items.stream()
@@ -91,7 +99,7 @@ public final class AuctionWorkflowService {
                 .toList();
     }
 
-    public synchronized List<Item> getItemsForSeller(String sellerId) {
+    public List<Item> getItemsForSeller(String sellerId) {
         ensureInitialized();
         refreshFromStoreIfChanged();
         return items.stream()
@@ -99,70 +107,84 @@ public final class AuctionWorkflowService {
                 .toList();
     }
 
-    public synchronized Optional<Item> findItemById(String itemId) {
+    public Optional<Item> findItemById(String itemId) {
         ensureInitialized();
         refreshFromStoreIfChanged();
         return findItemInternal(itemId);
     }
 
-    public synchronized AuctionSummary getSummary(String itemId) {
+    public AuctionSummary getSummary(String itemId) {
         ensureInitialized();
         refreshFromStoreIfChanged();
         return getSessionForItem(itemId).getSummary();
     }
 
-    public synchronized List<Bid> getBidHistory(String itemId) {
+    public List<Bid> getBidHistory(String itemId) {
         ensureInitialized();
         refreshFromStoreIfChanged();
         return getSessionForItem(itemId).getBids();
     }
 
-    public synchronized BidValidationResult placeBid(String itemId, User user, double amount) {
+    public BidValidationResult placeBid(String itemId, User user, double amount) {
         ensureInitialized();
         refreshFromStoreIfChanged();
         Objects.requireNonNull(user, "user");
 
-        Item item = findItemInternal(itemId)
-                .orElseThrow(() -> new IllegalArgumentException("Auction item not found: " + itemId));
+        ReentrantLock lock = getLock(itemId);
+        lock.lock();
+        try {
+            Item item = findItemInternal(itemId)
+                    .orElseThrow(() -> new IllegalArgumentException("Auction item not found: " + itemId));
 
-        AuctionSession session = getSessionForItem(itemId);
-        double availableBalance = availableBalance(user);
-        BidValidationResult authorizationFailure = bidAuthorizationFailure(
-                item,
-                session.getSummary(),
-                user,
-                amount,
-                hasEntryDeposit(itemId, user),
-                availableBalance
-        );
-        if (authorizationFailure != null) {
-            return authorizationFailure;
-        }
+            AuctionSession session = getSessionForItem(itemId);
+            double availableBalance = bidCapacity(itemId, user);
+            BidValidationResult authorizationFailure = bidAuthorizationFailure(
+                    item,
+                    session.getSummary(),
+                    user,
+                    amount,
+                    hasEntryDeposit(itemId, user),
+                    availableBalance
+            );
+            if (authorizationFailure != null) {
+                return authorizationFailure;
+            }
 
-        Bid bid = new Bid(
-                newBidId(),
-                user.getId(),
-                itemId,
-                amount,
-                LocalDateTime.now()
-        );
+            Bid bid = new Bid(
+                    newBidId(),
+                    user.getId(),
+                    itemId,
+                    amount,
+                    LocalDateTime.now()
+            );
 
-        if (usingLocalStore) {
-            BidValidationResult result = session.submitBid(bid);
-            if (!result.accepted()) {
+            if (usingLocalStore) {
+                String previousLeadingBidderId = leadingBidderId(session.getBids());
+                BidValidationResult result = session.submitBid(bid);
+                if (!result.accepted()) {
+                    return result;
+                }
+                recordLocalBid(item, bid);
+                processLocalAutoBids(item, session, bid.getBidderId());
+                
+                // Update bid hold for the final highest bidder in local store
+                List<Bid> finalBids = session.getBids();
+                if (!finalBids.isEmpty()) {
+                    settlementService.updateBidHold(item, finalBids.get(finalBids.size() - 1), previousLeadingBidderId);
+                }
+                
+                persistLocalStore();
                 return result;
             }
-            recordLocalBid(item, bid);
-            processLocalAutoBids(item, session, bid.getBidderId());
-            persistLocalStore();
-            return result;
-        }
 
-        try {
-            return persistAcceptedBid(item, bid);
-        } catch (SQLException e) {
-            refreshFromStoreIfChanged();
-            throw databaseFailure("Database bid persistence failed", e);
+            try {
+                return persistAcceptedBid(item, bid);
+            } catch (SQLException e) {
+                refreshFromStoreIfChanged();
+                throw databaseFailure("Database bid persistence failed", e);
+            }
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -187,6 +209,7 @@ public final class AuctionWorkflowService {
                             lockedItem.getEndTime(),
                             bidDAO.getBidsForItem(lockedItem.getId())
                     );
+                    String previousLeadingBidderId = leadingBidderId(lockedSession.getBids());
                     BidValidationResult result = lockedSession.submitBid(bid);
                     if (!result.accepted()) {
                         if (originalAutoCommit) {
@@ -203,6 +226,17 @@ public final class AuctionWorkflowService {
                             lockedSession.getStatus().name()
                     );
                     processAutoBids(lockedItem, lockedSession, bidDAO, itemDAO, bid.getBidderId());
+
+                    // Update bid hold for the final winner of this bidding round using the same transaction
+                    List<Bid> finalBids = lockedSession.getBids();
+                    if (!finalBids.isEmpty()) {
+                        settlementService.updateBidHold(
+                                connection,
+                                lockedItem,
+                                finalBids.get(finalBids.size() - 1),
+                                previousLeadingBidderId
+                        );
+                    }
                 }
                 if (originalAutoCommit) {
                     connection.commit();
@@ -210,6 +244,11 @@ public final class AuctionWorkflowService {
                 refreshFromStoreIfChanged();
                 return acceptedResult;
             } catch (SQLException e) {
+                if (originalAutoCommit) {
+                    connection.rollback();
+                }
+                throw e;
+            } catch (RuntimeException e) {
                 if (originalAutoCommit) {
                     connection.rollback();
                 }
@@ -405,7 +444,7 @@ public final class AuctionWorkflowService {
         if (item.isEmpty()) {
             return false;
         }
-        double availableBalance = availableBalance(user);
+        double availableBalance = bidCapacity(itemId, user);
         BidValidationResult authorizationFailure = bidAuthorizationFailure(
                 item.get(),
                 getSessionForItem(itemId).getSummary(),
@@ -702,14 +741,6 @@ public final class AuctionWorkflowService {
         return user != null && settlementService.hasEntryDeposit(itemId, user);
     }
 
-    private double availableBalance(User user) {
-        if (user == null) {
-            return 0.0;
-        }
-        WalletSummary wallet = walletService.getWalletSnapshot(user);
-        return wallet.availableBalance();
-    }
-
     private double autoBidAvailableBalance(String itemId, AutoBid autoBid) {
         if (autoBid == null || autoBid.getBidderId() == null || autoBid.getBidderId().isBlank()) {
             return 0.0;
@@ -718,8 +749,23 @@ public final class AuctionWorkflowService {
         if (bidder.isEmpty()) {
             return 0.0;
         }
-        double availableBalance = availableBalance(bidder.get());
+        double availableBalance = bidCapacity(itemId, bidder.get());
         return settlementService.hasEntryDeposit(itemId, bidder.get()) ? availableBalance : 0.0;
+    }
+
+    private double bidCapacity(String itemId, User user) {
+        if (user == null) {
+            return 0.0;
+        }
+        WalletSummary wallet = walletService.getWalletSnapshot(user);
+        return roundCurrency(wallet.availableBalance() + settlementService.lockedEntryDeposit(itemId, user));
+    }
+
+    private String leadingBidderId(List<Bid> bids) {
+        if (bids == null || bids.isEmpty()) {
+            return null;
+        }
+        return bids.get(bids.size() - 1).getBidderId();
     }
 
     private void recordLocalBid(Item item, Bid bid) {
@@ -731,8 +777,8 @@ public final class AuctionWorkflowService {
         usingLocalStore = true;
         AuctionStore store = dataManager.loadStore();
         items = store.getItems();
-        bidHistoryByItemId = store.getBidHistoryByItemId();
-        autoBidsByItemId = store.getAutoBidsByItemId();
+        bidHistoryByItemId = new ConcurrentHashMap<>(store.getBidHistoryByItemId());
+        autoBidsByItemId = new ConcurrentHashMap<>(store.getAutoBidsByItemId());
         boolean storeChanged = false;
 
         if (items.isEmpty()) {

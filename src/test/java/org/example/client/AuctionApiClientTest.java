@@ -123,6 +123,60 @@ class AuctionApiClientTest {
         }
     }
 
+    @Test
+    void currentUserSnapshotIncludesWalletForNonBidderRoles() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/auth/me", exchange -> {
+            byte[] response = ApiJson.stringify(Map.of(
+                    "user", Map.ofEntries(
+                            Map.entry("id", "seller-1"),
+                            Map.entry("username", "seller"),
+                            Map.entry("email", "seller@test.local"),
+                            Map.entry("role", "SELLER"),
+                            Map.entry("fullName", "Demo Seller"),
+                            Map.entry("phoneNumber", ""),
+                            Map.entry("address", ""),
+                            Map.entry("avatarUrl", ""),
+                            Map.entry("balance", 190.0),
+                            Map.entry("lockedBalance", 0.0),
+                            Map.entry("availableBalance", 190.0),
+                            Map.entry("lockedDeposits", Map.of()),
+                            Map.entry("wallet", Map.of(
+                                    "userId", "seller-1",
+                                    "balance", 190.0,
+                                    "lockedBalance", 0.0,
+                                    "availableBalance", 190.0,
+                                    "pinSet", true,
+                                    "linkedAccounts", List.of(),
+                                    "transactions", List.of()
+                            ))
+                    )
+            )).getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (var responseBody = exchange.getResponseBody()) {
+                responseBody.write(response);
+            }
+        });
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            System.setProperty("auction.api.baseUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/api");
+            AuctionApiClient.CurrentUserSnapshot snapshot = newApiClient().getCurrentUserSnapshot("token");
+
+            assertEquals("SELLER", snapshot.user().getRole());
+            assertEquals(190.0, snapshot.wallet().balance(), 0.001);
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
+    }
+
     private AuctionApiClient newApiClient() throws Exception {
         Constructor<AuctionApiClient> constructor = AuctionApiClient.class.getDeclaredConstructor();
         constructor.setAccessible(true);

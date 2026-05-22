@@ -3,6 +3,7 @@ package org.example.model;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.ObjectInputStream;
+import java.io.ObjectInputFilter;
 import java.io.ObjectOutputStream;
 import java.io.RandomAccessFile;
 import java.nio.channels.Channels;
@@ -101,6 +102,7 @@ public class DataManager {
             long version = resolveVersion(channel);
             channel.position(0L);
             ObjectInputStream ois = new ObjectInputStream(Channels.newInputStream(channel));
+            ois.setObjectInputFilter(this::allowAuctionStoreClass);
             Object loadedObject = ois.readObject();
             return new StoreSnapshot(deserializeStore(loadedObject), version);
         } catch (FileNotFoundException e) {
@@ -128,6 +130,25 @@ public class DataManager {
         }
 
         return AuctionStore.empty();
+    }
+
+    private ObjectInputFilter.Status allowAuctionStoreClass(ObjectInputFilter.FilterInfo filterInfo) {
+        Class<?> serialClass = filterInfo.serialClass();
+        if (serialClass == null) {
+            return ObjectInputFilter.Status.UNDECIDED;
+        }
+        if (serialClass.isArray() || serialClass.isPrimitive()) {
+            return ObjectInputFilter.Status.ALLOWED;
+        }
+
+        String className = serialClass.getName();
+        if (className.startsWith("org.example.model.")
+                || className.startsWith("java.util.")
+                || className.startsWith("java.time.")
+                || className.startsWith("java.lang.")) {
+            return ObjectInputFilter.Status.ALLOWED;
+        }
+        return ObjectInputFilter.Status.REJECTED;
     }
 
     private Optional<StoreSnapshot> writeStoreToDisk(AuctionStore safeStore, Long expectedVersion) {

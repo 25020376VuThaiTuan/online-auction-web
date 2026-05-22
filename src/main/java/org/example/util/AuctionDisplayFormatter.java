@@ -11,7 +11,7 @@ public final class AuctionDisplayFormatter {
     }
 
     public static String formatCurrency(double amount) {
-        return String.format(Locale.US, "$%.2f", amount);
+        return String.format(Locale.US, "$%.2f", MoneyUtils.roundCurrency(amount));
     }
 
     public static String formatDateTime(LocalDateTime value) {

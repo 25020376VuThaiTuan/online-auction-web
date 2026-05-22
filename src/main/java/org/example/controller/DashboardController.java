@@ -8,7 +8,6 @@ import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
 import javafx.scene.chart.LineChart;
-import javafx.scene.chart.XYChart;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
@@ -47,6 +46,7 @@ import org.example.model.WalletTransaction;
 import org.example.service.MarketplaceDashboardService;
 import org.example.state.ApplicationSession;
 import org.example.util.AuctionDisplayFormatter;
+import org.example.util.BidChartUtils;
 import org.example.util.BackgroundExecutorFactory;
 import org.example.util.ResponsiveViewSupport;
 import org.example.util.SceneNavigator;
@@ -62,7 +62,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class DashboardController {
-    private static final DateTimeFormatter CHART_TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static final DateTimeFormatter BID_NOTIFICATION_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM HH:mm:ss");
     private static final DateTimeFormatter DASHBOARD_DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
     private static final java.time.Duration WALLET_PIN_TRUST_DURATION = java.time.Duration.ofMinutes(120);
@@ -437,6 +436,7 @@ public class DashboardController {
         }
 
         configureTables();
+        BidChartUtils.configureLiveBidChart(bidHistoryChart);
         configureRoleTabs();
         bindCurrentUserFields();
         refreshActive = true;
@@ -1369,22 +1369,24 @@ public class DashboardController {
     }
 
     private void refreshAccountSummary(User user) {
+        refreshAccountSummary(user, localWalletSnapshot(user));
+    }
+
+    private void refreshAccountSummary(User user, WalletSummary walletSnapshot) {
         signedInUserLabel.setText(user.getFullName() + " (" + user.getUsername() + ")");
         roleLabel.setText(user.getRole());
         emailLabel.setText(user.getEmail());
         avatarPreviewLabel.setText(user.getAvatarUrl().isBlank() ? "No avatar selected" : user.getAvatarUrl());
-        WalletSummary wallet = openedWalletSummary != null && openedWalletSummary.userId().equals(user.getId())
-                ? walletWithCurrentFinancials(openedWalletSummary, user)
-                : null;
+        WalletSummary wallet = dashboardWallet(user, walletSnapshot);
 
-        if (user instanceof Bidder bidder) {
-            balanceLabel.setText(AuctionDisplayFormatter.formatCurrency(bidder.getBalance()));
-            lockedBalanceLabel.setText(AuctionDisplayFormatter.formatCurrency(bidder.getLockedBalance()));
-            availableBalanceLabel.setText(AuctionDisplayFormatter.formatCurrency(bidder.getAvailableBalance()));
-        } else if (wallet != null) {
+        if (wallet != null) {
             balanceLabel.setText(AuctionDisplayFormatter.formatCurrency(wallet.balance()));
             lockedBalanceLabel.setText(AuctionDisplayFormatter.formatCurrency(wallet.lockedBalance()));
             availableBalanceLabel.setText(AuctionDisplayFormatter.formatCurrency(wallet.availableBalance()));
+        } else if (user instanceof Bidder bidder) {
+            balanceLabel.setText(AuctionDisplayFormatter.formatCurrency(bidder.getBalance()));
+            lockedBalanceLabel.setText(AuctionDisplayFormatter.formatCurrency(bidder.getLockedBalance()));
+            availableBalanceLabel.setText(AuctionDisplayFormatter.formatCurrency(bidder.getAvailableBalance()));
         } else {
             balanceLabel.setText(AuctionDisplayFormatter.formatCurrency(0.0));
             lockedBalanceLabel.setText(AuctionDisplayFormatter.formatCurrency(0.0));
@@ -1393,8 +1395,12 @@ public class DashboardController {
     }
 
     private void refreshWalletSnapshot(User user) {
+        refreshWalletSnapshot(user, localWalletSnapshot(user));
+    }
+
+    private void refreshWalletSnapshot(User user, WalletSummary walletSnapshot) {
         WalletSummary wallet = openedWalletSummary != null && openedWalletSummary.userId().equals(user.getId())
-                ? walletWithCurrentFinancials(openedWalletSummary, user)
+                ? mergeWalletFinancials(openedWalletSummary, walletWithCurrentFinancials(walletSnapshot, user))
                 : null;
         if (wallet != null) {
             openedWalletSummary = wallet;
@@ -1402,7 +1408,12 @@ public class DashboardController {
             return;
         }
 
-        if (user instanceof Bidder bidder) {
+        WalletSummary displayWallet = walletWithCurrentFinancials(walletSnapshot, user);
+        if (displayWallet != null) {
+            walletBalanceLabel.setText(AuctionDisplayFormatter.formatCurrency(displayWallet.balance()));
+            walletLockedLabel.setText(AuctionDisplayFormatter.formatCurrency(displayWallet.lockedBalance()));
+            walletAvailableLabel.setText(AuctionDisplayFormatter.formatCurrency(displayWallet.availableBalance()));
+        } else if (user instanceof Bidder bidder) {
             walletBalanceLabel.setText(AuctionDisplayFormatter.formatCurrency(bidder.getBalance()));
             walletLockedLabel.setText(AuctionDisplayFormatter.formatCurrency(bidder.getLockedBalance()));
             walletAvailableLabel.setText(AuctionDisplayFormatter.formatCurrency(bidder.getAvailableBalance()));
@@ -1411,8 +1422,8 @@ public class DashboardController {
             walletLockedLabel.setText(AuctionDisplayFormatter.formatCurrency(0.0));
             walletAvailableLabel.setText(AuctionDisplayFormatter.formatCurrency(0.0));
         }
-        boolean pinSetKnown = !useApi();
-        boolean pinSet = pinSetKnown && dashboardService.hasWalletPin(user);
+        boolean pinSetKnown = displayWallet != null || !useApi();
+        boolean pinSet = displayWallet != null ? displayWallet.pinSet() : pinSetKnown && dashboardService.hasWalletPin(user);
         walletPinStatusLabel.setText(pinSetKnown
                 ? (pinSet ? "Set" : "Not set")
                 : "Open wallet to verify");
@@ -1442,6 +1453,17 @@ public class DashboardController {
         }
     }
 
+    private WalletSummary localWalletSnapshot(User user) {
+        if (user == null || useApi()) {
+            return null;
+        }
+        try {
+            return dashboardService.getWalletSnapshot(user);
+        } catch (IllegalArgumentException | IllegalStateException ignored) {
+            return null;
+        }
+    }
+
     private void refreshWalletPinSetupState(boolean pinSetKnown, boolean pinSet) {
         setWalletPinButton.setDisable(pinSetKnown && pinSet);
     }
@@ -1456,10 +1478,14 @@ public class DashboardController {
     }
 
     private DashboardSnapshot loadDashboardSnapshot(DashboardLoadContext context) {
-        User refreshedUser = context.useApi()
-                ? apiClient.getCurrentUser(context.apiToken())
+        AuctionApiClient.CurrentUserSnapshot currentUserSnapshot = context.useApi()
+                ? apiClient.getCurrentUserSnapshot(context.apiToken())
                 : null;
+        User refreshedUser = currentUserSnapshot == null ? null : currentUserSnapshot.user();
         User snapshotUser = refreshedUser != null ? refreshedUser : context.currentUser();
+        WalletSummary walletSnapshot = context.useApi()
+                ? (currentUserSnapshot == null ? null : currentUserSnapshot.wallet())
+                : dashboardService.getWalletSnapshot(snapshotUser);
         List<String> notificationLines = context.useApi()
                 ? apiClient.getNotifications(context.apiToken())
                 : dashboardService.getNotifications(snapshotUser).stream()
@@ -1470,7 +1496,7 @@ public class DashboardController {
                 : dashboardService.getAuctionEligibilityEntries(snapshotUser);
         List<Item> sellerItems = loadSellerItems(context, snapshotUser);
         AdminSectionSnapshot adminSection = loadAdminSectionSnapshot(context, snapshotUser);
-        return new DashboardSnapshot(refreshedUser, notificationLines, auctionEntries, sellerItems, adminSection);
+        return new DashboardSnapshot(refreshedUser, walletSnapshot, notificationLines, auctionEntries, sellerItems, adminSection);
     }
 
     private List<Item> loadSellerItems(DashboardLoadContext context, User user) {
@@ -1502,17 +1528,24 @@ public class DashboardController {
                     settlements.add(new AuctionSettlement(
                             settlement.itemId(),
                             settlement.itemName(),
-                            "",
+                            settlement.sellerId(),
                             settlement.winnerBidderId(),
                             settlement.winningBidAmount(),
                             settlement.depositAmount(),
                             settlement.buyerPremiumAmount(),
                             settlement.totalBuyerDue(),
                             settlement.remainingPaymentDue(),
-                            0.0,
-                            0.0,
+                            settlement.adminCommission(),
+                            settlement.sellerPayout(),
                             LocalDateTime.now()
                     ));
+                    AuctionSettlement apiSettlement = settlements.get(settlements.size() - 1);
+                    if (!settlement.status().isBlank()) {
+                        apiSettlement.setStatus(AuctionSettlementStatus.valueOf(settlement.status()));
+                    }
+                    apiSettlement.setLockedRemainingPayment(settlement.lockedRemainingPayment());
+                    apiSettlement.setSellerReleasedAmount(settlement.sellerReleasedAmount());
+                    apiSettlement.setBuyerRefundedAmount(settlement.buyerRefundedAmount());
                 }
             } else {
                 settlements.addAll(dashboardService.getAllSettlements());
@@ -1527,9 +1560,9 @@ public class DashboardController {
     private void applyDashboardSnapshot(DashboardSnapshot snapshot) {
         applyRefreshedUser(snapshot.refreshedUser());
         User user = currentUser();
-        refreshAccountSummary(user);
+        refreshAccountSummary(user, snapshot.walletSnapshot());
         applyNotifications(snapshot.notificationLines());
-        refreshWalletSnapshot(user);
+        refreshWalletSnapshot(user, snapshot.walletSnapshot());
         applyMarketplaceSummary(snapshot.auctionEntries());
         applyAuctionEntries(snapshot.auctionEntries());
         applySellerItems(snapshot.sellerItems(), user);
@@ -1603,7 +1636,10 @@ public class DashboardController {
     }
 
     private WalletSummary walletWithCurrentFinancials(WalletSummary wallet, User user) {
-        if (wallet == null || user == null || !wallet.userId().equals(user.getId()) || !(user instanceof Bidder bidder)) {
+        if (wallet == null || user == null || !wallet.userId().equals(user.getId())) {
+            return wallet;
+        }
+        if (!(user instanceof Bidder bidder)) {
             return wallet;
         }
         return new WalletSummary(
@@ -1614,6 +1650,32 @@ public class DashboardController {
                 wallet.pinSet(),
                 wallet.linkedAccounts(),
                 wallet.transactions()
+        );
+    }
+
+    private WalletSummary dashboardWallet(User user, WalletSummary walletSnapshot) {
+        WalletSummary snapshot = walletWithCurrentFinancials(walletSnapshot, user);
+        if (openedWalletSummary == null || user == null || !openedWalletSummary.userId().equals(user.getId())) {
+            return snapshot;
+        }
+        return mergeWalletFinancials(openedWalletSummary, snapshot);
+    }
+
+    private WalletSummary mergeWalletFinancials(WalletSummary detailWallet, WalletSummary financialWallet) {
+        if (detailWallet == null) {
+            return financialWallet;
+        }
+        if (financialWallet == null || !detailWallet.userId().equals(financialWallet.userId())) {
+            return detailWallet;
+        }
+        return new WalletSummary(
+                detailWallet.userId(),
+                financialWallet.balance(),
+                financialWallet.lockedBalance(),
+                financialWallet.availableBalance(),
+                financialWallet.pinSet(),
+                detailWallet.linkedAccounts(),
+                detailWallet.transactions()
         );
     }
 
@@ -1821,21 +1883,12 @@ public class DashboardController {
         List<Bid> safeHistory = bidHistory == null ? List.of() : bidHistory;
         applyCurrentWinner(safeHistory);
         applyBidNotifications(safeHistory);
-        String signature = bidHistoryChartSignature(safeHistory);
+        String signature = BidChartUtils.signature(safeHistory);
         if (signature.equals(lastBidHistoryChartSignature)) {
             return;
         }
 
-        XYChart.Series<String, Number> series = new XYChart.Series<>();
-        series.setName("Bid history");
-        int index = 1;
-        for (Bid bid : safeHistory) {
-            String timeLabel = bid.getBidTime() == null ? "N/A" : CHART_TIME_FORMATTER.format(bid.getBidTime());
-            String label = String.format(Locale.US, "#%02d %s", index++, timeLabel);
-            series.getData().add(new XYChart.Data<>(label, bid.getAmount()));
-        }
-        bidHistoryChart.getData().clear();
-        bidHistoryChart.getData().add(series);
+        BidChartUtils.applyBidHistory(bidHistoryChart, safeHistory);
         lastBidHistoryChartSignature = signature;
     }
 
@@ -1945,22 +1998,6 @@ public class DashboardController {
     private void clearBidStatusViews() {
         currentWinnerLabel.setText("Current winner: N/A");
         bidNotificationList.setItems(FXCollections.observableArrayList());
-    }
-
-    private String bidHistoryChartSignature(List<Bid> bidHistory) {
-        if (bidHistory == null || bidHistory.isEmpty()) {
-            return "";
-        }
-        StringBuilder signature = new StringBuilder();
-        for (Bid bid : bidHistory) {
-            signature.append(value(bid.getId()))
-                    .append(':')
-                    .append(bid.getAmount())
-                    .append(':')
-                    .append(bid.getBidTime() == null ? "" : bid.getBidTime())
-                    .append('|');
-        }
-        return signature.toString();
     }
 
     private void refreshSelectedAuctionDetailAsync(AuctionEligibilityEntry entry) {
@@ -2479,6 +2516,7 @@ public class DashboardController {
 
     private record DashboardSnapshot(
             User refreshedUser,
+            WalletSummary walletSnapshot,
             List<String> notificationLines,
             List<AuctionEligibilityEntry> auctionEntries,
             List<Item> sellerItems,

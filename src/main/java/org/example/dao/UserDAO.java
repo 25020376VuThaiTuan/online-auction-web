@@ -4,6 +4,7 @@ import org.example.model.Admin;
 import org.example.model.Bidder;
 import org.example.model.Seller;
 import org.example.model.User;
+import org.example.util.MoneyUtils;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -185,7 +186,7 @@ public class UserDAO implements AutoCloseable {
             ps.setString(1, userId);
             ps.setString(2, user.getUsername());
             ps.setString(3, safeEmail(user));
-            ps.setString(4, user.getPassword());
+            ps.setString(4, user.getPasswordHash());
             ps.setString(5, safeRole(user.getRole()));
             ps.setString(6, emptyToNull(user.getFullName()));
             ps.setString(7, emptyToNull(user.getPhoneNumber()));
@@ -210,7 +211,7 @@ public class UserDAO implements AutoCloseable {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, user.getUsername());
             ps.setString(2, safeEmail(user));
-            ps.setString(3, user.getPassword());
+            ps.setString(3, user.getPasswordHash());
             ps.setString(4, safeRole(user.getRole()));
             ps.setString(5, emptyToNull(user.getFullName()));
             ps.setString(6, emptyToNull(user.getPhoneNumber()));
@@ -286,7 +287,7 @@ public class UserDAO implements AutoCloseable {
                         """;
                 try (PreparedStatement ps = conn.prepareStatement(sql)) {
                     ps.setString(1, userId);
-                    ps.setDouble(2, balance);
+                    ps.setBigDecimal(2, MoneyUtils.toDatabaseAmount(balance));
                     ps.executeUpdate();
                 }
             }
@@ -333,8 +334,8 @@ public class UserDAO implements AutoCloseable {
         User user = switch (role) {
             case "ADMIN" -> new Admin(id, username, password, email);
             case "SELLER" -> new Seller(id, username, password, email);
-            case "BIDDER" -> new Bidder(id, username, password, email, rs.getDouble("wallet_balance"));
-            default -> new Bidder(id, username, password, email, rs.getDouble("wallet_balance"));
+            case "BIDDER" -> new Bidder(id, username, password, email, MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("wallet_balance")));
+            default -> new Bidder(id, username, password, email, MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("wallet_balance")));
         };
         user.setRole(role);
         user.setFullName(rs.getString("full_name"));

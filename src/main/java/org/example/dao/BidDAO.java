@@ -2,6 +2,7 @@ package org.example.dao;
 
 import org.example.model.AutoBid;
 import org.example.model.Bid;
+import org.example.util.MoneyUtils;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
@@ -65,7 +66,7 @@ public class BidDAO implements AutoCloseable {
                 ps.setString(1, bid.getId());
                 ps.setString(2, auctionId);
                 ps.setString(3, bid.getBidderId());
-                ps.setDouble(4, bid.getAmount());
+                ps.setBigDecimal(4, MoneyUtils.toDatabaseAmount(bid.getAmount()));
                 ps.setTimestamp(5, Timestamp.valueOf(bidTime(bid)));
                 ps.executeUpdate();
             }
@@ -100,7 +101,7 @@ public class BidDAO implements AutoCloseable {
             while (rs.next()) {
                 String id = rs.getString("id");
                 String bidderId = rs.getString("bidder_id");
-                double amount = rs.getDouble("amount");
+                double amount = MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("amount"));
                 Timestamp timestamp = rs.getTimestamp("placed_at");
                 LocalDateTime bidTime = timestamp == null ? null : timestamp.toLocalDateTime();
                 bids.add(new Bid(id, bidderId, itemId, amount, bidTime));
@@ -121,8 +122,8 @@ public class BidDAO implements AutoCloseable {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, autoBid.getBidderId());
             ps.setString(2, autoBid.getItemId());
-            ps.setDouble(3, autoBid.getMaxLimit());
-            ps.setDouble(4, Math.max(0.0, autoBid.getBidIncrement()));
+            ps.setBigDecimal(3, MoneyUtils.toDatabaseAmount(autoBid.getMaxLimit()));
+            ps.setBigDecimal(4, MoneyUtils.toDatabaseAmount(autoBid.getBidIncrement()));
             ps.executeUpdate();
         }
     }
@@ -136,8 +137,8 @@ public class BidDAO implements AutoCloseable {
             ResultSet rs = ps.executeQuery();
             if (rs.next()) {
                 int id = rs.getInt("id");
-                double maxLimit = rs.getDouble("max_limit");
-                double bidIncrement = rs.getDouble("bid_increment");
+                double maxLimit = MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("max_limit"));
+                double bidIncrement = MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("bid_increment"));
                 return Optional.of(new AutoBid(id, bidderId, itemId, maxLimit, bidIncrement));
             }
         }
@@ -169,8 +170,8 @@ public class BidDAO implements AutoCloseable {
             while (rs.next()) {
                 int id = rs.getInt("id");
                 String bidderId = rs.getString("bidder_id");
-                double maxLimit = rs.getDouble("max_limit");
-                double bidIncrement = rs.getDouble("bid_increment");
+                double maxLimit = MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("max_limit"));
+                double bidIncrement = MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("bid_increment"));
                 autoBids.add(new AutoBid(id, bidderId, itemId, maxLimit, bidIncrement));
             }
         }
@@ -233,7 +234,7 @@ public class BidDAO implements AutoCloseable {
                 WHERE id = ?
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setDouble(1, bid.getAmount());
+            ps.setBigDecimal(1, MoneyUtils.toDatabaseAmount(bid.getAmount()));
             ps.setString(2, bid.getBidderId());
             ps.setString(3, bid.getId());
             ps.setString(4, auctionId);

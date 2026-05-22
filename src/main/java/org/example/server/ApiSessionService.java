@@ -8,9 +8,11 @@ import org.example.service.AuthenticationService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -19,6 +21,8 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public final class ApiSessionService {
     private static final Duration CLEANUP_INTERVAL = Duration.ofMinutes(1);
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final Base64.Encoder TOKEN_ENCODER = Base64.getUrlEncoder().withoutPadding();
 
     private final SessionStore sessionStore;
     private final UserLookup userLookup;
@@ -43,7 +47,7 @@ public final class ApiSessionService {
         expireSessions();
         Instant now = Instant.now();
         Instant expiresAt = now.plusSeconds(tokenLifetimeSeconds);
-        String token = UUID.randomUUID().toString();
+        String token = secureToken();
         sessionStore.save(new StoredSession(
                 UUID.randomUUID().toString(),
                 tokenHash(token),
@@ -120,6 +124,12 @@ public final class ApiSessionService {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("Could not initialize session token hashing.", e);
         }
+    }
+
+    private static String secureToken() {
+        byte[] bytes = new byte[32];
+        SECURE_RANDOM.nextBytes(bytes);
+        return TOKEN_ENCODER.encodeToString(bytes);
     }
 
     private static SessionStore resolveSessionStore() {

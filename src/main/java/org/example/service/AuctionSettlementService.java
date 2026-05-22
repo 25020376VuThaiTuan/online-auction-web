@@ -12,28 +12,31 @@ import org.example.model.Item;
 import org.example.model.User;
 import org.example.model.WalletSummary;
 
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+import java.util.concurrent.ConcurrentHashMap;
+
 public final class AuctionSettlementService {
-    public static final double BUYER_PREMIUM_RATE = 0.03;
+    public static final double SELLER_COMMISSION_RATE = 0.05;
 
     private static final AuctionSettlementService INSTANCE = new AuctionSettlementService();
 
     private final AuthenticationService authenticationService = AuthenticationService.getInstance();
     private final WalletService walletService = WalletService.getInstance();
-    private final Map<String, Map<String, Double>> depositsByAuctionId = new LinkedHashMap<>();
-    private final Map<String, AuctionSettlement> settlementsByAuctionId = new LinkedHashMap<>();
-    private final Map<String, List<UserNotification>> notificationsByUserId = new LinkedHashMap<>();
-    private final Set<String> closedNoWinnerAuctionIds = new HashSet<>();
+    private final Map<String, Map<String, Double>> depositsByAuctionId = new ConcurrentHashMap<>();
+    private final Map<String, String> highestBidderByAuctionId = new ConcurrentHashMap<>();
+    private final Map<String, AuctionSettlement> settlementsByAuctionId = new ConcurrentHashMap<>();
+    private final Map<String, List<UserNotification>> notificationsByUserId = new ConcurrentHashMap<>();
+    private final Set<String> closedNoWinnerAuctionIds = ConcurrentHashMap.newKeySet();
 
     private AuctionSettlementService() {
     }
@@ -42,7 +45,74 @@ public final class AuctionSettlementService {
         return INSTANCE;
     }
 
-    public synchronized AuctionDepositResult lockEntryDeposit(Item item, AuctionSummary summary, User user) {
+    public void updateBidHold(Item item, Bid bid) {
+        updateBidHold(item, bid, null);
+    }
+
+    public void updateBidHold(Item item, Bid bid, String previousBidderId) {
+        try {
+            updateBidHold(null, item, bid, previousBidderId);
+        } catch (SQLException e) {
+            throw new IllegalStateException("Wallet hold update failed: " + e.getMessage(), e);
+        }
+    }
+
+    public void updateBidHold(Connection conn, Item item, Bid bid) throws SQLException {
+        updateBidHold(conn, item, bid, null);
+    }
+
+    public void updateBidHold(Connection conn, Item item, Bid bid, String previousBidderId) throws SQLException {
+        if (item == null || bid == null) {
+            return;
+        }
+
+        String itemId = item.getId();
+        String newBidderId = bid.getBidderId();
+        double newAmount = bid.getAmount();
+
+        // Release the previous highest bidder's hold
+        String bidderToRelease = previousBidderId == null || previousBidderId.isBlank()
+                ? highestBidderByAuctionId.get(itemId)
+                : previousBidderId;
+        if (bidderToRelease != null && !bidderToRelease.equals(newBidderId)) {
+            Optional<User> previousBidder = findUser(bidderToRelease);
+            if (previousBidder.isPresent()) {
+                double amount = walletService.releaseLockedDeposit(
+                        conn,
+                        previousBidder.get(),
+                        itemId,
+                        0.0,
+                        "BID_RELEASE",
+                        itemId,
+                        "Outbid on " + item.getItemName() + ". Hold released."
+                );
+                depositsByAuctionId
+                        .computeIfAbsent(itemId, ignored -> new ConcurrentHashMap<>())
+                        .remove(bidderToRelease);
+                notifyUser(bidderToRelease, "Outbid",
+                        "You have been outbid on " + item.getItemName() + ". Your hold of " + formatAmount(amount) + " was released.");
+            }
+        }
+
+        // Lock the full bid amount for the new highest bidder
+        Optional<User> newBidder = findUser(newBidderId);
+        if (newBidder.isPresent()) {
+            walletService.lockDeposit(
+                    conn,
+                    newBidder.get(),
+                    itemId,
+                    newAmount,
+                    itemId,
+                    "Bid hold for " + item.getItemName() + "."
+            );
+            highestBidderByAuctionId.put(itemId, newBidderId);
+            depositsByAuctionId
+                    .computeIfAbsent(itemId, ignored -> new ConcurrentHashMap<>())
+                    .put(newBidderId, newAmount);
+        }
+    }
+
+    public AuctionDepositResult lockEntryDeposit(Item item, AuctionSummary summary, User user) {
         if (item == null || summary == null) {
             return AuctionDepositResult.rejected("Auction item was not found.", 0.0, 0.0, null);
         }
@@ -79,7 +149,7 @@ public final class AuctionSettlementService {
         walletService.lockDeposit(user, item.getId(), requiredDeposit, item.getId(),
                 "Entry deposit locked for " + item.getItemName() + ".");
         depositsByAuctionId
-                .computeIfAbsent(item.getId(), ignored -> new LinkedHashMap<>())
+                .computeIfAbsent(item.getId(), ignored -> new ConcurrentHashMap<>())
                 .put(user.getId(), requiredDeposit);
         notifyUser(user.getId(), "Deposit locked",
                 "Deposit " + formatAmount(requiredDeposit) + " locked for " + item.getItemName() + ".");
@@ -90,11 +160,11 @@ public final class AuctionSettlementService {
         return AuctionDepositResult.accepted(message, requiredDeposit, requiredDeposit, summary.status());
     }
 
-    public synchronized boolean hasEntryDeposit(String itemId, User user) {
+    public boolean hasEntryDeposit(String itemId, User user) {
         return lockedEntryDeposit(itemId, user) > 0.0;
     }
 
-    public synchronized double lockedEntryDeposit(String itemId, User user) {
+    public double lockedEntryDeposit(String itemId, User user) {
         if (itemId == null || itemId.isBlank() || user == null) {
             return 0.0;
         }
@@ -105,7 +175,7 @@ public final class AuctionSettlementService {
         return Math.max(recorded, walletService.lockedAmount(user, itemId));
     }
 
-    public synchronized Optional<AuctionSettlement> finalizeAuction(
+    public Optional<AuctionSettlement> finalizeAuction(
             Item item,
             AuctionSummary summary,
             List<Bid> bidHistory
@@ -113,8 +183,9 @@ public final class AuctionSettlementService {
         if (item == null || summary == null || summary.status() != AuctionStatus.FINISHED) {
             return Optional.empty();
         }
-        if (settlementsByAuctionId.containsKey(item.getId())) {
-            return Optional.of(settlementsByAuctionId.get(item.getId()));
+        AuctionSettlement existing = settlementsByAuctionId.get(item.getId());
+        if (existing != null) {
+            return Optional.of(existing);
         }
         if (closedNoWinnerAuctionIds.contains(item.getId())) {
             return Optional.empty();
@@ -135,11 +206,10 @@ public final class AuctionSettlementService {
         notifyLosingParticipants(item, participantIds, winnerId);
         double capturedDeposit = captureWinnerDeposit(item, winnerId, deposits.getOrDefault(winnerId, 0.0));
         double winningBid = roundCurrency(summary.currentPrice());
-        double buyerPremium = roundCurrency(winningBid * BUYER_PREMIUM_RATE);
-        double totalBuyerDue = roundCurrency(winningBid + buyerPremium);
+        double adminFee = roundCurrency(winningBid * SELLER_COMMISSION_RATE);
+        double totalBuyerDue = winningBid;
         double remainingDue = roundCurrency(Math.max(0.0, totalBuyerDue - capturedDeposit));
-        double sellerDepositShare = roundCurrency(Math.min(capturedDeposit, winningBid));
-        double adminDepositShare = roundCurrency(Math.max(0.0, capturedDeposit - sellerDepositShare));
+        double sellerPayout = roundCurrency(winningBid - adminFee);
 
         AuctionSettlement settlement = new AuctionSettlement(
                 item.getId(),
@@ -148,14 +218,20 @@ public final class AuctionSettlementService {
                 winnerId,
                 winningBid,
                 capturedDeposit,
-                buyerPremium,
+                0.0, // No buyer premium
                 totalBuyerDue,
                 remainingDue,
-                adminDepositShare,
-                sellerDepositShare,
+                adminFee,
+                sellerPayout,
                 LocalDateTime.now()
         );
-        settlementsByAuctionId.put(item.getId(), settlement);
+        settlementsByAuctionId.putIfAbsent(item.getId(), settlement);
+        settlement = settlementsByAuctionId.get(item.getId());
+
+        // Credit Admin fee immediately upon finalization
+        if (adminFee > 0.0) {
+            creditAdmin(settlement, adminFee, "Admin commission for " + item.getItemName() + ".");
+        }
 
         notifyUser(winnerId, "Auction result ready",
                 "You have won this session. You won " + item.getItemName()
@@ -165,9 +241,9 @@ public final class AuctionSettlementService {
         notifyUser(item.getSellerId(), "Auction finished",
                 item.getItemName() + " has a winner. Wait for buyer admission before confirming the item was sent.");
         notifyAdmins("Auction finished",
-                item.getItemName() + " is locked. Seller payout will be " + formatAmount(winningBid)
-                        + " and admin fee will be " + formatAmount(buyerPremium)
-                        + " after the buyer confirms receipt.");
+                item.getItemName() + " is locked. Seller payout will be " + formatAmount(sellerPayout)
+                        + " and admin commission will be " + formatAmount(adminFee)
+                        + ".");
         return Optional.of(settlement);
     }
 
@@ -272,9 +348,9 @@ public final class AuctionSettlementService {
                         item.getId(),
                         deposits.getOrDefault(bidderId, 0.0),
                         item.getId(),
-                        "Entry deposit released for " + item.getItemName() + ".");
-                notifyUser(bidderId, "Deposit released",
-                        "Deposit " + formatAmount(amount) + " released for " + item.getItemName() + ".");
+                        "Hold released for " + item.getItemName() + ".");
+                notifyUser(bidderId, "Hold released",
+                        "Hold " + formatAmount(amount) + " released for " + item.getItemName() + ".");
             });
         }
     }
@@ -331,8 +407,7 @@ public final class AuctionSettlementService {
 
     private void releaseRemainingPaymentToSeller(AuctionSettlement settlement, String reason) {
         captureBuyerPaymentHold(settlement);
-        double sellerPayout = roundCurrency(settlement.getWinningBidAmount());
-        double adminFee = roundCurrency(settlement.getBuyerPremiumAmount());
+        double sellerPayout = settlement.getSellerPayout(); // Use pre-calculated share
         settlement.setSellerReleasedAmount(sellerPayout);
         settlement.setLockedRemainingPayment(0.0);
         settlement.setReleasedAt(LocalDateTime.now());
@@ -340,16 +415,13 @@ public final class AuctionSettlementService {
         if (sellerPayout > 0.0) {
             creditSeller(settlement, sellerPayout, "Seller payout released for " + settlement.getItemName() + ".");
         }
-        if (adminFee > 0.0) {
-            creditAdmin(settlement, adminFee, "Admin fee released for " + settlement.getItemName() + ".");
-        }
         notifyUser(settlement.getSellerId(), "Payment released",
                 reason + " Seller receives " + formatAmount(sellerPayout) + " for " + settlement.getItemName() + ".");
         notifyUser(settlement.getWinnerBidderId(), "Payment completed",
                 "Payment completed for " + settlement.getItemName() + ". Total charged was "
                         + formatAmount(settlement.getTotalBuyerDue()) + ".");
         notifyAdmins("Payment released",
-                settlement.getItemName() + " payment released to seller with admin fee " + formatAmount(adminFee) + ".");
+                settlement.getItemName() + " payment released to seller.");
     }
 
     private void creditSeller(AuctionSettlement settlement, double amount, String note) {
@@ -365,6 +437,7 @@ public final class AuctionSettlementService {
         notifyUser(admin.getId(), "Admin fee received",
                 "Admin fee " + formatAmount(amount) + " released for " + settlement.getItemName() + ".");
     }
+
 
     private double captureBuyerPaymentHold(AuctionSettlement settlement) {
         double recordedHold = roundCurrency(settlement.getLockedRemainingPayment());

@@ -62,7 +62,7 @@ CREATE TABLE wallet_accounts (
                                  user_id VARCHAR(36) PRIMARY KEY,
                                  balance DECIMAL(15, 2) NOT NULL DEFAULT 0.00,
                                  pin_hash VARCHAR(255) NULL,
-                                 pin_recovery_code VARCHAR(32) NULL,
+                                 pin_recovery_code VARCHAR(255) NULL,
                                  pin_recovery_expires_at DATETIME NULL,
                                  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                                  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,

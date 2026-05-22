@@ -11,35 +11,39 @@ import org.example.model.WalletRecoveryResult;
 import org.example.model.WalletSummary;
 import org.example.model.WalletTransaction;
 import org.example.util.AccountInputValidator;
+import org.example.util.CredentialHasher;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import java.util.concurrent.ConcurrentHashMap;
+
 public final class WalletService {
     private static final WalletService INSTANCE = new WalletService();
     private static final int RECOVERY_CODE_LENGTH = 6;
     private static final String AUTHORIZATION_TOKEN_PREFIX = "wa_";
     private static final double CURRENCY_EPSILON = 0.000001;
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+    private static final Base64.Encoder TOKEN_ENCODER = Base64.getUrlEncoder().withoutPadding();
 
     private final AutomatedEmailService emailService = AutomatedEmailService.getInstance();
-    private final Map<String, String> pinHashesByUserId = new HashMap<>();
-    private final Map<String, String> recoveryCodesByUserId = new HashMap<>();
-    private final Map<String, Double> balancesByUserId = new HashMap<>();
-    private final Map<String, Map<String, Double>> lockedDepositsByUserId = new HashMap<>();
-    private final Map<String, List<WalletTransaction>> transactionsByUserId = new HashMap<>();
-    private final Map<String, List<WalletLinkedAccount>> linkedAccountsByUserId = new HashMap<>();
-    private final Map<String, WalletAuthorizationState> authorizationsByToken = new HashMap<>();
+    private final Map<String, String> pinHashesByUserId = new ConcurrentHashMap<>();
+    private final Map<String, String> recoveryCodesByUserId = new ConcurrentHashMap<>();
+    private final Map<String, Double> balancesByUserId = new ConcurrentHashMap<>();
+    private final Map<String, Map<String, Double>> lockedDepositsByUserId = new ConcurrentHashMap<>();
+    private final Map<String, List<WalletTransaction>> transactionsByUserId = new ConcurrentHashMap<>();
+    private final Map<String, List<WalletLinkedAccount>> linkedAccountsByUserId = new ConcurrentHashMap<>();
+    private final Map<String, WalletAuthorizationState> authorizationsByToken = new ConcurrentHashMap<>();
 
     private WalletService() {
     }
@@ -48,7 +52,7 @@ public final class WalletService {
         return INSTANCE;
     }
 
-    public synchronized WalletSummary getWallet(User user, String pin) {
+    public WalletSummary getWallet(User user, String pin) {
         ensureWallet(user);
         requirePin(user, pin);
         return new WalletSummary(
@@ -62,7 +66,7 @@ public final class WalletService {
         );
     }
 
-    public synchronized WalletSummary getWalletSnapshot(User user) {
+    public WalletSummary getWalletSnapshot(User user) {
         ensureWallet(user);
         return new WalletSummary(
                 user.getId(),
@@ -75,7 +79,7 @@ public final class WalletService {
         );
     }
 
-    public synchronized boolean hasPin(User user) {
+    public boolean hasPin(User user) {
         ensureWallet(user);
         return isPinSet(user);
     }
@@ -133,13 +137,14 @@ public final class WalletService {
     public synchronized WalletRecoveryResult requestPinRecovery(User user) {
         ensureWallet(user);
         String recoveryCode = recoveryCode();
+        String recoveryHash = CredentialHasher.hash(recoveryCode);
         if (databaseEnabled()) {
             try (WalletDAO walletDAO = WalletDAO.fromEnvironment()) {
-                walletDAO.saveRecoveryCode(user.getId(), recoveryCode, LocalDateTime.now().plusMinutes(15));
+                walletDAO.saveRecoveryCode(user.getId(), recoveryHash, LocalDateTime.now().plusMinutes(15));
             } catch (SQLException e) {
                 throw databaseFailure("Wallet recovery save failed", e);
             }
-            recoveryCodesByUserId.put(user.getId(), recoveryCode);
+            recoveryCodesByUserId.put(user.getId(), recoveryHash);
             emailService.sendWalletPinRecovery(user.getEmail(), recoveryCode);
             return new WalletRecoveryResult(
                     true,
@@ -149,7 +154,7 @@ public final class WalletService {
             );
         }
 
-        recoveryCodesByUserId.put(user.getId(), recoveryCode);
+        recoveryCodesByUserId.put(user.getId(), recoveryHash);
         emailService.sendWalletPinRecovery(user.getEmail(), recoveryCode);
         return new WalletRecoveryResult(
                 true,
@@ -206,7 +211,7 @@ public final class WalletService {
             return;
         }
 
-        boolean accepted = recoveryCode != null && recoveryCode.equals(recoveryCodesByUserId.get(user.getId()));
+        boolean accepted = recoveryCodeAccepted(recoveryCode, recoveryCodesByUserId.get(user.getId()));
         if (!accepted) {
             throw new IllegalArgumentException("Wallet PIN recovery code is invalid or expired.");
         }
@@ -220,7 +225,7 @@ public final class WalletService {
                 ? Duration.ofMinutes(120)
                 : duration;
         WalletAuthorization authorization = new WalletAuthorization(
-                AUTHORIZATION_TOKEN_PREFIX + UUID.randomUUID(),
+                AUTHORIZATION_TOKEN_PREFIX + secureToken(32),
                 LocalDateTime.now().plus(safeDuration)
         );
         authorizationsByToken.put(authorization.token(), new WalletAuthorizationState(user.getId(), authorization.expiresAt()));
@@ -236,7 +241,7 @@ public final class WalletService {
         if (pinHash.isEmpty() || pinHash.get().isBlank()) {
             throw new IllegalStateException("Set a wallet PIN before opening the wallet or making transactions.");
         }
-        if (pin == null || pin.isBlank() || !pinHash.get().equals(hashPin(user.getId(), pin))) {
+        if (pin == null || pin.isBlank() || !pinAccepted(user, pin, pinHash.get())) {
             throw new IllegalArgumentException("Wallet PIN is incorrect.");
         }
     }
@@ -447,27 +452,52 @@ public final class WalletService {
             String note
     ) {
         ensureWallet(user, true);
-        if (holdKey == null || holdKey.isBlank()) {
-            throw new IllegalArgumentException("A valid auction reference is required for a wallet hold.");
+        validateHoldKey(holdKey);
+
+        if (databaseEnabled()) {
+            try (Connection conn = DatabaseConfig.fromEnvironment().openConnection()) {
+                boolean originalAutoCommit = conn.getAutoCommit();
+                try {
+                    if (originalAutoCommit) {
+                        conn.setAutoCommit(false);
+                    }
+                    double lockedAmount = lockDepositInTransaction(conn, user, holdKey, totalHoldAmount, referenceId, note);
+                    if (originalAutoCommit) {
+                        conn.commit();
+                    }
+                    return lockedAmount;
+                } catch (SQLException | RuntimeException e) {
+                    if (originalAutoCommit) {
+                        conn.rollback();
+                    }
+                    throw e;
+                } finally {
+                    if (originalAutoCommit) {
+                        conn.setAutoCommit(true);
+                    }
+                }
+            } catch (SQLException e) {
+                throw databaseFailure("Wallet hold save failed", e);
+            }
         }
 
-        double safeTotalHoldAmount = roundCurrency(totalHoldAmount);
-        double existingHold = heldAmount(user, holdKey, 0.0);
-        double additionalHold = roundCurrency(Math.max(0.0, safeTotalHoldAmount - existingHold));
-        if (additionalHold > availableBalanceOf(user)) {
-            throw new IllegalArgumentException("Wallet available balance is not enough for this hold.");
-        }
+        return lockDepositInMemory(user, holdKey, totalHoldAmount, referenceId, note);
+    }
 
-        if (user instanceof Bidder bidder) {
-            bidder.lockDeposit(holdKey, safeTotalHoldAmount);
-            AuthenticationService.getInstance().updateUser(bidder);
+    synchronized double lockDeposit(
+            Connection conn,
+            User user,
+            String holdKey,
+            double totalHoldAmount,
+            String referenceId,
+            String note
+    ) throws SQLException {
+        if (conn == null) {
+            return lockDeposit(user, holdKey, totalHoldAmount, referenceId, note);
         }
-        lockedDepositsFor(user).put(holdKey, safeTotalHoldAmount);
-        persistHold(user, holdKey, safeTotalHoldAmount, referenceId, note);
-        if (additionalHold > 0.0) {
-            recordLedgerEvent(user, "BID_HOLD", additionalHold, referenceId, note);
-        }
-        return safeTotalHoldAmount;
+        ensureWallet(user, true);
+        validateHoldKey(holdKey);
+        return lockDepositInTransaction(conn, user, holdKey, totalHoldAmount, referenceId, note);
     }
 
     synchronized double releaseLockedDeposit(
@@ -489,6 +519,69 @@ public final class WalletService {
             String note
     ) {
         ensureWallet(user, true);
+        validateHoldKey(holdKey);
+        if (databaseEnabled()) {
+            try (Connection conn = DatabaseConfig.fromEnvironment().openConnection()) {
+                boolean originalAutoCommit = conn.getAutoCommit();
+                try {
+                    if (originalAutoCommit) {
+                        conn.setAutoCommit(false);
+                    }
+                    double releasedAmount = releaseLockedDepositInTransaction(
+                            conn,
+                            user,
+                            holdKey,
+                            fallbackAmount,
+                            transactionType,
+                            referenceId,
+                            note
+                    );
+                    if (originalAutoCommit) {
+                        conn.commit();
+                    }
+                    return releasedAmount;
+                } catch (SQLException | RuntimeException e) {
+                    if (originalAutoCommit) {
+                        conn.rollback();
+                    }
+                    throw e;
+                } finally {
+                    if (originalAutoCommit) {
+                        conn.setAutoCommit(true);
+                    }
+                }
+            } catch (SQLException e) {
+                throw databaseFailure("Wallet hold removal failed", e);
+            }
+        }
+        return releaseLockedDepositInMemory(user, holdKey, fallbackAmount, transactionType, referenceId, note);
+    }
+
+    synchronized double releaseLockedDeposit(
+            Connection conn,
+            User user,
+            String holdKey,
+            double fallbackAmount,
+            String transactionType,
+            String referenceId,
+            String note
+    ) throws SQLException {
+        if (conn == null) {
+            return releaseLockedDeposit(user, holdKey, fallbackAmount, transactionType, referenceId, note);
+        }
+        ensureWallet(user, true);
+        validateHoldKey(holdKey);
+        return releaseLockedDepositInTransaction(conn, user, holdKey, fallbackAmount, transactionType, referenceId, note);
+    }
+
+    private double releaseLockedDepositInMemory(
+            User user,
+            String holdKey,
+            double fallbackAmount,
+            String transactionType,
+            String referenceId,
+            String note
+    ) {
         double amount = heldAmount(user, holdKey, fallbackAmount);
         if (amount <= 0.0) {
             return 0.0;
@@ -501,6 +594,86 @@ public final class WalletService {
         lockedDepositsFor(user).remove(holdKey);
         deleteHold(user, holdKey);
         recordLedgerEvent(user, transactionType, amount, referenceId, note);
+        return amount;
+    }
+
+    private double lockDepositInMemory(
+            User user,
+            String holdKey,
+            double totalHoldAmount,
+            String referenceId,
+            String note
+    ) {
+        double safeTotalHoldAmount = roundCurrency(totalHoldAmount);
+        double existingHold = heldAmount(user, holdKey, 0.0);
+        double additionalHold = roundCurrency(Math.max(0.0, safeTotalHoldAmount - existingHold));
+        if (additionalHold > availableBalanceOf(user)) {
+            throw new IllegalArgumentException("Wallet available balance is not enough for this hold.");
+        }
+
+        syncHoldState(user, holdKey, safeTotalHoldAmount, true);
+        persistHold(user, holdKey, safeTotalHoldAmount, referenceId, note);
+        if (additionalHold > 0.0) {
+            recordLedgerEvent(user, "BID_HOLD", additionalHold, referenceId, note);
+        }
+        return safeTotalHoldAmount;
+    }
+
+    private double lockDepositInTransaction(
+            Connection conn,
+            User user,
+            String holdKey,
+            double totalHoldAmount,
+            String referenceId,
+            String note
+    ) throws SQLException {
+        WalletDAO walletDAO = new WalletDAO(conn);
+        double balance = lockWalletRow(walletDAO, user);
+        Map<String, Double> holds = walletDAO.listHolds(user.getId());
+        double existingHold = roundCurrency(holds.getOrDefault(holdKey, 0.0));
+        double safeTotalHoldAmount = roundCurrency(totalHoldAmount);
+        double additionalHold = roundCurrency(Math.max(0.0, safeTotalHoldAmount - existingHold));
+        double availableBalance = roundCurrency(Math.max(0.0, balance - lockedBalanceOf(holds)));
+        if (additionalHold > availableBalance) {
+            throw new IllegalArgumentException("Wallet available balance is not enough for this hold.");
+        }
+
+        if (safeTotalHoldAmount <= 0.0) {
+            walletDAO.deleteHold(user.getId(), holdKey);
+        } else {
+            walletDAO.upsertHold(user.getId(), holdKey, referenceId, safeTotalHoldAmount, note);
+        }
+
+        if (additionalHold > 0.0) {
+            addLedgerEvent(walletDAO, user, "BID_HOLD", additionalHold, balance, referenceId, note);
+        }
+        syncHoldState(user, holdKey, safeTotalHoldAmount, false);
+        return safeTotalHoldAmount;
+    }
+
+    private double releaseLockedDepositInTransaction(
+            Connection conn,
+            User user,
+            String holdKey,
+            double fallbackAmount,
+            String transactionType,
+            String referenceId,
+            String note
+    ) throws SQLException {
+        WalletDAO walletDAO = new WalletDAO(conn);
+        double balance = lockWalletRow(walletDAO, user);
+        Map<String, Double> holds = walletDAO.listHolds(user.getId());
+        double amount = roundCurrency(holds.getOrDefault(holdKey, 0.0));
+        if (amount <= 0.0) {
+            amount = roundCurrency(Math.max(0.0, Math.min(fallbackAmount, lockedDepositsFor(user).getOrDefault(holdKey, 0.0))));
+        }
+        if (amount <= 0.0) {
+            return 0.0;
+        }
+
+        walletDAO.deleteHold(user.getId(), holdKey);
+        addLedgerEvent(walletDAO, user, transactionType, amount, balance, referenceId, note);
+        syncHoldState(user, holdKey, 0.0, false);
         return amount;
     }
 
@@ -574,6 +747,75 @@ public final class WalletService {
             }
         }
         transactionsByUserId.computeIfAbsent(user.getId(), ignored -> new ArrayList<>()).add(0, transaction);
+    }
+
+    private double lockWalletRow(WalletDAO walletDAO, User user) throws SQLException {
+        walletDAO.ensureWallet(user, balanceOf(user));
+        double balance = walletDAO.findBalanceForUpdate(user.getId()).orElse(balanceOf(user));
+        balancesByUserId.put(user.getId(), balance);
+        if (user instanceof Bidder bidder) {
+            bidder.setBalance(balance);
+        }
+        return balance;
+    }
+
+    private void addLedgerEvent(
+            WalletDAO walletDAO,
+            User user,
+            String transactionType,
+            double amount,
+            double balance,
+            String referenceId,
+            String note
+    ) throws SQLException {
+        WalletTransaction transaction = walletTransaction(
+                user,
+                transactionType,
+                amount,
+                balance,
+                balance,
+                referenceId,
+                note
+        );
+        walletDAO.addTransaction(transaction);
+        transactionsByUserId.computeIfAbsent(user.getId(), ignored -> new ArrayList<>()).add(0, transaction);
+    }
+
+    private void syncHoldState(User user, String holdKey, double amount, boolean persistUser) {
+        double safeAmount = roundCurrency(amount);
+        if (safeAmount <= 0.0) {
+            lockedDepositsFor(user).remove(holdKey);
+            if (user instanceof Bidder bidder) {
+                bidder.releaseDeposit(holdKey);
+                if (persistUser) {
+                    AuthenticationService.getInstance().updateUser(bidder);
+                }
+            }
+            return;
+        }
+
+        lockedDepositsFor(user).put(holdKey, safeAmount);
+        if (user instanceof Bidder bidder) {
+            bidder.lockDeposit(holdKey, safeAmount);
+            if (persistUser) {
+                AuthenticationService.getInstance().updateUser(bidder);
+            }
+        }
+    }
+
+    private double lockedBalanceOf(Map<String, Double> holds) {
+        if (holds == null || holds.isEmpty()) {
+            return 0.0;
+        }
+        return holds.values().stream()
+                .mapToDouble(amount -> roundCurrency(amount == null ? 0.0 : amount))
+                .sum();
+    }
+
+    private void validateHoldKey(String holdKey) {
+        if (holdKey == null || holdKey.isBlank()) {
+            throw new IllegalArgumentException("A valid auction reference is required for a wallet hold.");
+        }
     }
 
     private void applyTransaction(User user, String transactionType, double amountDelta, String referenceId, String note) {
@@ -988,25 +1230,46 @@ public final class WalletService {
     }
 
     private String hashPin(String userId, String pin) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest((userId + ":" + pin).getBytes(StandardCharsets.UTF_8));
-            StringBuilder builder = new StringBuilder(hash.length * 2);
-            for (byte value : hash) {
-                builder.append(String.format("%02x", value));
-            }
-            return builder.toString();
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 is unavailable.", e);
-        }
+        return CredentialHasher.hash(pin);
     }
 
     private String recoveryCode() {
-        String raw = String.valueOf(Math.abs(UUID.randomUUID().hashCode()));
-        if (raw.length() >= RECOVERY_CODE_LENGTH) {
-            return raw.substring(0, RECOVERY_CODE_LENGTH);
+        return String.format("%0" + RECOVERY_CODE_LENGTH + "d", SECURE_RANDOM.nextInt(1_000_000));
+    }
+
+    private boolean pinAccepted(User user, String pin, String storedHash) {
+        if (CredentialHasher.isHashed(storedHash)) {
+            return CredentialHasher.verify(pin, storedHash);
         }
-        return String.format("%1$" + RECOVERY_CODE_LENGTH + "s", raw).replace(' ', '0');
+
+        boolean accepted = CredentialHasher.sha256Hex(user.getId() + ":" + pin).equals(storedHash);
+        if (accepted) {
+            String upgradedHash = hashPin(user.getId(), pin);
+            pinHashesByUserId.put(user.getId(), upgradedHash);
+            if (databaseEnabled()) {
+                try (WalletDAO walletDAO = WalletDAO.fromEnvironment()) {
+                    walletDAO.updatePinHash(user.getId(), upgradedHash);
+                } catch (SQLException e) {
+                    throw databaseFailure("Wallet PIN hash upgrade failed", e);
+                }
+            }
+        }
+        return accepted;
+    }
+
+    private boolean recoveryCodeAccepted(String recoveryCode, String storedHash) {
+        if (recoveryCode == null || recoveryCode.isBlank() || storedHash == null || storedHash.isBlank()) {
+            return false;
+        }
+        return CredentialHasher.isHashed(storedHash)
+                ? CredentialHasher.verify(recoveryCode, storedHash)
+                : recoveryCode.equals(storedHash);
+    }
+
+    private String secureToken(int byteCount) {
+        byte[] bytes = new byte[byteCount];
+        SECURE_RANDOM.nextBytes(bytes);
+        return TOKEN_ENCODER.encodeToString(bytes);
     }
 
     private boolean databaseEnabled() {
