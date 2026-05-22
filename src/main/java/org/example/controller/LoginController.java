@@ -1,7 +1,9 @@
 package org.example.controller;
 
+import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
@@ -10,12 +12,19 @@ import org.example.exception.InvalidPasswordException;
 import org.example.exception.UserNotFound;
 import org.example.service.AuthenticationService;
 import org.example.state.ApplicationSession;
+import org.example.util.BackgroundExecutorFactory;
 import org.example.util.SceneNavigator;
+
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutorService;
 
 public class LoginController {
     private final AuctionApiClient apiClient;
     private final AuthenticationService authenticationService;
     private final ApplicationSession applicationSession;
+    private final ExecutorService connectionTestExecutor =
+            BackgroundExecutorFactory.newSingleThreadExecutor("api-connection-test");
 
     public LoginController() {
         this(
@@ -40,6 +49,9 @@ public class LoginController {
 
     @FXML
     private PasswordField passwordField;
+
+    @FXML
+    private Button testConnectionButton;
 
     @FXML
     private Label hintLabel;
@@ -81,6 +93,35 @@ public class LoginController {
     }
 
     @FXML
+    private void handleTestConnection() {
+        if (!apiClient.isEnabled()) {
+            showAlert(
+                    Alert.AlertType.INFORMATION,
+                    "API not configured",
+                    "AUCTION_API_BASE_URL is not set. The app will use local demo data until an API base URL is configured."
+            );
+            return;
+        }
+
+        String previousText = testConnectionButton.getText();
+        testConnectionButton.setText("Testing...");
+        testConnectionButton.setDisable(true);
+
+        CompletableFuture
+                .supplyAsync(apiClient::testConnection, connectionTestExecutor)
+                .whenComplete((result, throwable) -> Platform.runLater(() -> {
+                    testConnectionButton.setText(previousText);
+                    testConnectionButton.setDisable(false);
+
+                    if (throwable == null) {
+                        showConnectionSuccess(result);
+                    } else {
+                        showConnectionFailure(unwrapCompletionException(throwable));
+                    }
+                }));
+    }
+
+    @FXML
     private void handleOpenRegistration() {
         SceneNavigator.switchScene(usernameField, "/view/Register.fxml", "Create Account");
     }
@@ -109,6 +150,36 @@ public class LoginController {
                         + "AUCTION_API_BASE_URL is not set.",
                 cause
         );
+    }
+
+    private void showConnectionSuccess(AuctionApiClient.ConnectionTestResult result) {
+        String serverTime = result.serverTime().isBlank() ? "" : "\nServer time: " + result.serverTime();
+        showAlert(
+                Alert.AlertType.INFORMATION,
+                "API connection successful",
+                "Connected to " + result.baseUrl() + "." + serverTime
+        );
+    }
+
+    private void showConnectionFailure(Throwable failure) {
+        if (failure instanceof AuctionApiClient.ApiClientException apiFailure) {
+            showAlert(
+                    Alert.AlertType.WARNING,
+                    AuctionApiClient.isConnectivityFailure(apiFailure) ? "API unavailable" : "API health check failed",
+                    apiFailure.getMessage()
+            );
+            return;
+        }
+
+        showAlert(Alert.AlertType.WARNING, "API health check failed", failureMessage(failure));
+    }
+
+    private Throwable unwrapCompletionException(Throwable throwable) {
+        Throwable current = throwable;
+        while (current instanceof CompletionException && current.getCause() != null) {
+            current = current.getCause();
+        }
+        return current;
     }
 
     private void showAlert(Alert.AlertType type, String title, String content) {

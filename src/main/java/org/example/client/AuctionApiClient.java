@@ -66,6 +66,16 @@ public final class AuctionApiClient {
         return baseUrl != null && !baseUrl.isBlank();
     }
 
+    public ConnectionTestResult testConnection() {
+        Map<String, Object> response = request("GET", "/health", null, null);
+        String status = stringValue(response.get("status"));
+        if (!"ok".equalsIgnoreCase(status)) {
+            throw new ApiClientException("Auction API health check returned unexpected status: "
+                    + (status.isBlank() ? "missing" : status) + ".");
+        }
+        return new ConnectionTestResult(baseUrl, status, stringValue(response.get("serverTime")));
+    }
+
     public static boolean isConnectivityFailure(ApiClientException exception) {
         Throwable current = exception;
         while (current != null) {
@@ -992,6 +1002,9 @@ public final class AuctionApiClient {
     }
 
     public record CurrentUserSnapshot(User user, WalletSummary wallet) {
+    }
+
+    public record ConnectionTestResult(String baseUrl, String status, String serverTime) {
     }
 
     public static class ApiClientException extends RuntimeException {

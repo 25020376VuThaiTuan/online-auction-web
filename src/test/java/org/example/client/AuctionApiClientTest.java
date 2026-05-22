@@ -46,6 +46,76 @@ class AuctionApiClientTest {
     }
 
     @Test
+    void testConnectionUsesHealthEndpoint() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicReference<String> requestMethod = new AtomicReference<>();
+        server.createContext("/api/health", exchange -> {
+            requestMethod.set(exchange.getRequestMethod());
+            byte[] response = ApiJson.stringify(Map.of(
+                    "status", "ok",
+                    "serverTime", "2026-05-22T16:00:00"
+            )).getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (var responseBody = exchange.getResponseBody()) {
+                responseBody.write(response);
+            }
+        });
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/api";
+            System.setProperty("auction.api.baseUrl", baseUrl);
+            AuctionApiClient.ConnectionTestResult result = newApiClient().testConnection();
+
+            assertEquals("GET", requestMethod.get());
+            assertEquals(baseUrl, result.baseUrl());
+            assertEquals("ok", result.status());
+            assertEquals("2026-05-22T16:00:00", result.serverTime());
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void testConnectionRejectsUnexpectedHealthStatus() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/health", exchange -> {
+            byte[] response = ApiJson.stringify(Map.of("status", "starting")).getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (var responseBody = exchange.getResponseBody()) {
+                responseBody.write(response);
+            }
+        });
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            System.setProperty("auction.api.baseUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/api");
+            AuctionApiClient.ApiClientException exception = assertThrows(
+                    AuctionApiClient.ApiClientException.class,
+                    () -> newApiClient().testConnection()
+            );
+
+            assertTrue(exception.getMessage().contains("unexpected status"));
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
+    }
+
+    @Test
     void addWalletAccountSendsInitialBalance() throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         AtomicReference<String> requestBody = new AtomicReference<>();
