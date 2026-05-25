@@ -103,6 +103,44 @@ class WalletApiIntegrationTest {
     }
 
     @Test
+    void corsOnlyAllowsConfiguredOrigins() throws Exception {
+        String previousOrigin = System.getProperty("auction.api.allowedOrigin");
+        try {
+            System.setProperty("auction.api.allowedOrigin", "https://auction.example.test");
+
+            HttpResponse<String> rejected = rawOptions("/health", "https://evil.example.test");
+            assertEquals(204, rejected.statusCode());
+            assertTrue(rejected.headers().firstValue("Access-Control-Allow-Origin").isEmpty());
+
+            HttpResponse<String> accepted = rawOptions("/health", "https://auction.example.test");
+            assertEquals(204, accepted.statusCode());
+            assertEquals(
+                    "https://auction.example.test",
+                    accepted.headers().firstValue("Access-Control-Allow-Origin").orElse("")
+            );
+        } finally {
+            if (previousOrigin == null) {
+                System.clearProperty("auction.api.allowedOrigin");
+            } else {
+                System.setProperty("auction.api.allowedOrigin", previousOrigin);
+            }
+        }
+    }
+
+    @Test
+    void sseEndpointRejectsQueryTokens() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/events/stream?token=query-token"))
+                .GET()
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(401, response.statusCode());
+        assertTrue(response.body().contains("Missing bearer token."));
+    }
+
+    @Test
     void registeredBidderStartsWithZeroBalance() throws Exception {
         LoginResult login = login();
 
@@ -144,6 +182,15 @@ class WalletApiIntegrationTest {
         }
         builder.method(method, HttpRequest.BodyPublishers.ofString(ApiJson.stringify(body)));
         return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> rawOptions(String path, String origin) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + path))
+                .header("Origin", origin)
+                .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+                .build();
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
     private record LoginResult(String token, String userId, double balance, String fullName) {

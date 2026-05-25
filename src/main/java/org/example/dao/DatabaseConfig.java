@@ -9,15 +9,22 @@ public record DatabaseConfig(String jdbcUrl, String username, String password) {
     private static final String URL_ENV = "AUCTION_DB_URL";
     private static final String USER_ENV = "AUCTION_DB_USER";
     private static final String PASSWORD_ENV = "AUCTION_DB_PASSWORD";
+    private static final String DISABLED_PROPERTY = "auction.db.disabled";
     private static final String JDBC_MYSQL_PREFIX = "jdbc:mysql://";
 
     public static boolean hasEnvironmentConfig() {
+        if (isDisabled()) {
+            return false;
+        }
         return hasText(System.getenv(URL_ENV))
                 && hasText(System.getenv(USER_ENV))
                 && hasText(System.getenv(PASSWORD_ENV));
     }
 
     public static String environmentProblem() {
+        if (isDisabled()) {
+            return null;
+        }
         String jdbcUrl = System.getenv(URL_ENV);
         String username = System.getenv(USER_ENV);
         String password = System.getenv(PASSWORD_ENV);
@@ -32,6 +39,9 @@ public record DatabaseConfig(String jdbcUrl, String username, String password) {
     }
 
     public static DatabaseConfig fromEnvironment() throws SQLException {
+        if (isDisabled()) {
+            throw new SQLException("Database config is disabled by " + DISABLED_PROPERTY + ".");
+        }
         String problem = environmentProblem();
         if (problem != null) {
             throw new SQLException(problem);
@@ -102,5 +112,9 @@ public record DatabaseConfig(String jdbcUrl, String username, String password) {
 
     private static boolean hasText(String value) {
         return value != null && !value.isBlank();
+    }
+
+    private static boolean isDisabled() {
+        return Boolean.parseBoolean(System.getProperty(DISABLED_PROPERTY, "false"));
     }
 }

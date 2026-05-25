@@ -188,8 +188,7 @@ public final class AuctionApiClient {
         return new WalletRecoveryResult(
                 booleanValue(payload.get("accepted")),
                 stringValue(payload.get("message")),
-                stringValue(payload.get("email")),
-                stringValue(payload.get("recoveryCode"))
+                stringValue(payload.get("email"))
         );
     }
 

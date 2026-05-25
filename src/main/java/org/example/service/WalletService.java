@@ -18,8 +18,10 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -32,11 +34,13 @@ public final class WalletService {
     private static final WalletService INSTANCE = new WalletService();
     private static final int RECOVERY_CODE_LENGTH = 6;
     private static final String AUTHORIZATION_TOKEN_PREFIX = "wa_";
+    private static final int MAX_PIN_FAILURES = 5;
+    private static final Duration PIN_FAILURE_WINDOW = Duration.ofMinutes(15);
     private static final double CURRENCY_EPSILON = 0.000001;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
     private static final Base64.Encoder TOKEN_ENCODER = Base64.getUrlEncoder().withoutPadding();
 
-    private final AutomatedEmailService emailService = AutomatedEmailService.getInstance();
+    private final RecoveryCodeSender recoveryCodeSender;
     private final Map<String, String> pinHashesByUserId = new ConcurrentHashMap<>();
     private final Map<String, String> recoveryCodesByUserId = new ConcurrentHashMap<>();
     private final Map<String, Double> balancesByUserId = new ConcurrentHashMap<>();
@@ -44,8 +48,17 @@ public final class WalletService {
     private final Map<String, List<WalletTransaction>> transactionsByUserId = new ConcurrentHashMap<>();
     private final Map<String, List<WalletLinkedAccount>> linkedAccountsByUserId = new ConcurrentHashMap<>();
     private final Map<String, WalletAuthorizationState> authorizationsByToken = new ConcurrentHashMap<>();
+    private final AttemptLimiter pinAttemptLimiter = new AttemptLimiter(MAX_PIN_FAILURES, PIN_FAILURE_WINDOW);
+    private final AttemptLimiter recoveryAttemptLimiter = new AttemptLimiter(MAX_PIN_FAILURES, PIN_FAILURE_WINDOW);
 
     private WalletService() {
+        this(AutomatedEmailService.getInstance()::sendWalletPinRecovery);
+    }
+
+    WalletService(RecoveryCodeSender recoveryCodeSender) {
+        this.recoveryCodeSender = recoveryCodeSender == null
+                ? (email, code) -> { }
+                : recoveryCodeSender;
     }
 
     public static WalletService getInstance() {
@@ -94,7 +107,7 @@ public final class WalletService {
 
     private void savePin(User user, String newPin, String note) {
         validatePin(newPin);
-        String pinHash = hashPin(user.getId(), newPin);
+        String pinHash = hashPin(newPin);
         if (databaseEnabled()) {
             try (Connection conn = DatabaseConfig.fromEnvironment().openConnection()) {
                 boolean originalAutoCommit = conn.getAutoCommit();
@@ -145,30 +158,29 @@ public final class WalletService {
                 throw databaseFailure("Wallet recovery save failed", e);
             }
             recoveryCodesByUserId.put(user.getId(), recoveryHash);
-            emailService.sendWalletPinRecovery(user.getEmail(), recoveryCode);
+            recoveryCodeSender.sendWalletPinRecovery(user.getEmail(), recoveryCode);
             return new WalletRecoveryResult(
                     true,
                     "A wallet PIN recovery code was sent to the account email.",
-                    user.getEmail(),
-                    recoveryCode
+                    user.getEmail()
             );
         }
 
         recoveryCodesByUserId.put(user.getId(), recoveryHash);
-        emailService.sendWalletPinRecovery(user.getEmail(), recoveryCode);
+        recoveryCodeSender.sendWalletPinRecovery(user.getEmail(), recoveryCode);
         return new WalletRecoveryResult(
                 true,
                 "A wallet PIN recovery code was sent to the account email.",
-                user.getEmail(),
-                recoveryCode
+                user.getEmail()
         );
     }
 
     public synchronized void resetPinWithRecoveryCode(User user, String recoveryCode, String newPin) {
         ensureWallet(user);
         validatePin(newPin);
+        requireRecoveryAttemptAllowed(user.getId());
         if (databaseEnabled()) {
-            String pinHash = hashPin(user.getId(), newPin);
+            String pinHash = hashPin(newPin);
             try (Connection conn = DatabaseConfig.fromEnvironment().openConnection()) {
                 boolean originalAutoCommit = conn.getAutoCommit();
                 try {
@@ -179,6 +191,7 @@ public final class WalletService {
                     boolean accepted = walletDAO.consumeRecoveryCode(user.getId(), recoveryCode);
                     if (!accepted) {
                         conn.rollback();
+                        recordRecoveryFailure(user.getId());
                         throw new IllegalArgumentException("Wallet PIN recovery code is invalid or expired.");
                     }
                     walletDAO.updatePinHash(user.getId(), pinHash);
@@ -196,6 +209,7 @@ public final class WalletService {
                     conn.commit();
                     recoveryCodesByUserId.remove(user.getId());
                     pinHashesByUserId.put(user.getId(), pinHash);
+                    recoveryAttemptLimiter.reset(user.getId());
                     transactionsByUserId.computeIfAbsent(user.getId(), ignored -> new ArrayList<>()).add(0, transaction);
                 } catch (SQLException | RuntimeException e) {
                     if (!conn.getAutoCommit()) {
@@ -213,9 +227,11 @@ public final class WalletService {
 
         boolean accepted = recoveryCodeAccepted(recoveryCode, recoveryCodesByUserId.get(user.getId()));
         if (!accepted) {
+            recordRecoveryFailure(user.getId());
             throw new IllegalArgumentException("Wallet PIN recovery code is invalid or expired.");
         }
         recoveryCodesByUserId.remove(user.getId());
+        recoveryAttemptLimiter.reset(user.getId());
         savePin(user, newPin, "Wallet PIN was reset.");
     }
 
@@ -241,9 +257,12 @@ public final class WalletService {
         if (pinHash.isEmpty() || pinHash.get().isBlank()) {
             throw new IllegalStateException("Set a wallet PIN before opening the wallet or making transactions.");
         }
+        requirePinAttemptAllowed(user.getId());
         if (pin == null || pin.isBlank() || !pinAccepted(user, pin, pinHash.get())) {
+            recordPinFailure(user.getId());
             throw new IllegalArgumentException("Wallet PIN is incorrect.");
         }
+        pinAttemptLimiter.reset(user.getId());
     }
 
     public synchronized void recordTransaction(
@@ -1229,7 +1248,27 @@ public final class WalletService {
         return value == null ? "" : value.trim();
     }
 
-    private String hashPin(String userId, String pin) {
+    private void requirePinAttemptAllowed(String userId) {
+        if (!pinAttemptLimiter.canAttempt(userId)) {
+            throw new IllegalArgumentException("Too many wallet PIN attempts. Try again later.");
+        }
+    }
+
+    private void recordPinFailure(String userId) {
+        pinAttemptLimiter.recordFailure(userId);
+    }
+
+    private void requireRecoveryAttemptAllowed(String userId) {
+        if (!recoveryAttemptLimiter.canAttempt(userId)) {
+            throw new IllegalArgumentException("Too many wallet recovery code attempts. Try again later.");
+        }
+    }
+
+    private void recordRecoveryFailure(String userId) {
+        recoveryAttemptLimiter.recordFailure(userId);
+    }
+
+    private String hashPin(String pin) {
         return CredentialHasher.hash(pin);
     }
 
@@ -1244,7 +1283,7 @@ public final class WalletService {
 
         boolean accepted = CredentialHasher.sha256Hex(user.getId() + ":" + pin).equals(storedHash);
         if (accepted) {
-            String upgradedHash = hashPin(user.getId(), pin);
+            String upgradedHash = hashPin(pin);
             pinHashesByUserId.put(user.getId(), upgradedHash);
             if (databaseEnabled()) {
                 try (WalletDAO walletDAO = WalletDAO.fromEnvironment()) {
@@ -1282,6 +1321,47 @@ public final class WalletService {
 
     private IllegalStateException databaseFailure(String operation, SQLException e) {
         return new IllegalStateException(operation + ": " + e.getMessage(), e);
+    }
+
+    @FunctionalInterface
+    interface RecoveryCodeSender {
+        void sendWalletPinRecovery(String email, String recoveryCode);
+    }
+
+    private static final class AttemptLimiter {
+        private final int maxFailures;
+        private final long windowMillis;
+        private final Map<String, Deque<Long>> failuresByKey = new ConcurrentHashMap<>();
+
+        private AttemptLimiter(int maxFailures, Duration window) {
+            this.maxFailures = Math.max(1, maxFailures);
+            this.windowMillis = Math.max(1_000L, window == null ? 60_000L : window.toMillis());
+        }
+
+        private synchronized boolean canAttempt(String key) {
+            return failures(key).size() < maxFailures;
+        }
+
+        private synchronized void recordFailure(String key) {
+            failures(key).addLast(System.currentTimeMillis());
+        }
+
+        private synchronized void reset(String key) {
+            failuresByKey.remove(safeKey(key));
+        }
+
+        private Deque<Long> failures(String key) {
+            long now = System.currentTimeMillis();
+            Deque<Long> failures = failuresByKey.computeIfAbsent(safeKey(key), ignored -> new ArrayDeque<>());
+            while (!failures.isEmpty() && now - failures.peekFirst() > windowMillis) {
+                failures.removeFirst();
+            }
+            return failures;
+        }
+
+        private String safeKey(String key) {
+            return key == null ? "" : key;
+        }
     }
 
     private record WalletAuthorizationState(String userId, LocalDateTime expiresAt) {

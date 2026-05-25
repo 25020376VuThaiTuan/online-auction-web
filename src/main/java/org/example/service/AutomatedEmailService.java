@@ -37,7 +37,7 @@ public final class AutomatedEmailService {
         try {
             sendSmtp(email, subject, body);
         } catch (IOException e) {
-            System.err.println("Wallet PIN recovery email delivery failed: " + e.getMessage());
+            System.err.println("Wallet PIN recovery email delivery failed.");
         }
     }
 

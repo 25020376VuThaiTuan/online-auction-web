@@ -45,9 +45,12 @@ import org.example.model.WalletSummary;
 import org.example.model.WalletTransaction;
 import org.example.service.MarketplaceDashboardService;
 import org.example.state.ApplicationSession;
+import org.example.util.AuctionCatalogFilters;
+import org.example.util.AuctionCatalogFilters.FilterRequest;
 import org.example.util.AuctionDisplayFormatter;
 import org.example.util.BidChartUtils;
 import org.example.util.BackgroundExecutorFactory;
+import org.example.util.CurrencyInputParser;
 import org.example.util.ResponsiveViewSupport;
 import org.example.util.SceneNavigator;
 import org.example.viewmodel.AuctionEligibilityEntry;
@@ -56,7 +59,6 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutorService;
@@ -67,11 +69,33 @@ public class DashboardController {
     private static final DateTimeFormatter DASHBOARD_DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
     private static final java.time.Duration WALLET_PIN_TRUST_DURATION = java.time.Duration.ofMinutes(120);
     private static final int REFRESH_INTERVAL_MILLIS = 3_000;
-    private static final String ALL_STATUSES = "All statuses";
-    private static final String SORT_ENDING_SOON = "Ending soonest";
-    private static final String SORT_PRICE_LOW = "Price low to high";
-    private static final String SORT_PRICE_HIGH = "Price high to low";
-    private static final String SORT_NAME = "Name A to Z";
+    private static final AuctionCatalogFilters.EntryAdapter<AuctionEligibilityEntry> AUCTION_ENTRY_ADAPTER =
+            new AuctionCatalogFilters.EntryAdapter<>() {
+                @Override
+                public String itemId(AuctionEligibilityEntry entry) {
+                    return entry.getItemId();
+                }
+
+                @Override
+                public String itemName(AuctionEligibilityEntry entry) {
+                    return entry.getItemName();
+                }
+
+                @Override
+                public String status(AuctionEligibilityEntry entry) {
+                    return entry.getStatus();
+                }
+
+                @Override
+                public double currentPrice(AuctionEligibilityEntry entry) {
+                    return entry.getCurrentPrice();
+                }
+
+                @Override
+                public long remainingSeconds(AuctionEligibilityEntry entry) {
+                    return entry.getRemainingSeconds();
+                }
+            };
 
     private final AuctionApiClient apiClient = AuctionApiClient.getInstance();
     private final MarketplaceDashboardService dashboardService = MarketplaceDashboardService.getInstance();
@@ -239,6 +263,9 @@ public class DashboardController {
     private TableView<AuctionEligibilityEntry> auctionTable;
 
     @FXML
+    private TableColumn<AuctionEligibilityEntry, String> auctionWatchColumn;
+
+    @FXML
     private TableColumn<AuctionEligibilityEntry, String> auctionNameColumn;
 
     @FXML
@@ -278,6 +305,9 @@ public class DashboardController {
     private CheckBox dashboardAuctionOpenOnlyCheckBox;
 
     @FXML
+    private CheckBox dashboardWatchedOnlyCheckBox;
+
+    @FXML
     private CheckBox dashboardEligibleOnlyCheckBox;
 
     @FXML
@@ -303,6 +333,9 @@ public class DashboardController {
 
     @FXML
     private Button confirmAuctionEntryButton;
+
+    @FXML
+    private Button watchSelectedAuctionButton;
 
     @FXML
     private LineChart<String, Number> bidHistoryChart;
@@ -739,10 +772,35 @@ public class DashboardController {
     @FXML
     private void handleClearAuctionFilters() {
         dashboardAuctionSearchField.clear();
-        dashboardAuctionStatusFilterChoiceBox.setValue(ALL_STATUSES);
-        dashboardAuctionSortChoiceBox.setValue(SORT_ENDING_SOON);
+        dashboardAuctionStatusFilterChoiceBox.setValue(AuctionCatalogFilters.ALL_STATUSES);
+        dashboardAuctionSortChoiceBox.setValue(AuctionCatalogFilters.SORT_ENDING_SOON);
         dashboardAuctionOpenOnlyCheckBox.setSelected(false);
+        dashboardWatchedOnlyCheckBox.setSelected(false);
         dashboardEligibleOnlyCheckBox.setSelected(false);
+        applyAuctionFilters();
+    }
+
+    @FXML
+    private void handleToggleSelectedAuctionWatch() {
+        AuctionEligibilityEntry selected = auctionTable.getSelectionModel().getSelectedItem();
+        if (selected == null) {
+            showAlert(Alert.AlertType.WARNING, "Selection required", "Select an auction first.");
+            return;
+        }
+
+        applicationSession.toggleWatchedAuction(selected.getItemId());
+        applyAuctionFilters();
+    }
+
+    @FXML
+    private void handleWatchVisibleAuctions() {
+        auctionTable.getItems().forEach(entry -> applicationSession.watchAuction(entry.getItemId()));
+        applyAuctionFilters();
+    }
+
+    @FXML
+    private void handleClearWatchedAuctions() {
+        applicationSession.clearWatchedAuctions();
         applyAuctionFilters();
     }
 
@@ -1216,6 +1274,23 @@ public class DashboardController {
                 new SimpleStringProperty(AuctionDisplayFormatter.formatCurrency(cellData.getValue().balance())));
         ResponsiveViewSupport.configureResponsiveTable(walletAccountTable);
 
+        auctionWatchColumn.setCellValueFactory(cellData -> new SimpleStringProperty(
+                applicationSession.isAuctionWatched(cellData.getValue().getItemId()) ? "Watching" : ""
+        ));
+        auctionWatchColumn.setCellFactory(column -> new TableCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                getStyleClass().removeAll("watch-pill", "watch-active");
+                if (empty || item == null || item.isBlank()) {
+                    setText(null);
+                    return;
+                }
+                setText(item);
+                getStyleClass().add("watch-pill");
+                getStyleClass().add("watch-active");
+            }
+        });
         auctionNameColumn.setCellValueFactory(cellData ->
                 new SimpleStringProperty(cellData.getValue().getItemName()));
         auctionStatusColumn.setCellValueFactory(cellData ->
@@ -1229,10 +1304,10 @@ public class DashboardController {
                     setText(null);
                     return;
                 }
-                String normalizedStatus = normalizeStatus(item);
+                String normalizedStatus = AuctionCatalogFilters.normalizeStatus(item);
                 setText(item.replace('_', ' '));
                 getStyleClass().add("status-pill");
-                getStyleClass().add(statusStyleClass(normalizedStatus));
+                getStyleClass().add(AuctionCatalogFilters.statusStyleClass(normalizedStatus));
             }
         });
         auctionCurrentPriceColumn.setCellValueFactory(cellData ->
@@ -1273,10 +1348,12 @@ public class DashboardController {
                 return;
             }
             if (current == null) {
+                updateAuctionWatchAction(null);
                 clearBidSection();
                 return;
             }
             selectedAuctionId = current.getItemId();
+            updateAuctionWatchAction(current);
             boolean selectionChanged = previous == null || !current.getItemId().equals(previous.getItemId());
             showSelectedAuctionSummary(current, selectionChanged);
             refreshSelectedAuctionDetailAsync(current);
@@ -1344,28 +1421,17 @@ public class DashboardController {
     }
 
     private void configureAuctionFilters() {
-        dashboardAuctionStatusFilterChoiceBox.setItems(FXCollections.observableArrayList(
-                ALL_STATUSES,
-                "OPEN",
-                "RUNNING",
-                "FINISHED",
-                "PAID",
-                "CANCELLED"
-        ));
-        dashboardAuctionStatusFilterChoiceBox.setValue(ALL_STATUSES);
+        dashboardAuctionStatusFilterChoiceBox.setItems(FXCollections.observableArrayList(AuctionCatalogFilters.statusOptions()));
+        dashboardAuctionStatusFilterChoiceBox.setValue(AuctionCatalogFilters.ALL_STATUSES);
 
-        dashboardAuctionSortChoiceBox.setItems(FXCollections.observableArrayList(
-                SORT_ENDING_SOON,
-                SORT_PRICE_LOW,
-                SORT_PRICE_HIGH,
-                SORT_NAME
-        ));
-        dashboardAuctionSortChoiceBox.setValue(SORT_ENDING_SOON);
+        dashboardAuctionSortChoiceBox.setItems(FXCollections.observableArrayList(AuctionCatalogFilters.sortOptions()));
+        dashboardAuctionSortChoiceBox.setValue(AuctionCatalogFilters.SORT_ENDING_SOON);
 
         dashboardAuctionSearchField.textProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
         dashboardAuctionStatusFilterChoiceBox.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
         dashboardAuctionSortChoiceBox.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
         dashboardAuctionOpenOnlyCheckBox.selectedProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
+        dashboardWatchedOnlyCheckBox.selectedProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
         dashboardEligibleOnlyCheckBox.selectedProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
     }
 
@@ -1729,7 +1795,7 @@ public class DashboardController {
     private void applyMarketplaceSummary(List<AuctionEligibilityEntry> entries) {
         int total = entries.size();
         int live = (int) entries.stream()
-                .filter(entry -> isOpenStatus(entry.getStatus()))
+                .filter(entry -> AuctionCatalogFilters.isOpenStatus(entry.getStatus()))
                 .count();
         int entered = (int) entries.stream()
                 .filter(AuctionEligibilityEntry::isDepositConfirmed)
@@ -1750,18 +1816,21 @@ public class DashboardController {
 
     private void applyAuctionFilters() {
         String desiredSelectionId = selectedAuctionId;
-        String searchText = normalizeText(dashboardAuctionSearchField.getText());
-        String selectedStatus = dashboardAuctionStatusFilterChoiceBox.getValue();
-        String selectedSort = dashboardAuctionSortChoiceBox.getValue();
-        boolean openOnly = dashboardAuctionOpenOnlyCheckBox.isSelected();
         boolean actionableOnly = dashboardEligibleOnlyCheckBox.isSelected();
 
-        List<AuctionEligibilityEntry> filteredEntries = latestAuctionEntries.stream()
-                .filter(entry -> matchesAuctionSearch(entry, searchText))
-                .filter(entry -> matchesAuctionStatus(entry, selectedStatus))
-                .filter(entry -> !openOnly || isOpenStatus(entry.getStatus()))
+        List<AuctionEligibilityEntry> filteredEntries = AuctionCatalogFilters.filterAndSort(
+                        latestAuctionEntries,
+                        new FilterRequest(
+                                dashboardAuctionSearchField.getText(),
+                                dashboardAuctionStatusFilterChoiceBox.getValue(),
+                                dashboardAuctionSortChoiceBox.getValue(),
+                                dashboardAuctionOpenOnlyCheckBox.isSelected(),
+                                dashboardWatchedOnlyCheckBox.isSelected()
+                        ),
+                        AUCTION_ENTRY_ADAPTER,
+                        applicationSession::isAuctionWatched
+                ).stream()
                 .filter(entry -> !actionableOnly || entry.isEligible() || entry.isDepositConfirmed())
-                .sorted((left, right) -> compareAuctionEntries(left, right, selectedSort))
                 .toList();
 
         suppressAuctionSelectionRefresh = true;
@@ -1782,36 +1851,15 @@ public class DashboardController {
 
         AuctionEligibilityEntry selectedEntry = auctionTable.getSelectionModel().getSelectedItem();
         if (selectedEntry == null) {
+            updateAuctionWatchAction(null);
             clearBidSection();
             return;
         }
 
         selectedAuctionId = selectedEntry.getItemId();
+        updateAuctionWatchAction(selectedEntry);
         showSelectedAuctionSummary(selectedEntry, false);
         refreshSelectedAuctionDetailAsync(selectedEntry);
-    }
-
-    private boolean matchesAuctionSearch(AuctionEligibilityEntry entry, String searchText) {
-        return searchText.isBlank() || normalizeText(entry.getItemName()).contains(searchText);
-    }
-
-    private boolean matchesAuctionStatus(AuctionEligibilityEntry entry, String selectedStatus) {
-        return selectedStatus == null
-                || ALL_STATUSES.equals(selectedStatus)
-                || normalizeStatus(entry.getStatus()).equals(selectedStatus);
-    }
-
-    private int compareAuctionEntries(AuctionEligibilityEntry left, AuctionEligibilityEntry right, String selectedSort) {
-        if (SORT_PRICE_LOW.equals(selectedSort)) {
-            return Double.compare(left.getCurrentPrice(), right.getCurrentPrice());
-        }
-        if (SORT_PRICE_HIGH.equals(selectedSort)) {
-            return Double.compare(right.getCurrentPrice(), left.getCurrentPrice());
-        }
-        if (SORT_NAME.equals(selectedSort)) {
-            return normalizeText(left.getItemName()).compareTo(normalizeText(right.getItemName()));
-        }
-        return Long.compare(left.getRemainingSeconds(), right.getRemainingSeconds());
     }
 
     private void updateAuctionResultsSummary(int visibleCount, int totalCount) {
@@ -1819,11 +1867,24 @@ public class DashboardController {
             auctionResultsSummaryLabel.setText("No auction sessions are available right now.");
             return;
         }
+        if (dashboardWatchedOnlyCheckBox.isSelected() && visibleCount == 0) {
+            auctionResultsSummaryLabel.setText("No watched auction sessions match the current filters.");
+            return;
+        }
         if (visibleCount == totalCount) {
             auctionResultsSummaryLabel.setText(totalCount + " auction sessions available");
             return;
         }
         auctionResultsSummaryLabel.setText("Showing " + visibleCount + " of " + totalCount + " auction sessions");
+    }
+
+    private void updateAuctionWatchAction(AuctionEligibilityEntry entry) {
+        boolean hasSelection = entry != null;
+        watchSelectedAuctionButton.setDisable(!hasSelection);
+        watchSelectedAuctionButton.setText(hasSelection && applicationSession.isAuctionWatched(entry.getItemId())
+                ? "Unwatch"
+                : "Watch");
+        auctionTable.refresh();
     }
 
     private void showSelectedAuctionSummary(AuctionEligibilityEntry entry, boolean clearHistory) {
@@ -1878,6 +1939,7 @@ public class DashboardController {
         registerAutoBidButton.setDisable(true);
         disableAutoBidButton.setDisable(true);
         confirmAuctionEntryButton.setDisable(true);
+        updateAuctionWatchAction(null);
         bidHistoryChart.getData().clear();
         lastBidHistoryChartSignature = null;
         clearBidStatusViews();
@@ -2398,29 +2460,8 @@ public class DashboardController {
         return "ADMIN".equalsIgnoreCase(user.getRole());
     }
 
-    private boolean isOpenStatus(String status) {
-        String normalizedStatus = normalizeStatus(status);
-        return !"FINISHED".equals(normalizedStatus)
-                && !"PAID".equals(normalizedStatus)
-                && !"CANCELLED".equals(normalizedStatus);
-    }
-
-    private String normalizeStatus(String value) {
-        return value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
-    }
-
     private String normalizeText(String value) {
-        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
-    }
-
-    private String statusStyleClass(String status) {
-        return switch (status) {
-            case "RUNNING" -> "status-running";
-            case "FINISHED" -> "status-finished";
-            case "PAID" -> "status-paid";
-            case "CANCELLED" -> "status-cancelled";
-            default -> "status-open";
-        };
+        return AuctionCatalogFilters.normalizeText(value);
     }
 
     private String eligibleStyleClass(String value) {
@@ -2488,15 +2529,11 @@ public class DashboardController {
     }
 
     private double parseAmount(String text) {
-        String normalized = value(text).replace("$", "").replace(",", "");
-        if (normalized.isBlank()) {
-            throw new NumberFormatException("Amount is blank.");
-        }
-        return Double.parseDouble(normalized);
+        return CurrencyInputParser.parseRequiredAmount(text);
     }
 
     private double parseOptionalAmount(String text) {
-        return value(text).isBlank() ? 0.0 : parseAmount(text);
+        return CurrencyInputParser.parseOptionalAmount(text);
     }
 
     private void readyBidAmountInput(double minimumBid, boolean force) {
@@ -2551,7 +2588,7 @@ public class DashboardController {
     }
 
     private String formatAmountInput(double amount) {
-        return String.format(java.util.Locale.US, "%.2f", amount);
+        return CurrencyInputParser.formatAmountInput(amount);
     }
 
     private String formatDateTime(LocalDateTime value) {

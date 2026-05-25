@@ -23,11 +23,12 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public class DataManager {
     private static DataManager instance;
     private static final Path DEFAULT_FILE_PATH = Path.of("data.dat");
+    private static final String DATA_FILE_PROPERTY = "auction.data.file";
     private final Path filePath;
     private final ReadWriteLock fileLock = new ReentrantReadWriteLock();
 
     private DataManager() {
-        this(DEFAULT_FILE_PATH);
+        this(resolveDefaultFilePath());
     }
 
     DataManager(Path filePath) {
@@ -211,5 +212,13 @@ public class DataManager {
             System.err.println("Failed to inspect file version: " + e.getMessage());
             return 0L;
         }
+    }
+
+    private static Path resolveDefaultFilePath() {
+        String configuredPath = System.getProperty(DATA_FILE_PROPERTY);
+        if (configuredPath == null || configuredPath.isBlank()) {
+            return DEFAULT_FILE_PATH;
+        }
+        return Path.of(configuredPath.trim());
     }
 }

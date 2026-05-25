@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -60,14 +61,34 @@ class WalletServiceTest {
 
     @Test
     void recoveryCodeResetsForgottenPin() {
+        AtomicReference<String> deliveredCode = new AtomicReference<>();
+        WalletService recoveryWalletService = new WalletService((email, recoveryCode) -> deliveredCode.set(recoveryCode));
         Bidder bidder = bidder("PIN-RECOVERY", 200.0);
-        walletService.setPin(bidder, "2345");
+        recoveryWalletService.setPin(bidder, "2345");
 
-        WalletRecoveryResult recovery = walletService.requestPinRecovery(bidder);
-        walletService.resetPinWithRecoveryCode(bidder, recovery.recoveryCode(), "3456");
+        WalletRecoveryResult recovery = recoveryWalletService.requestPinRecovery(bidder);
+        recoveryWalletService.resetPinWithRecoveryCode(bidder, deliveredCode.get(), "3456");
 
-        assertThrows(IllegalArgumentException.class, () -> walletService.getWallet(bidder, "2345"));
-        assertEquals(200.0, walletService.getWallet(bidder, "3456").balance());
+        assertEquals(bidder.getEmail(), recovery.email());
+        assertThrows(IllegalArgumentException.class, () -> recoveryWalletService.getWallet(bidder, "2345"));
+        assertEquals(200.0, recoveryWalletService.getWallet(bidder, "3456").balance());
+    }
+
+    @Test
+    void invalidWalletPinAttemptsAreRateLimited() {
+        WalletService isolatedWalletService = new WalletService((email, recoveryCode) -> { });
+        Bidder bidder = bidder("PIN-RATE-LIMIT", 100.0);
+        isolatedWalletService.setPin(bidder, "1234");
+
+        for (int attempt = 0; attempt < 5; attempt++) {
+            assertThrows(IllegalArgumentException.class, () -> isolatedWalletService.getWallet(bidder, "9999"));
+        }
+
+        IllegalArgumentException exception = assertThrows(
+                IllegalArgumentException.class,
+                () -> isolatedWalletService.getWallet(bidder, "9999")
+        );
+        assertEquals("Too many wallet PIN attempts. Try again later.", exception.getMessage());
     }
 
     @Test

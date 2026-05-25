@@ -31,6 +31,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <javafx.version>21.0.6</javafx.version>
         <mysql.version>8.3.0</mysql.version>
+        <jbcrypt.version>0.4</jbcrypt.version>
         <junit.version>5.10.2</junit.version>
         <app.mainClass>org.example.Launcher</app.mainClass>
         <api.server.mainClass>org.example.server.AuctionApiServerMain</api.server.mainClass>
@@ -55,6 +56,12 @@
             <artifactId>mysql-connector-j</artifactId>
             <version>${mysql.version}</version>
             <scope>runtime</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.mindrot</groupId>
+            <artifactId>jbcrypt</artifactId>
+            <version>${jbcrypt.version}</version>
         </dependency>
 
         <dependency>
@@ -86,6 +93,10 @@
                 <version>3.2.5</version>
                 <configuration>
                     <useModulePath>false</useModulePath>
+                    <systemPropertyVariables>
+                        <auction.db.disabled>true</auction.db.disabled>
+                        <auction.data.file>${project.build.directory}/test-data/data.dat</auction.data.file>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>

@@ -14,6 +14,34 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class UtilityCoverageTest {
+    private static final AuctionCatalogFilters.EntryAdapter<CatalogTestEntry> CATALOG_TEST_ADAPTER =
+            new AuctionCatalogFilters.EntryAdapter<>() {
+                @Override
+                public String itemId(CatalogTestEntry entry) {
+                    return entry.id();
+                }
+
+                @Override
+                public String itemName(CatalogTestEntry entry) {
+                    return entry.name();
+                }
+
+                @Override
+                public String status(CatalogTestEntry entry) {
+                    return entry.status();
+                }
+
+                @Override
+                public double currentPrice(CatalogTestEntry entry) {
+                    return entry.currentPrice();
+                }
+
+                @Override
+                public long remainingSeconds(CatalogTestEntry entry) {
+                    return entry.remainingSeconds();
+                }
+            };
+
     @Test
     void accountInputValidatorNormalizesAndRejectsUnsafeRegistrationFields() {
         AccountInputValidator.RegistrationInput input = AccountInputValidator.validateRegistration(
@@ -42,6 +70,43 @@ class UtilityCoverageTest {
         assertEquals("$12.35", AuctionDisplayFormatter.formatCurrency(12.345));
         assertEquals("Ended", AuctionDisplayFormatter.formatRemainingTime(0));
         assertEquals("No deadline", AuctionDisplayFormatter.formatRemainingTime(Long.MAX_VALUE));
+    }
+
+    @Test
+    void currencyInputParserHandlesDecoratedFiniteAmounts() {
+        assertEquals(1234.5, CurrencyInputParser.parseRequiredAmount(" $1,234.50 "), 0.001);
+        assertEquals(0.0, CurrencyInputParser.parseOptionalAmount(" "), 0.001);
+        assertEquals("12.35", CurrencyInputParser.formatAmountInput(12.345));
+        assertThrows(NumberFormatException.class, () -> CurrencyInputParser.parseRequiredAmount(""));
+        assertThrows(NumberFormatException.class, () -> CurrencyInputParser.parseRequiredAmount("NaN"));
+        assertThrows(NumberFormatException.class, () -> CurrencyInputParser.parseRequiredAmount("Infinity"));
+    }
+
+    @Test
+    void auctionCatalogFiltersSearchStatusWatchAndSortConsistently() {
+        List<CatalogTestEntry> entries = List.of(
+                new CatalogTestEntry("A-1", "Vintage Camera", "RUNNING", 120.0, 400L),
+                new CatalogTestEntry("A-2", "Studio Lamp", "FINISHED", 40.0, 0L),
+                new CatalogTestEntry("A-3", "Camera Lens", "OPEN", 75.0, 200L)
+        );
+
+        List<CatalogTestEntry> filtered = AuctionCatalogFilters.filterAndSort(
+                entries,
+                new AuctionCatalogFilters.FilterRequest(
+                        "camera",
+                        AuctionCatalogFilters.ALL_STATUSES,
+                        AuctionCatalogFilters.SORT_WATCHED_FIRST,
+                        true,
+                        false
+                ),
+                CATALOG_TEST_ADAPTER,
+                itemId -> "A-3".equals(itemId)
+        );
+
+        assertEquals(List.of("A-3", "A-1"), filtered.stream().map(CatalogTestEntry::id).toList());
+        assertTrue(AuctionCatalogFilters.isOpenStatus(" running "));
+        assertFalse(AuctionCatalogFilters.isOpenStatus("paid"));
+        assertEquals("status-cancelled", AuctionCatalogFilters.statusStyleClass("cancelled"));
     }
 
     @Test
@@ -88,5 +153,14 @@ class UtilityCoverageTest {
         } finally {
             executor.shutdownNow();
         }
+    }
+
+    private record CatalogTestEntry(
+            String id,
+            String name,
+            String status,
+            double currentPrice,
+            long remainingSeconds
+    ) {
     }
 }

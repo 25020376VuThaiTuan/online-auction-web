@@ -84,20 +84,23 @@ class ApiPayloadFactoryTest {
     }
 
     @Test
-    void recoveryPayloadDoesNotExposeCodeByDefault() {
-        System.clearProperty("auction.dev.exposeRecoveryCode");
+    void recoveryPayloadNeverExposesRecoveryCode() {
+        System.setProperty("auction.dev.exposeRecoveryCode", "true");
         ApiPayloadFactory payloadFactory = new ApiPayloadFactory(
                 AuctionWorkflowService.getInstance(),
                 MarketplaceDashboardService.getInstance()
         );
 
-        Map<String, Object> payload = payloadFactory.walletRecovery(new WalletRecoveryResult(
-                true,
-                "Recovery email sent.",
-                "user@test.local",
-                "123456"
-        ));
+        try {
+            Map<String, Object> payload = payloadFactory.walletRecovery(new WalletRecoveryResult(
+                    true,
+                    "Recovery email sent.",
+                    "user@test.local"
+            ));
 
-        assertFalse(payload.containsKey("recoveryCode"));
+            assertFalse(payload.containsKey("recoveryCode"));
+        } finally {
+            System.clearProperty("auction.dev.exposeRecoveryCode");
+        }
     }
 }

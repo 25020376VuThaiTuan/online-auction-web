@@ -307,7 +307,7 @@ public final class AuthenticationService {
     }
 
     private User ensureHashedCredential(User user, String submittedPassword, UserRepository sourceRepository) {
-        if (user == null || CredentialHasher.isHashed(user.getPasswordHash())) {
+        if (user == null || !CredentialHasher.needsRehash(user.getPasswordHash())) {
             return user;
         }
 

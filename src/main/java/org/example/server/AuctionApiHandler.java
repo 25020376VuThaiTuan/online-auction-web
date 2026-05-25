@@ -46,6 +46,7 @@ public final class AuctionApiHandler implements HttpHandler {
     private final AuctionRealtimeBroker realtimeBroker;
     private final SimpleRateLimiter loginRateLimiter = new SimpleRateLimiter(10, Duration.ofMinutes(1));
     private final SimpleRateLimiter walletRecoveryRateLimiter = new SimpleRateLimiter(5, Duration.ofMinutes(15));
+    private final SimpleRateLimiter walletPinResetRateLimiter = new SimpleRateLimiter(5, Duration.ofMinutes(15));
 
     public AuctionApiHandler(
             AuthenticationService authenticationService,
@@ -63,15 +64,15 @@ public final class AuctionApiHandler implements HttpHandler {
 
     @Override
     public void handle(HttpExchange exchange) throws IOException {
-        addCorsHeaders(exchange.getResponseHeaders());
-
-        if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
-            exchange.sendResponseHeaders(204, -1);
-            exchange.close();
-            return;
-        }
+        addCorsHeaders(exchange);
 
         try {
+            requireSecureTransport(exchange);
+            if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(204, -1);
+                exchange.close();
+                return;
+            }
             route(exchange);
         } catch (ApiHttpException e) {
             sendJson(exchange, e.statusCode(), jsonObject(
@@ -338,6 +339,7 @@ public final class AuctionApiHandler implements HttpHandler {
                 && "pin".equals(segments.get(3))
                 && "reset".equals(segments.get(4))) {
             requireMethod(exchange, "POST");
+            requireRateLimit(walletPinResetRateLimiter, clientKey(exchange, currentUser.getId()), "Too many wallet PIN reset attempts. Try again later.");
             Map<String, Object> request = ApiJson.parseObject(readRequestBody(exchange));
             dashboardService.resetWalletPin(
                     currentUser,
@@ -826,7 +828,7 @@ public final class AuctionApiHandler implements HttpHandler {
         }
 
         requireMethod(exchange, "GET");
-        User user = requireAuthenticatedUser(exchange, queryTokensAllowed());
+        User user = requireAuthenticatedUser(exchange, false);
         Headers headers = exchange.getResponseHeaders();
         headers.set("Content-Type", "text/event-stream; charset=UTF-8");
         headers.set("Cache-Control", "no-cache");
@@ -958,6 +960,18 @@ public final class AuctionApiHandler implements HttpHandler {
         }
     }
 
+    private void requireSecureTransport(HttpExchange exchange) {
+        if (exchange.getRemoteAddress() != null
+                && exchange.getRemoteAddress().getAddress() != null
+                && exchange.getRemoteAddress().getAddress().isLoopbackAddress()) {
+            return;
+        }
+        String forwardedProto = exchange.getRequestHeaders().getFirst("X-Forwarded-Proto");
+        if (!"https".equalsIgnoreCase(forwardedProto == null ? "" : forwardedProto.trim())) {
+            throw new ApiHttpException(403, "HTTPS is required.");
+        }
+    }
+
     private void sendJson(HttpExchange exchange, int statusCode, Map<String, Object> payload) throws IOException {
         byte[] responseBytes = ApiJson.stringify(payload).getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
@@ -969,27 +983,35 @@ public final class AuctionApiHandler implements HttpHandler {
         }
     }
 
-    private void addCorsHeaders(Headers headers) {
-        headers.set("Access-Control-Allow-Origin", allowedCorsOrigin());
+    private void addCorsHeaders(HttpExchange exchange) {
+        Headers headers = exchange.getResponseHeaders();
+        String allowedOrigin = allowedCorsOrigin(exchange.getRequestHeaders().getFirst("Origin"));
+        if (allowedOrigin != null) {
+            headers.set("Access-Control-Allow-Origin", allowedOrigin);
+        }
         headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
         headers.set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
         headers.set("Vary", "Origin");
     }
 
-    private boolean queryTokensAllowed() {
-        String configured = System.getProperty("auction.api.allowQueryTokens");
-        if (configured == null || configured.isBlank()) {
-            configured = System.getenv("AUCTION_API_ALLOW_QUERY_TOKENS");
+    private String allowedCorsOrigin(String requestOrigin) {
+        if (requestOrigin == null || requestOrigin.isBlank()) {
+            return null;
         }
-        return configured != null && Boolean.parseBoolean(configured.trim());
-    }
-
-    private String allowedCorsOrigin() {
         String configured = System.getProperty("auction.api.allowedOrigin");
         if (configured == null || configured.isBlank()) {
             configured = System.getenv("AUCTION_API_ALLOWED_ORIGIN");
         }
-        return configured == null || configured.isBlank() ? "*" : configured.trim();
+        if (configured == null || configured.isBlank()) {
+            return null;
+        }
+        for (String allowedOrigin : configured.split(",")) {
+            String trimmed = allowedOrigin.trim();
+            if (!trimmed.equals("*") && trimmed.equalsIgnoreCase(requestOrigin.trim())) {
+                return trimmed;
+            }
+        }
+        return null;
     }
 
     private String formatDateTime(LocalDateTime value) {

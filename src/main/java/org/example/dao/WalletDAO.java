@@ -216,7 +216,10 @@ public class WalletDAO implements AutoCloseable {
         }
     }
 
-    public void saveRecoveryCode(String userId, String recoveryCode, LocalDateTime expiresAt) throws SQLException {
+    public void saveRecoveryCode(String userId, String recoveryCodeHash, LocalDateTime expiresAt) throws SQLException {
+        if (!CredentialHasher.isHashed(recoveryCodeHash)) {
+            throw new IllegalArgumentException("Wallet recovery codes must be stored as hashes.");
+        }
         String sql = """
                 UPDATE wallet_accounts
                 SET pin_recovery_code = ?,
@@ -225,7 +228,7 @@ public class WalletDAO implements AutoCloseable {
                 WHERE user_id = ?
                 """;
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, recoveryCode);
+            ps.setString(1, recoveryCodeHash);
             ps.setTimestamp(2, Timestamp.valueOf(expiresAt));
             ps.setString(3, userId);
             ps.executeUpdate();
