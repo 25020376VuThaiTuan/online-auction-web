@@ -112,6 +112,7 @@ class ApiRoleWorkflowIntegrationTest {
         assertNotNull(item);
 
         Item approved = adminClient.updateItemApproval(admin.token(), item.getId(), ApprovalStatus.APPROVED);
+        assertNotNull(approved);
         assertEquals(ApprovalStatus.APPROVED, approved.getApprovalStatus());
         sellerClient.startAuction(seller.token(), item.getId());
 

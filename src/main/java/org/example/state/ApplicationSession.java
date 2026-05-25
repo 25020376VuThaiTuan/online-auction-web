@@ -137,7 +137,6 @@ public final class ApplicationSession {
         if (trustedWalletUserId == null
                 || trustedWalletAuthorizationToken == null
                 || trustedWalletAuthorizationExpiresAt == null
-                || userId == null
                 || !trustedWalletUserId.equals(userId)
                 || trustedWalletAuthorizationExpiresAt.isBefore(LocalDateTime.now())) {
             clearTrustedWalletAuthorization();

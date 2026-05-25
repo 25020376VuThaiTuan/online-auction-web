@@ -8,10 +8,7 @@ import java.util.List;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 class UtilityCoverageTest {
     private static final AuctionCatalogFilters.EntryAdapter<CatalogTestEntry> CATALOG_TEST_ADAPTER =
@@ -127,7 +124,7 @@ class UtilityCoverageTest {
         List<Bid> changed = List.of(new Bid("bid-1", "bidder-1", "item-1", 130.0, time));
 
         assertEquals(BidChartUtils.signature(first), BidChartUtils.signature(second));
-        assertFalse(BidChartUtils.signature(first).equals(BidChartUtils.signature(changed)));
+        assertNotEquals(BidChartUtils.signature(first), BidChartUtils.signature(changed));
     }
 
     @Test
