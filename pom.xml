@@ -138,29 +138,3 @@
         </plugins>
     </build>
 </project>
-<dependency>
-    <groupId>org.junit.jupiter</groupId>
-    <artifactId>junit-jupiter</artifactId>
-    <version>5.10.2</version>
-    <scope>test</scope>
-</dependency>
-
-<dependency>
-    <groupId>org.mockito</groupId>
-    <artifactId>mockito-core</artifactId>
-    <version>5.11.0</version>
-    <scope>test</scope>
-</dependency>
-
-<dependency>
-    <groupId>org.testfx</groupId>
-    <artifactId>testfx-junit5</artifactId>
-    <version>4.0.18</version>
-    <scope>test</scope>
-</dependency>
-
-<dependency>
-    <groupId>com.h2database</groupId>
-    <artifactId>h2</artifactId>
-    <scope>test</scope>
-</dependency>
