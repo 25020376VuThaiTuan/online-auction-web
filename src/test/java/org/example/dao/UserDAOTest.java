@@ -10,6 +10,7 @@ import java.sql.DriverManager;
 import java.sql.Statement;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -21,7 +22,8 @@ class UserDAOTest {
     @BeforeEach
     void setUp() throws Exception {
         connection = DriverManager.getConnection(
-                "jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1",
+                "jdbc:h2:mem:user_dao_" + UUID.randomUUID()
+                        + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE",
                 "sa",
                 ""
         );

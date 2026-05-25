@@ -1,6 +1,5 @@
 package org.example.controller;
 
-// Removed JavaFX JFXPanel dependency for tests to avoid requiring JavaFX on classpath
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
@@ -19,7 +18,7 @@ class LoginControllerTest {
 
     @BeforeAll
     static void initToolkit() {
-                // no-op: avoid initializing JavaFX toolkit to keep tests independent of JavaFX runtime
+        JavaFxTestSupport.startToolkit();
     }
 
     @BeforeEach

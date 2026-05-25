@@ -31,6 +31,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <javafx.version>21.0.6</javafx.version>
         <mysql.version>8.3.0</mysql.version>
+        <h2.version>2.2.224</h2.version>
         <jbcrypt.version>0.4</jbcrypt.version>
         <junit.version>5.10.2</junit.version>
         <app.mainClass>org.example.Launcher</app.mainClass>
@@ -65,6 +66,13 @@
         </dependency>
 
         <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>${h2.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
             <version>${junit.version}</version>
@@ -95,6 +103,7 @@
                     <useModulePath>false</useModulePath>
                     <systemPropertyVariables>
                         <auction.db.disabled>true</auction.db.disabled>
+                        <auction.demoAccounts.enabled>true</auction.demoAccounts.enabled>
                         <auction.data.file>${project.build.directory}/test-data/data.dat</auction.data.file>
                     </systemPropertyVariables>
                 </configuration>

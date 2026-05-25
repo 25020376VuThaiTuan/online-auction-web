@@ -12,6 +12,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -26,7 +27,8 @@ class WalletDAOTest {
     static void beforeAll() throws Exception {
 
         connection = DriverManager.getConnection(
-                "jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1",
+                "jdbc:h2:mem:wallet_dao_" + UUID.randomUUID()
+                        + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE;DB_CLOSE_DELAY=-1",
                 "sa",
                 ""
         );

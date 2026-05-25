@@ -10,6 +10,7 @@ import java.sql.DriverManager;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -26,7 +27,8 @@ class BidDAOTest {
 
         connection =
                 DriverManager.getConnection(
-                        "jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1",
+                        "jdbc:h2:mem:bid_dao_" + UUID.randomUUID()
+                                + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE",
                         "sa",
                         ""
                 );
@@ -36,7 +38,10 @@ class BidDAOTest {
         st.execute("""
                 CREATE TABLE auctions (
                     id VARCHAR(36) PRIMARY KEY,
-                    winner_id VARCHAR(36)
+                    current_price DECIMAL(19,2),
+                    winner_bidder_id VARCHAR(36),
+                    winning_bid_id VARCHAR(36),
+                    updated_at TIMESTAMP
                 )
                 """);
 

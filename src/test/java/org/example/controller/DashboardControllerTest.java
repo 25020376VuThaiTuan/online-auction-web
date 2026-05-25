@@ -1,6 +1,5 @@
 package org.example.controller;
 
-import javafx.application.Platform;
 import javafx.scene.control.*;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,9 +17,7 @@ class DashboardControllerTest {
 
     @BeforeAll
     static void initToolkit() {
-
-        Platform.startup(() -> {
-        });
+        JavaFxTestSupport.startToolkit();
     }
 
     @BeforeEach

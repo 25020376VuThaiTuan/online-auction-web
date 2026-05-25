@@ -18,9 +18,7 @@ class AuctionControllerTest {
 
     @BeforeAll
     static void initToolkit() {
-                // Initialize JavaFX toolkit if available. Keep empty to avoid compile-time
-                // dependency on javafx.embed.swing.JFXPanel in environments where
-                // JavaFX is not present on the classpath.
+        JavaFxTestSupport.startToolkit();
     }
 
     @BeforeEach

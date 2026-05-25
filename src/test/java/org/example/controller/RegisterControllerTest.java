@@ -1,6 +1,5 @@
 package org.example.controller;
 
-// Use reflection to avoid compile-time dependency on JavaFX classes
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
@@ -19,12 +18,7 @@ class RegisterControllerTest {
 
     @BeforeAll
     static void initToolkit() {
-                try {
-                        Class<?> cls = Class.forName("javafx.embed.swing.JFXPanel");
-                        cls.getDeclaredConstructor().newInstance();
-                } catch (Throwable ignored) {
-                        // JavaFX not available on classpath; tests that require it may be skipped
-                }
+        JavaFxTestSupport.startToolkit();
     }
 
     @BeforeEach

@@ -25,7 +25,8 @@ class AuthSessionDAOTest {
 
         connection =
                 DriverManager.getConnection(
-                        "jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1",
+                        "jdbc:h2:mem:auth_session_dao_" + UUID.randomUUID()
+                                + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE",
                         "sa",
                         ""
                 );
