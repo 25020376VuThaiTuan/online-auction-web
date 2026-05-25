@@ -24,4 +24,4 @@ jobs:
           cache: 'maven'
 
       - name: Build and test
-        run: mvn --batch-mode clean test
+        run: xvfb-run -a mvn --batch-mode clean test
