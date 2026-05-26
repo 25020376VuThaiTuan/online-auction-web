@@ -67,7 +67,6 @@ public final class AuctionApiHandler implements HttpHandler {
         addCorsHeaders(exchange);
 
         try {
-            requireSecureTransport(exchange);
             if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
                 exchange.sendResponseHeaders(204, -1);
                 exchange.close();
@@ -957,18 +956,6 @@ public final class AuctionApiHandler implements HttpHandler {
         if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())
                 && !"PATCH".equalsIgnoreCase(exchange.getRequestMethod())) {
             throw new ApiHttpException(405, "Method not allowed.");
-        }
-    }
-
-    private void requireSecureTransport(HttpExchange exchange) {
-        if (exchange.getRemoteAddress() != null
-                && exchange.getRemoteAddress().getAddress() != null
-                && exchange.getRemoteAddress().getAddress().isLoopbackAddress()) {
-            return;
-        }
-        String forwardedProto = exchange.getRequestHeaders().getFirst("X-Forwarded-Proto");
-        if (!"https".equalsIgnoreCase(forwardedProto == null ? "" : forwardedProto.trim())) {
-            throw new ApiHttpException(403, "HTTPS is required.");
         }
     }
 

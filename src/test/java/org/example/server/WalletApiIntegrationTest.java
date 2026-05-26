@@ -106,16 +106,16 @@ class WalletApiIntegrationTest {
     void corsOnlyAllowsConfiguredOrigins() throws Exception {
         String previousOrigin = System.getProperty("auction.api.allowedOrigin");
         try {
-            System.setProperty("auction.api.allowedOrigin", "https://auction.example.test");
+            System.setProperty("auction.api.allowedOrigin", "http://auction.example.test");
 
-            HttpResponse<String> rejected = rawOptions("/health", "https://evil.example.test");
+            HttpResponse<String> rejected = rawOptions("/health", "http://evil.example.test");
             assertEquals(204, rejected.statusCode());
             assertTrue(rejected.headers().firstValue("Access-Control-Allow-Origin").isEmpty());
 
-            HttpResponse<String> accepted = rawOptions("/health", "https://auction.example.test");
+            HttpResponse<String> accepted = rawOptions("/health", "http://auction.example.test");
             assertEquals(204, accepted.statusCode());
             assertEquals(
-                    "https://auction.example.test",
+                    "http://auction.example.test",
                     accepted.headers().firstValue("Access-Control-Allow-Origin").orElse("")
             );
         } finally {

@@ -64,6 +64,8 @@ mvn exec:java
 ```
 
 The Maven exec plugin points this command at `org.example.Launcher`, the same JavaFX entrypoint used by `mvn javafx:run`.
+When `AUCTION_API_BASE_URL` and `AUCTION_DB_*` are not set, the app runs fully offline with local demo storage.
+Use `bidder` / `bid123`, `seller` / `sell123`, or `admin` / `admin123` to sign in, or create a new local bidder or seller account.
 
 Start the standalone API server only when you need that process directly:
 

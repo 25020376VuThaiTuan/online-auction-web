@@ -391,7 +391,7 @@ public final class AuthenticationService {
             configured = System.getenv(DEMO_ACCOUNTS_ENV);
         }
         if (configured == null || configured.isBlank()) {
-            return false;
+            return !JdbcUserRepository.isEnabled();
         }
         return Boolean.parseBoolean(configured.trim());
     }

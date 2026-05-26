@@ -1,6 +1,7 @@
 package org.example.service;
 
 import org.example.exception.InvalidPasswordException;
+import org.example.exception.UserNotFound;
 import org.example.model.Admin;
 import org.example.model.Bidder;
 import org.example.model.User;
@@ -9,6 +10,7 @@ import org.example.repository.UserRepository;
 import org.example.util.CredentialHasher;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Constructor;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +21,40 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AuthenticationServiceTest {
+    @Test
+    void defaultLocalServiceSeedsDemoAccountsWhenNoDatabaseIsConfigured() throws Exception {
+        String previousDemoAccounts = System.getProperty("auction.demoAccounts.enabled");
+        String previousDatabaseDisabled = System.getProperty("auction.db.disabled");
+        try {
+            System.clearProperty("auction.demoAccounts.enabled");
+            System.setProperty("auction.db.disabled", "true");
+            AuthenticationService service = newDefaultAuthenticationService();
+
+            assertEquals("BIDDER", service.loginOrThrow("bidder", "bid123").getRole());
+            assertTrue(service.getLoginHint().contains("bidder/bid123"));
+        } finally {
+            restoreProperty("auction.demoAccounts.enabled", previousDemoAccounts);
+            restoreProperty("auction.db.disabled", previousDatabaseDisabled);
+        }
+    }
+
+    @Test
+    void explicitDemoAccountOptOutKeepsLocalRepositoryEmpty() throws Exception {
+        String previousDemoAccounts = System.getProperty("auction.demoAccounts.enabled");
+        String previousDatabaseDisabled = System.getProperty("auction.db.disabled");
+        try {
+            System.setProperty("auction.demoAccounts.enabled", "false");
+            System.setProperty("auction.db.disabled", "true");
+            AuthenticationService service = newDefaultAuthenticationService();
+
+            assertThrows(UserNotFound.class, () -> service.loginOrThrow("bidder", "bid123"));
+            assertTrue(service.getLoginHint().contains("existing account"));
+        } finally {
+            restoreProperty("auction.demoAccounts.enabled", previousDemoAccounts);
+            restoreProperty("auction.db.disabled", previousDatabaseDisabled);
+        }
+    }
+
     @Test
     void demoAccountsCanLogInWithoutManualRegistration() throws Exception {
         AuthenticationService service = new AuthenticationService(List.of(DemoUserRepository.getInstance()));
@@ -240,6 +276,20 @@ class AuthenticationServiceTest {
         );
 
         assertEquals("Email address is already registered.", exception.getMessage());
+    }
+
+    private AuthenticationService newDefaultAuthenticationService() throws Exception {
+        Constructor<AuthenticationService> constructor = AuthenticationService.class.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        return constructor.newInstance();
+    }
+
+    private static void restoreProperty(String propertyName, String previousValue) {
+        if (previousValue == null) {
+            System.clearProperty(propertyName);
+        } else {
+            System.setProperty(propertyName, previousValue);
+        }
     }
 
     private static class InMemoryUserRepository implements UserRepository {
