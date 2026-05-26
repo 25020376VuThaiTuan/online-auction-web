@@ -185,7 +185,7 @@ public final class AuctionApiServerMain {
                 || containsIgnoreCase(mysqlMessage, "missing required table")
                 || containsIgnoreCase(mysqlMessage, "missing required column")) {
             return "Remote MySQL schema is incomplete for the auction API. "
-                    + "Apply schema.sql and migrations so auction, wallet, and auth session tables are available. "
+                    + "Apply schema.sql so auction, wallet, and auth session tables are available. "
                     + "MySQL said: " + mysqlMessage;
         }
         if (isConnectionSqlState(sqlState)
@@ -347,7 +347,7 @@ public final class AuctionApiServerMain {
             if (!hasTable(metaData, catalog, requiredTable.name())) {
                 throw new SQLException(
                         "Missing required table '" + requiredTable.name()
-                                + "'. Apply schema.sql and migrations before starting the API server.",
+                                + "'. Apply schema.sql before starting the API server.",
                         "42S02",
                         1146
                 );
@@ -356,7 +356,7 @@ public final class AuctionApiServerMain {
                 if (!hasColumn(metaData, catalog, requiredTable.name(), column)) {
                     throw new SQLException(
                             "Missing required column '" + requiredTable.name() + "." + column
-                                    + "'. Apply schema.sql and migrations before starting the API server.",
+                                    + "'. Apply schema.sql before starting the API server.",
                             "42S22",
                             1054
                     );
@@ -371,7 +371,7 @@ public final class AuctionApiServerMain {
         String tableName = "wallet_transactions";
         if (!hasTable(metaData, catalog, tableName)) {
             throw new SQLException(
-                    "Missing required table 'wallet_transactions'. Apply schema.sql and migrations before starting the API server.",
+                    "Missing required table 'wallet_transactions'. Apply schema.sql before starting the API server.",
                     "42S02",
                     1146
             );
@@ -387,7 +387,7 @@ public final class AuctionApiServerMain {
                         + MODERN_WALLET_TRANSACTION_COLUMNS
                         + " or legacy columns "
                         + LEGACY_WALLET_TRANSACTION_COLUMNS
-                        + ". Apply schema.sql and migrations before starting the API server.",
+                        + ". Apply schema.sql before starting the API server.",
                 "42S22",
                 1054
         );
@@ -404,7 +404,7 @@ public final class AuctionApiServerMain {
         try (ResultSet resultSet = metaData.getColumns(catalog, null, "wallet_accounts", "pin_recovery_code")) {
             if (!resultSet.next()) {
                 throw new SQLException(
-                        "Missing required column 'wallet_accounts.pin_recovery_code'. Apply schema.sql and migrations before starting the API server.",
+                        "Missing required column 'wallet_accounts.pin_recovery_code'. Apply schema.sql before starting the API server.",
                         "42S22",
                         1054
                 );
@@ -412,7 +412,7 @@ public final class AuctionApiServerMain {
             int columnSize = resultSet.getInt("COLUMN_SIZE");
             if (columnSize < 255) {
                 throw new SQLException(
-                        "Column 'wallet_accounts.pin_recovery_code' must be at least 255 characters for hashed recovery codes. Apply migration V6.",
+                        "Column 'wallet_accounts.pin_recovery_code' must be at least 255 characters for hashed recovery codes. Apply the latest schema.sql.",
                         "42S22",
                         1054
                 );

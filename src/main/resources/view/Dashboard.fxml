@@ -161,8 +161,8 @@
                                     </HBox>
                                     <HBox alignment="CENTER_LEFT" spacing="10.0">
                                         <TextField fx:id="walletTransferAmountField" prefWidth="160.0" promptText="Amount"/>
-                                        <Button onAction="#handleReceiveWalletMoney" text="Receive Money"/>
-                                        <Button onAction="#handleSendWalletMoney" text="Send Money"/>
+                                        <Button onAction="#handleReceiveWalletMoney" text="Top Up Wallet"/>
+                                        <Button onAction="#handleSendWalletMoney" text="Withdraw to Bank"/>
                                     </HBox>
                                     <TableView fx:id="walletTransactionTable" prefHeight="300.0" VBox.vgrow="ALWAYS">
                                         <columns>
@@ -198,6 +198,10 @@
                                         <Button onAction="#handleSetPrimaryWalletAccount" text="Set Primary"/>
                                         <Button onAction="#handleRemoveWalletAccount" text="Remove Account"/>
                                     </HBox>
+                                    <HBox alignment="CENTER_RIGHT" spacing="10.0">
+                                        <TextField fx:id="walletAccountTopUpAmountField" prefWidth="180.0" promptText="Top-up amount"/>
+                                        <Button onAction="#handleTopUpWalletAccount" text="Top Up Bank Account"/>
+                                    </HBox>
                                 </VBox>
                             </Tab>
                         </tabs>
@@ -215,12 +219,14 @@
                             <ChoiceBox fx:id="dashboardAuctionStatusFilterChoiceBox" prefWidth="150.0"/>
                             <ChoiceBox fx:id="dashboardAuctionSortChoiceBox" prefWidth="170.0"/>
                             <CheckBox fx:id="dashboardAuctionOpenOnlyCheckBox" text="Open only"/>
+                            <CheckBox fx:id="dashboardWatchedOnlyCheckBox" text="Watched only"/>
                             <CheckBox fx:id="dashboardEligibleOnlyCheckBox" text="Actionable only"/>
                             <Button onAction="#handleClearAuctionFilters" text="Clear Filters"/>
                         </HBox>
                         <Label fx:id="auctionResultsSummaryLabel" styleClass="result-summary" text="Loading marketplace view..."/>
                         <TableView fx:id="auctionTable" prefHeight="520.0" VBox.vgrow="ALWAYS">
                             <columns>
+                                <TableColumn fx:id="auctionWatchColumn" prefWidth="90.0" text="Watch"/>
                                 <TableColumn fx:id="auctionNameColumn" prefWidth="220.0" text="Item"/>
                                 <TableColumn fx:id="auctionStatusColumn" prefWidth="120.0" text="Status"/>
                                 <TableColumn fx:id="auctionCurrentPriceColumn" prefWidth="120.0" text="Current Price"/>
@@ -233,6 +239,9 @@
                             </columns>
                         </TableView>
                         <HBox alignment="CENTER_RIGHT" spacing="10.0">
+                            <Button fx:id="watchSelectedAuctionButton" onAction="#handleToggleSelectedAuctionWatch" text="Watch"/>
+                            <Button onAction="#handleWatchVisibleAuctions" text="Watch Visible"/>
+                            <Button onAction="#handleClearWatchedAuctions" text="Clear Watched"/>
                             <Button fx:id="confirmAuctionEntryButton" onAction="#handleConfirmAuctionEntry" text="Confirm Entry Deposit"/>
                             <Button onAction="#handleOpenAuctionDetail" text="Open Bidding Detail"/>
                         </HBox>

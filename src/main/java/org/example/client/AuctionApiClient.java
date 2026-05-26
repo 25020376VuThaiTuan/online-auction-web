@@ -188,8 +188,7 @@ public final class AuctionApiClient {
         return new WalletRecoveryResult(
                 booleanValue(payload.get("accepted")),
                 stringValue(payload.get("message")),
-                stringValue(payload.get("email")),
-                stringValue(payload.get("recoveryCode"))
+                stringValue(payload.get("email"))
         );
     }
 
@@ -258,6 +257,14 @@ public final class AuctionApiClient {
     public WalletSummary sendWalletMoney(String token, String accountId, double amount, String walletPin) {
         Map<String, Object> response = request("POST", "/users/me/wallet/withdraw", token, jsonObject(
                 "accountId", accountId,
+                "amount", amount,
+                "walletPin", walletPin
+        ));
+        return walletFromResponse(response);
+    }
+
+    public WalletSummary topUpWalletAccount(String token, String accountId, double amount, String walletPin) {
+        Map<String, Object> response = request("POST", "/users/me/wallet/accounts/" + segment(accountId) + "/top-up", token, jsonObject(
                 "amount", amount,
                 "walletPin", walletPin
         ));

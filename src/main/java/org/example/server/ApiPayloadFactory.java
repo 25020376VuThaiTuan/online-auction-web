@@ -194,15 +194,11 @@ final class ApiPayloadFactory {
     }
 
     Map<String, Object> walletRecovery(WalletRecoveryResult result) {
-        Map<String, Object> payload = jsonObject(
+        return jsonObject(
                 "accepted", result.accepted(),
                 "message", result.message(),
                 "email", result.email()
         );
-        if (Boolean.getBoolean("auction.dev.exposeRecoveryCode")) {
-            payload.put("recoveryCode", result.recoveryCode());
-        }
-        return payload;
     }
 
     Map<String, Object> walletAuthorization(WalletAuthorization authorization) {

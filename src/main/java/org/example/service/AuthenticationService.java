@@ -307,7 +307,7 @@ public final class AuthenticationService {
     }
 
     private User ensureHashedCredential(User user, String submittedPassword, UserRepository sourceRepository) {
-        if (user == null || CredentialHasher.isHashed(user.getPasswordHash())) {
+        if (user == null || !CredentialHasher.needsRehash(user.getPasswordHash())) {
             return user;
         }
 
@@ -391,7 +391,7 @@ public final class AuthenticationService {
             configured = System.getenv(DEMO_ACCOUNTS_ENV);
         }
         if (configured == null || configured.isBlank()) {
-            return false;
+            return !JdbcUserRepository.isEnabled();
         }
         return Boolean.parseBoolean(configured.trim());
     }

@@ -1,6 +1,7 @@
 package org.example.controller;
 
 import javafx.application.Platform;
+import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
@@ -13,27 +14,51 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
 import javafx.scene.control.cell.PropertyValueFactory;
+import javafx.scene.input.MouseButton;
 import org.example.client.AuctionApiClient;
 import org.example.service.AuctionWorkflowService;
 import org.example.state.ApplicationSession;
+import org.example.util.AuctionCatalogFilters;
+import org.example.util.AuctionCatalogFilters.FilterRequest;
 import org.example.util.BackgroundExecutorFactory;
 import org.example.util.ResponsiveViewSupport;
 import org.example.util.SceneNavigator;
 import org.example.viewmodel.AuctionListEntry;
 
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class AuctionListController {
     private static final int REFRESH_INTERVAL_MILLIS = 3_000;
-    private static final String ALL_STATUSES = "All statuses";
-    private static final String SORT_ENDING_SOON = "Ending soonest";
-    private static final String SORT_PRICE_LOW = "Price low to high";
-    private static final String SORT_PRICE_HIGH = "Price high to low";
-    private static final String SORT_NAME = "Name A to Z";
+    private static final AuctionCatalogFilters.EntryAdapter<AuctionListEntry> AUCTION_LIST_ENTRY_ADAPTER =
+            new AuctionCatalogFilters.EntryAdapter<>() {
+                @Override
+                public String itemId(AuctionListEntry entry) {
+                    return entry.getItemId();
+                }
+
+                @Override
+                public String itemName(AuctionListEntry entry) {
+                    return entry.getItemName();
+                }
+
+                @Override
+                public String status(AuctionListEntry entry) {
+                    return entry.getStatus();
+                }
+
+                @Override
+                public double currentPrice(AuctionListEntry entry) {
+                    return entry.getCurrentPrice();
+                }
+
+                @Override
+                public long remainingSeconds(AuctionListEntry entry) {
+                    return entry.getRemainingSeconds();
+                }
+            };
 
     private final AuctionApiClient apiClient = AuctionApiClient.getInstance();
     private final AuctionWorkflowService workflowService = AuctionWorkflowService.getInstance();
@@ -51,6 +76,9 @@ public class AuctionListController {
 
     @FXML
     private TableView<AuctionListEntry> auctionTable;
+
+    @FXML
+    private TableColumn<AuctionListEntry, String> watchColumn;
 
     @FXML
     private TableColumn<AuctionListEntry, String> nameColumn;
@@ -83,7 +111,13 @@ public class AuctionListController {
     private CheckBox openOnlyCheckBox;
 
     @FXML
+    private CheckBox watchedOnlyCheckBox;
+
+    @FXML
     private Label resultCountLabel;
+
+    @FXML
+    private Button toggleWatchButton;
 
     @FXML
     private Button openAuctionButton;
@@ -95,6 +129,9 @@ public class AuctionListController {
             return;
         }
 
+        watchColumn.setCellValueFactory(cellData -> new SimpleStringProperty(
+                applicationSession.isAuctionWatched(cellData.getValue().getItemId()) ? "Watching" : ""
+        ));
         nameColumn.setCellValueFactory(new PropertyValueFactory<>("itemName"));
         statusColumn.setCellValueFactory(new PropertyValueFactory<>("status"));
         currentPriceColumn.setCellValueFactory(new PropertyValueFactory<>("currentPrice"));
@@ -113,15 +150,36 @@ public class AuctionListController {
                     setText(null);
                     return;
                 }
-                String normalizedStatus = normalizeStatus(item);
+                String normalizedStatus = AuctionCatalogFilters.normalizeStatus(item);
                 setText(item.replace('_', ' '));
                 getStyleClass().add("status-pill");
-                getStyleClass().add(statusStyleClass(normalizedStatus));
+                getStyleClass().add(AuctionCatalogFilters.statusStyleClass(normalizedStatus));
+            }
+        });
+        watchColumn.setCellFactory(column -> new TableCell<>() {
+            @Override
+            protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty);
+                getStyleClass().removeAll("watch-pill", "watch-active");
+                if (empty || item == null || item.isBlank()) {
+                    setText(null);
+                    return;
+                }
+                setText(item);
+                getStyleClass().add("watch-pill");
+                getStyleClass().add("watch-active");
             }
         });
         auctionTable.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) ->
-                openAuctionButton.setDisable(current == null));
-        openAuctionButton.setDisable(true);
+                updateAuctionSelectionActions());
+        auctionTable.setOnMouseClicked(event -> {
+            if (event.getButton() == MouseButton.PRIMARY
+                    && event.getClickCount() == 2
+                    && auctionTable.getSelectionModel().getSelectedItem() != null) {
+                handleOpenAuction();
+            }
+        });
+        updateAuctionSelectionActions();
         configureMarketplaceControls();
 
         welcomeLabel.setText("Signed in as: " + applicationSession.getCurrentUserLabel());
@@ -133,9 +191,34 @@ public class AuctionListController {
     @FXML
     private void handleClearFilters() {
         searchField.clear();
-        statusFilterChoiceBox.setValue(ALL_STATUSES);
-        sortChoiceBox.setValue(SORT_ENDING_SOON);
+        statusFilterChoiceBox.setValue(AuctionCatalogFilters.ALL_STATUSES);
+        sortChoiceBox.setValue(AuctionCatalogFilters.SORT_ENDING_SOON);
         openOnlyCheckBox.setSelected(false);
+        watchedOnlyCheckBox.setSelected(false);
+        applyAuctionFilters();
+    }
+
+    @FXML
+    private void handleToggleWatch() {
+        AuctionListEntry selectedAuction = auctionTable.getSelectionModel().getSelectedItem();
+        if (selectedAuction == null) {
+            showAlert("Selection required", "Select an auction first.");
+            return;
+        }
+
+        applicationSession.toggleWatchedAuction(selectedAuction.getItemId());
+        applyAuctionFilters();
+    }
+
+    @FXML
+    private void handleWatchVisible() {
+        auctionTable.getItems().forEach(entry -> applicationSession.watchAuction(entry.getItemId()));
+        applyAuctionFilters();
+    }
+
+    @FXML
+    private void handleClearWatched() {
+        applicationSession.clearWatchedAuctions();
         applyAuctionFilters();
     }
 
@@ -206,45 +289,35 @@ public class AuctionListController {
     }
 
     private void configureMarketplaceControls() {
-        statusFilterChoiceBox.setItems(FXCollections.observableArrayList(
-                ALL_STATUSES,
-                "OPEN",
-                "RUNNING",
-                "FINISHED",
-                "PAID",
-                "CANCELLED"
-        ));
-        statusFilterChoiceBox.setValue(ALL_STATUSES);
+        statusFilterChoiceBox.setItems(FXCollections.observableArrayList(AuctionCatalogFilters.statusOptions()));
+        statusFilterChoiceBox.setValue(AuctionCatalogFilters.ALL_STATUSES);
 
-        sortChoiceBox.setItems(FXCollections.observableArrayList(
-                SORT_ENDING_SOON,
-                SORT_PRICE_LOW,
-                SORT_PRICE_HIGH,
-                SORT_NAME
-        ));
-        sortChoiceBox.setValue(SORT_ENDING_SOON);
+        sortChoiceBox.setItems(FXCollections.observableArrayList(AuctionCatalogFilters.sortOptions()));
+        sortChoiceBox.setValue(AuctionCatalogFilters.SORT_ENDING_SOON);
 
         searchField.textProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
         statusFilterChoiceBox.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
         sortChoiceBox.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
         openOnlyCheckBox.selectedProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
+        watchedOnlyCheckBox.selectedProperty().addListener((ignored, previous, current) -> applyAuctionFilters());
     }
 
     private void applyAuctionFilters() {
         String selectedId = auctionTable.getSelectionModel().getSelectedItem() == null
                 ? null
                 : auctionTable.getSelectionModel().getSelectedItem().getItemId();
-        String searchText = normalizeText(searchField.getText());
-        String selectedStatus = statusFilterChoiceBox.getValue();
-        String selectedSort = sortChoiceBox.getValue();
-        boolean openOnly = openOnlyCheckBox.isSelected();
-
-        List<AuctionListEntry> filteredEntries = latestEntries.stream()
-                .filter(entry -> matchesSearch(entry, searchText))
-                .filter(entry -> matchesStatus(entry, selectedStatus))
-                .filter(entry -> !openOnly || isOpenStatus(entry.getStatus()))
-                .sorted((left, right) -> compareEntries(left, right, selectedSort))
-                .toList();
+        List<AuctionListEntry> filteredEntries = AuctionCatalogFilters.filterAndSort(
+                latestEntries,
+                new FilterRequest(
+                        searchField.getText(),
+                        statusFilterChoiceBox.getValue(),
+                        sortChoiceBox.getValue(),
+                        openOnlyCheckBox.isSelected(),
+                        watchedOnlyCheckBox.isSelected()
+                ),
+                AUCTION_LIST_ENTRY_ADAPTER,
+                applicationSession::isAuctionWatched
+        );
 
         auctionTable.setItems(FXCollections.observableArrayList(filteredEntries));
         auctionTable.getSelectionModel().clearSelection();
@@ -254,37 +327,18 @@ public class AuctionListController {
                     .findFirst()
                     .ifPresent(entry -> auctionTable.getSelectionModel().select(entry));
         }
-        openAuctionButton.setDisable(auctionTable.getSelectionModel().getSelectedItem() == null);
+        updateAuctionSelectionActions();
         auctionTable.refresh();
         updateResultCountLabel(filteredEntries.size(), latestEntries.size());
-    }
-
-    private boolean matchesSearch(AuctionListEntry entry, String searchText) {
-        return searchText.isBlank() || normalizeText(entry.getItemName()).contains(searchText);
-    }
-
-    private boolean matchesStatus(AuctionListEntry entry, String selectedStatus) {
-        return selectedStatus == null
-                || ALL_STATUSES.equals(selectedStatus)
-                || normalizeStatus(entry.getStatus()).equals(selectedStatus);
-    }
-
-    private int compareEntries(AuctionListEntry left, AuctionListEntry right, String selectedSort) {
-        if (SORT_PRICE_LOW.equals(selectedSort)) {
-            return Double.compare(left.getCurrentPrice(), right.getCurrentPrice());
-        }
-        if (SORT_PRICE_HIGH.equals(selectedSort)) {
-            return Double.compare(right.getCurrentPrice(), left.getCurrentPrice());
-        }
-        if (SORT_NAME.equals(selectedSort)) {
-            return normalizeText(left.getItemName()).compareTo(normalizeText(right.getItemName()));
-        }
-        return Long.compare(left.getRemainingSeconds(), right.getRemainingSeconds());
     }
 
     private void updateResultCountLabel(int visibleCount, int totalCount) {
         if (totalCount == 0) {
             resultCountLabel.setText("No auctions are available right now.");
+            return;
+        }
+        if (watchedOnlyCheckBox.isSelected() && visibleCount == 0) {
+            resultCountLabel.setText("No watched auctions match the current filters.");
             return;
         }
         if (visibleCount == totalCount) {
@@ -294,29 +348,14 @@ public class AuctionListController {
         resultCountLabel.setText("Showing " + visibleCount + " of " + totalCount + " auctions");
     }
 
-    private boolean isOpenStatus(String status) {
-        String normalizedStatus = normalizeStatus(status);
-        return !"FINISHED".equals(normalizedStatus)
-                && !"PAID".equals(normalizedStatus)
-                && !"CANCELLED".equals(normalizedStatus);
-    }
-
-    private String normalizeText(String value) {
-        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
-    }
-
-    private String normalizeStatus(String value) {
-        return value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
-    }
-
-    private String statusStyleClass(String status) {
-        return switch (status) {
-            case "RUNNING" -> "status-running";
-            case "FINISHED" -> "status-finished";
-            case "PAID" -> "status-paid";
-            case "CANCELLED" -> "status-cancelled";
-            default -> "status-open";
-        };
+    private void updateAuctionSelectionActions() {
+        AuctionListEntry selectedAuction = auctionTable.getSelectionModel().getSelectedItem();
+        boolean hasSelection = selectedAuction != null;
+        openAuctionButton.setDisable(!hasSelection);
+        toggleWatchButton.setDisable(!hasSelection);
+        toggleWatchButton.setText(hasSelection && applicationSession.isAuctionWatched(selectedAuction.getItemId())
+                ? "Unwatch"
+                : "Watch");
     }
 
     private void startRefreshLoop() {

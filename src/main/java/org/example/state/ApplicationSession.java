@@ -19,6 +19,7 @@ public final class ApplicationSession {
     private String trustedWalletAuthorizationToken;
     private LocalDateTime trustedWalletAuthorizationExpiresAt;
     private final Set<String> shownNotificationPopupKeys = new HashSet<>();
+    private final Set<String> watchedAuctionIds = new HashSet<>();
 
     private ApplicationSession() {
     }
@@ -37,6 +38,7 @@ public final class ApplicationSession {
         selectedAuctionId = null;
         clearTrustedWalletAuthorization();
         shownNotificationPopupKeys.clear();
+        watchedAuctionIds.clear();
     }
 
     public void replaceCurrentUser(User user) {
@@ -49,6 +51,7 @@ public final class ApplicationSession {
         selectedAuctionId = null;
         clearTrustedWalletAuthorization();
         shownNotificationPopupKeys.clear();
+        watchedAuctionIds.clear();
     }
 
     public Optional<User> getCurrentUser() {
@@ -65,6 +68,41 @@ public final class ApplicationSession {
 
     public void setSelectedAuctionId(String selectedAuctionId) {
         this.selectedAuctionId = selectedAuctionId;
+    }
+
+    public boolean toggleWatchedAuction(String auctionId) {
+        String normalizedAuctionId = normalizeAuctionId(auctionId);
+        if (normalizedAuctionId.isBlank()) {
+            return false;
+        }
+        if (watchedAuctionIds.add(normalizedAuctionId)) {
+            return true;
+        }
+        watchedAuctionIds.remove(normalizedAuctionId);
+        return false;
+    }
+
+    public void watchAuction(String auctionId) {
+        String normalizedAuctionId = normalizeAuctionId(auctionId);
+        if (!normalizedAuctionId.isBlank()) {
+            watchedAuctionIds.add(normalizedAuctionId);
+        }
+    }
+
+    public void unwatchAuction(String auctionId) {
+        watchedAuctionIds.remove(normalizeAuctionId(auctionId));
+    }
+
+    public void clearWatchedAuctions() {
+        watchedAuctionIds.clear();
+    }
+
+    public boolean isAuctionWatched(String auctionId) {
+        return watchedAuctionIds.contains(normalizeAuctionId(auctionId));
+    }
+
+    public int watchedAuctionCount() {
+        return watchedAuctionIds.size();
     }
 
     public boolean rememberNotificationPopup(String notificationKey) {
@@ -99,7 +137,6 @@ public final class ApplicationSession {
         if (trustedWalletUserId == null
                 || trustedWalletAuthorizationToken == null
                 || trustedWalletAuthorizationExpiresAt == null
-                || userId == null
                 || !trustedWalletUserId.equals(userId)
                 || trustedWalletAuthorizationExpiresAt.isBefore(LocalDateTime.now())) {
             clearTrustedWalletAuthorization();
@@ -127,5 +164,9 @@ public final class ApplicationSession {
                 ? "USER"
                 : currentUser.getRole();
         return currentUser.getUsername() + " (" + role + ")";
+    }
+
+    private String normalizeAuctionId(String auctionId) {
+        return auctionId == null ? "" : auctionId.trim();
     }
 }

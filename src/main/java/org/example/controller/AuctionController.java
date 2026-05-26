@@ -47,9 +47,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class AuctionController {
+public class AuctionController implements org.example.auction.AuctionObserver {
     private static final java.time.Duration WALLET_PIN_TRUST_DURATION = java.time.Duration.ofMinutes(120);
-    private static final int REFRESH_INTERVAL_MILLIS = 2_000;
+    private static final int CLOCK_REFRESH_INTERVAL_MILLIS = 1_000;
     private static final DateTimeFormatter BID_NOTIFICATION_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM HH:mm:ss");
 
     private final AuctionApiClient apiClient = AuctionApiClient.getInstance();
@@ -61,8 +61,12 @@ public class AuctionController {
 
     private javafx.animation.Timeline refreshTimeline;
     private String selectedAuctionId;
+    private org.example.auction.AuctionSession observedSession;
     private volatile boolean refreshActive;
     private String lastRefreshFailureMessage;
+    private volatile AuctionViewSnapshot lastSnapshot;
+    private volatile long lastSnapshotAppliedAtMillis;
+    private volatile boolean expirationRefreshRequested;
 
     @FXML
     private Label userLabel;
@@ -134,7 +138,7 @@ public class AuctionController {
     public void initialize() {
         selectedAuctionId = applicationSession.getSelectedAuctionId().orElse(null);
         if (selectedAuctionId == null) {
-            Platform.runLater(() -> SceneNavigator.switchScene(placeBidButton, "/view/AuctionList.fxml", "Auction Catalog"));
+            Platform.runLater(() -> SceneNavigator.switchScene(placeBidButton, "/view/Dashboard.fxml", "Auction Dashboard"));
             return;
         }
 
@@ -153,6 +157,7 @@ public class AuctionController {
 
         userLabel.setText("Signed in as: " + applicationSession.getCurrentUserLabel());
         refreshActive = true;
+        registerLocalAuctionObserver();
         refreshViewAsync(true);
         startRefreshLoop();
     }
@@ -160,7 +165,7 @@ public class AuctionController {
     @FXML
     public void handlePlaceBid() {
         if (applicationSession.getCurrentUser().isEmpty()) {
-            showAlert(Alert.AlertType.WARNING, "Authentication required", "Please sign in again.");
+            showAlert(Alert.AlertType.WARNING, "Cảnh báo", "Vui lòng đăng nhập lại.");
             handleLogout();
             return;
         }
@@ -177,7 +182,7 @@ public class AuctionController {
             confirmAlert.setTitle("Transaction Verification");
             confirmAlert.setHeaderText(null);
             confirmAlert.showAndWait();
-            
+
             if (confirmAlert.getResult() != ButtonType.YES) {
                 return;
             }
@@ -196,6 +201,7 @@ public class AuctionController {
                             walletPin
                     );
 
+            // Xử lý Result ở đây
             if (!result.accepted()) {
                 refreshViewAsync(false);
                 showAlert(Alert.AlertType.WARNING, "Bid rejected", result.message());
@@ -284,7 +290,7 @@ public class AuctionController {
     @FXML
     private void handleBack() {
         stopRefreshLoop();
-        SceneNavigator.switchScene(placeBidButton, "/view/AuctionList.fxml", "Auction Catalog");
+        SceneNavigator.switchScene(placeBidButton, "/view/Dashboard.fxml", "Auction Dashboard");
     }
 
     @FXML
@@ -401,6 +407,10 @@ public class AuctionController {
     }
 
     private void applyAuctionViewSnapshot(AuctionViewSnapshot snapshot) {
+        lastSnapshot = snapshot;
+        lastSnapshotAppliedAtMillis = System.currentTimeMillis();
+        expirationRefreshRequested = false;
+
         itemNameLabel.setText(snapshot.itemName());
         descriptionLabel.setText(snapshot.description());
         statusLabel.setText(snapshot.status().replace('_', ' '));
@@ -415,12 +425,19 @@ public class AuctionController {
 
         depositLabel.setText("Entry deposit: " + AuctionDisplayFormatter.formatCurrency(snapshot.requiredDeposit())
                 + (snapshot.depositConfirmed() ? " locked" : " not locked"));
-        bidAmountCombo.setDisable(!snapshot.canBid());
-        placeBidButton.setDisable(!snapshot.canBid());
-        confirmEntryButton.setDisable(snapshot.confirmEntryDisabled());
         settlementLabel.setText(snapshot.settlementSummary());
-        setBuyerSettlementButtonsDisabled(snapshot.admitResultDisabled(), snapshot.confirmReceivedDisabled());
+        applyActionState(snapshot, snapshot.secondsRemaining());
         refreshBidAmountSuggestions(snapshot.minimumNextBid(), snapshot.canBid());
+        registerLocalAuctionObserver();
+    }
+
+    private void applyActionState(AuctionViewSnapshot snapshot, long secondsRemaining) {
+        boolean finished = isFinishedStatus(snapshot.status()) || secondsRemaining <= 0L;
+        boolean canBid = snapshot.canBid() && !finished;
+        bidAmountCombo.setDisable(!canBid);
+        placeBidButton.setDisable(!canBid);
+        confirmEntryButton.setDisable(snapshot.confirmEntryDisabled() || finished);
+        setBuyerSettlementButtonsDisabled(snapshot.admitResultDisabled(), snapshot.confirmReceivedDisabled());
     }
 
     private String selectedBidAmountText() {
@@ -603,9 +620,9 @@ public class AuctionController {
     }
 
     private void startRefreshLoop() {
-        // The timer only triggers a background refresh so bid history and timers stay current without blocking the UI.
+        // Keep the countdown current without rebuilding the full bid view on every tick.
         refreshTimeline = new javafx.animation.Timeline(
-                new javafx.animation.KeyFrame(javafx.util.Duration.millis(REFRESH_INTERVAL_MILLIS), event -> refreshViewAsync(false))
+                new javafx.animation.KeyFrame(javafx.util.Duration.millis(CLOCK_REFRESH_INTERVAL_MILLIS), event -> updateClockOnly())
         );
         refreshTimeline.setCycleCount(javafx.animation.Animation.INDEFINITE);
         refreshTimeline.play();
@@ -674,8 +691,72 @@ public class AuctionController {
                 || "CANCELLED".equalsIgnoreCase(status);
     }
 
+    private void registerLocalAuctionObserver() {
+        if (useApi() || selectedAuctionId == null || selectedAuctionId.isBlank()) {
+            return;
+        }
+
+        try {
+            org.example.auction.AuctionSession session = workflowService.getSessionForItem(selectedAuctionId);
+            if (session == observedSession) {
+                return;
+            }
+            unregisterLocalAuctionObserver();
+            session.addObserver(this);
+            observedSession = session;
+        } catch (IllegalArgumentException | IllegalStateException ignored) {
+            // The initial async load handles missing or unavailable auctions.
+        }
+    }
+
+    private void unregisterLocalAuctionObserver() {
+        if (observedSession != null) {
+            observedSession.removeObserver(this);
+            observedSession = null;
+        }
+    }
+
+    @Override
+    public void onNewBid(Bid bid) {
+        if (!refreshActive || bid == null || selectedAuctionId == null || !selectedAuctionId.equals(bid.getItemId())) {
+            return;
+        }
+        Platform.runLater(() -> {
+            if (refreshActive) {
+                refreshViewAsync(false);
+            }
+        });
+    }
+
+    private void updateClockOnly() {
+        AuctionViewSnapshot snapshot = lastSnapshot;
+        if (!refreshActive || snapshot == null || snapshot.missingAuction()) {
+            return;
+        }
+
+        long secondsRemaining = currentSecondsRemaining(snapshot);
+        String formattedTime = AuctionDisplayFormatter.formatRemainingTime(secondsRemaining);
+        timeRemainingLabel.setText(formattedTime);
+        bidEntryTimeRemainingLabel.setText("Time remaining: " + formattedTime);
+        applyActionState(snapshot, secondsRemaining);
+
+        if (secondsRemaining == 0L && !isFinishedStatus(snapshot.status()) && !expirationRefreshRequested) {
+            expirationRefreshRequested = true;
+            refreshViewAsync(false);
+        }
+    }
+
+    private long currentSecondsRemaining(AuctionViewSnapshot snapshot) {
+        if (lastSnapshotAppliedAtMillis <= 0L) {
+            return Math.max(0L, snapshot.secondsRemaining());
+        }
+        long elapsedSeconds = Math.max(0L, (System.currentTimeMillis() - lastSnapshotAppliedAtMillis) / 1_000L);
+        return Math.max(0L, snapshot.secondsRemaining() - elapsedSeconds);
+    }
+
     private void stopRefreshLoop() {
         refreshActive = false;
+        unregisterLocalAuctionObserver();
         if (refreshTimeline != null) {
             refreshTimeline.stop();
             refreshTimeline = null;

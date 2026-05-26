@@ -166,6 +166,11 @@ public final class AuctionWorkflowService {
                 }
                 recordLocalBid(item, bid);
                 processLocalAutoBids(item, session, bid.getBidderId());
+                BidValidationResult finalResult = withFinalEffectiveEndTime(
+                        result,
+                        session.getEndTime(),
+                        session.getStatus()
+                );
                 
                 // Update bid hold for the final highest bidder in local store
                 List<Bid> finalBids = session.getBids();
@@ -174,7 +179,7 @@ public final class AuctionWorkflowService {
                 }
                 
                 persistLocalStore();
-                return result;
+                return finalResult;
             }
 
             try {
@@ -203,13 +208,16 @@ public final class AuctionWorkflowService {
                     if (lockedItem == null) {
                         throw new SQLException("Auction item not found: " + item.getId(), "42S02", 1146);
                     }
+                    var extensionConfig = itemDAO.getAuctionExtensionConfig(lockedItem.getId());
                     AuctionSession lockedSession = new AuctionSession(
                             lockedItem,
                             lockedItem.getStartingPrice(),
                             lockedItem.getEndTime(),
-                            bidDAO.getBidsForItem(lockedItem.getId())
+                            bidDAO.getBidsForItem(lockedItem.getId()),
+                            extensionConfig
                     );
                     String previousLeadingBidderId = leadingBidderId(lockedSession.getBids());
+                    LocalDateTime previousEndTime = lockedSession.getEndTime();
                     BidValidationResult result = lockedSession.submitBid(bid);
                     if (!result.accepted()) {
                         if (originalAutoCommit) {
@@ -219,6 +227,13 @@ public final class AuctionWorkflowService {
                     }
                     acceptedResult = result;
                     bidDAO.addBid(bid);
+                    recordAuctionExtensionIfNeeded(
+                            itemDAO,
+                            lockedItem.getId(),
+                            bid.getId(),
+                            previousEndTime,
+                            lockedSession.getEndTime()
+                    );
                     itemDAO.updateAuctionProgress(
                             lockedItem.getId(),
                             lockedSession.getCurrentHighestBid(),
@@ -226,6 +241,11 @@ public final class AuctionWorkflowService {
                             lockedSession.getStatus().name()
                     );
                     processAutoBids(lockedItem, lockedSession, bidDAO, itemDAO, bid.getBidderId());
+                    acceptedResult = withFinalEffectiveEndTime(
+                            acceptedResult,
+                            lockedSession.getEndTime(),
+                            lockedSession.getStatus()
+                    );
 
                     // Update bid hold for the final winner of this bidding round using the same transaction
                     List<Bid> finalBids = lockedSession.getBids();
@@ -291,9 +311,17 @@ public final class AuctionWorkflowService {
                         continue;
                     }
                     Bid nextBid = new Bid(newBidId(), ab.getBidderId(), item.getId(), nextAmount, LocalDateTime.now());
+                    LocalDateTime previousEndTime = session.getEndTime();
                     BidValidationResult res = session.submitBid(nextBid);
                     if (res.accepted()) {
                         bidDAO.addBid(nextBid);
+                        recordAuctionExtensionIfNeeded(
+                                itemDAO,
+                                item.getId(),
+                                nextBid.getId(),
+                                previousEndTime,
+                                session.getEndTime()
+                        );
                         itemDAO.updateAuctionProgress(
                                 item.getId(),
                                 session.getCurrentHighestBid(),
@@ -766,6 +794,46 @@ public final class AuctionWorkflowService {
             return null;
         }
         return bids.get(bids.size() - 1).getBidderId();
+    }
+
+    private void recordAuctionExtensionIfNeeded(
+            ItemDAO itemDAO,
+            String itemId,
+            String triggerBidId,
+            LocalDateTime previousEndTime,
+            LocalDateTime newEndTime
+    ) throws SQLException {
+        if (isExtended(previousEndTime, newEndTime)) {
+            itemDAO.recordAuctionExtension(itemId, triggerBidId, previousEndTime, newEndTime);
+        }
+    }
+
+    private BidValidationResult withFinalEffectiveEndTime(
+            BidValidationResult result,
+            LocalDateTime finalEndTime,
+            AuctionStatus finalStatus
+    ) {
+        if (result == null || !result.accepted() || finalEndTime == null || finalEndTime.equals(result.effectiveEndTime())) {
+            return result;
+        }
+
+        String message = result.message() == null ? "" : result.message();
+        if (isExtended(result.effectiveEndTime(), finalEndTime) && !message.toLowerCase().contains("extended")) {
+            message = "Bid accepted. Auction end time was extended.";
+        }
+
+        return BidValidationResult.accepted(
+                message,
+                result.attemptedAmount(),
+                result.currentPrice(),
+                result.minimumAllowedBid(),
+                finalStatus == null ? result.status() : finalStatus,
+                finalEndTime
+        );
+    }
+
+    private boolean isExtended(LocalDateTime previousEndTime, LocalDateTime newEndTime) {
+        return previousEndTime != null && newEndTime != null && newEndTime.isAfter(previousEndTime);
     }
 
     private void recordLocalBid(Item item, Bid bid) {

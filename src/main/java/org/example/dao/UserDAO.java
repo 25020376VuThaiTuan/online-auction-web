@@ -4,10 +4,10 @@ import org.example.model.Admin;
 import org.example.model.Bidder;
 import org.example.model.Seller;
 import org.example.model.User;
+import org.example.util.CredentialHasher;
 import org.example.util.MoneyUtils;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -40,8 +40,7 @@ public class UserDAO implements AutoCloseable {
     private final boolean ownsConnection;
 
     public UserDAO(String jdbcUrl, String username, String password) throws SQLException {
-        DatabaseConfig.loadDriver();
-        conn = DriverManager.getConnection(jdbcUrl, username, password);
+        conn = new DatabaseConfig(jdbcUrl, username, password).openConnection();
         ownsConnection = true;
     }
 
@@ -186,7 +185,7 @@ public class UserDAO implements AutoCloseable {
             ps.setString(1, userId);
             ps.setString(2, user.getUsername());
             ps.setString(3, safeEmail(user));
-            ps.setString(4, user.getPasswordHash());
+            ps.setString(4, persistedPasswordHash(user));
             ps.setString(5, safeRole(user.getRole()));
             ps.setString(6, emptyToNull(user.getFullName()));
             ps.setString(7, emptyToNull(user.getPhoneNumber()));
@@ -211,7 +210,7 @@ public class UserDAO implements AutoCloseable {
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, user.getUsername());
             ps.setString(2, safeEmail(user));
-            ps.setString(3, user.getPasswordHash());
+            ps.setString(3, persistedPasswordHash(user));
             ps.setString(4, safeRole(user.getRole()));
             ps.setString(5, emptyToNull(user.getFullName()));
             ps.setString(6, emptyToNull(user.getPhoneNumber()));
@@ -350,6 +349,17 @@ public class UserDAO implements AutoCloseable {
             return user.getEmail().trim();
         }
         return user.getUsername() + "@local";
+    }
+
+    private String persistedPasswordHash(User user) {
+        String credential = user == null ? null : user.getPasswordHash();
+        if (CredentialHasher.isHashed(credential)) {
+            return credential;
+        }
+        if (isBlank(credential)) {
+            throw new IllegalArgumentException("User password hash is required.");
+        }
+        return CredentialHasher.hash(credential);
     }
 
     private String safeRole(String role) {

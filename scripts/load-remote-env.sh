@@ -42,7 +42,7 @@ auction_env_load() {
     line_number=0
 
     if [ ! -f "$env_file" ]; then
-        auction_env_die "Env file '$env_file' was not found. Copy scripts/remote.env.example to scripts/remote.env and fill in your local values."
+        auction_env_die "Env file '$env_file' was not found. Copy one of the scripts/*.env.example templates and fill in your local values."
     fi
 
     while IFS= read -r raw_line || [ -n "$raw_line" ]; do

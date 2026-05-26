@@ -18,15 +18,36 @@ public class AuctionSession implements AuctionSubject {
     private final List<Bid> bids = new ArrayList<>();
     private volatile double currentHighestBid;
     private volatile LocalDateTime endTime;
+    private final long extensionTriggerSeconds;
+    private final long extensionSeconds;
+    private final int maxExtensions;
+    private int extensionCount;
 
     private final ReentrantLock lock = new ReentrantLock(true);
 
     public AuctionSession(Item item, double startingPrice, LocalDateTime endTime) {
-        this(item, startingPrice, endTime, List.of());
+        this(item, startingPrice, endTime, List.of(), AuctionExtensionConfig.defaults());
     }
 
     public AuctionSession(Item item, double startingPrice, LocalDateTime endTime, List<Bid> existingBids) {
+        this(item, startingPrice, endTime, existingBids, AuctionExtensionConfig.defaults());
+    }
+
+    public AuctionSession(
+            Item item,
+            double startingPrice,
+            LocalDateTime endTime,
+            List<Bid> existingBids,
+            AuctionExtensionConfig extensionConfig
+    ) {
+        AuctionExtensionConfig safeExtensionConfig = extensionConfig == null
+                ? AuctionExtensionConfig.defaults()
+                : extensionConfig;
         this.item = Objects.requireNonNull(item, "item");
+        this.extensionTriggerSeconds = safeExtensionConfig.triggerWindowSeconds();
+        this.extensionSeconds = safeExtensionConfig.extensionSeconds();
+        this.extensionCount = safeExtensionConfig.extensionCount();
+        this.maxExtensions = safeExtensionConfig.maxExtensions();
         this.currentHighestBid = Math.max(startingPrice, item.getCurrentPrice());
         this.item.setCurrentPrice(this.currentHighestBid);
         this.endTime = endTime == null ? item.getEndTime() : endTime;
@@ -98,7 +119,18 @@ public class AuctionSession implements AuctionSubject {
             }
 
             LocalDateTime bidTime = bid.getBidTime() == null ? LocalDateTime.now() : bid.getBidTime();
-            BidValidationResult validation = AuctionRules.validateBid(item, bid.getAmount(), bidTime);
+            LocalDateTime previousEndTime = endTime;
+            BidValidationResult validation = AuctionRules.validateBid(
+                    item,
+                    bid.getAmount(),
+                    bidTime,
+                    new AuctionExtensionConfig(
+                            extensionTriggerSeconds,
+                            extensionSeconds,
+                            extensionCount,
+                            maxExtensions
+                    )
+            );
             if (!validation.accepted()) {
                 status = validation.status();
                 return validation;
@@ -109,6 +141,9 @@ public class AuctionSession implements AuctionSubject {
             bids.add(bid);
             // Anti-sniping logic can extend the end time when a valid late bid arrives.
             endTime = validation.effectiveEndTime();
+            if (isExtended(previousEndTime, endTime)) {
+                extensionCount++;
+            }
             item.setEndTime(endTime);
             status = AuctionRules.resolveStatus(item.getStartTime(), endTime, LocalDateTime.now());
 
@@ -145,6 +180,15 @@ public class AuctionSession implements AuctionSubject {
 
     public LocalDateTime getEndTime() {
         return endTime;
+    }
+
+    public int getExtensionCount() {
+        lock.lock();
+        try {
+            return extensionCount;
+        } finally {
+            lock.unlock();
+        }
     }
 
     public Item getItem() {
@@ -190,6 +234,10 @@ public class AuctionSession implements AuctionSubject {
 
         status = AuctionRules.resolveStatus(item.getStartTime(), endTime, now);
         return status;
+    }
+
+    private boolean isExtended(LocalDateTime previousEndTime, LocalDateTime newEndTime) {
+        return previousEndTime != null && newEndTime != null && newEndTime.isAfter(previousEndTime);
     }
 
     @Override

@@ -7,8 +7,8 @@ public class Bidder extends User {
     private double balance;
     private final Map<String, Double> lockedDepositsByAuctionId = new LinkedHashMap<>();
 
-    public Bidder(String id, String username, String password, String email, double balance) {
-        super(id, username, password, email);
+    public Bidder(String id, String username, String passwordHash, String email, double balance) {
+        super(id, username, passwordHash, email);
         this.balance = balance;
     }
 

@@ -1,12 +1,12 @@
 package org.example.dao;
 
+import org.example.auction.AuctionExtensionConfig;
 import org.example.model.ApprovalStatus;
 import org.example.model.Item;
 import org.example.model.ItemFactory;
 import org.example.util.MoneyUtils;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -47,8 +47,7 @@ public class ItemDAO implements AutoCloseable {
     private final boolean ownsConnection;
 
     public ItemDAO(String jdbcUrl, String username, String password) throws SQLException {
-        DatabaseConfig.loadDriver();
-        conn = DriverManager.getConnection(jdbcUrl, username, password);
+        conn = new DatabaseConfig(jdbcUrl, username, password).openConnection();
         ownsConnection = true;
     }
 
@@ -146,6 +145,95 @@ public class ItemDAO implements AutoCloseable {
             ps.setString(3, status);
             ps.setString(4, status);
             ps.setString(5, itemId);
+            ps.executeUpdate();
+        }
+    }
+
+    public AuctionExtensionConfig getAuctionExtensionConfig(String itemId) throws SQLException {
+        if (!hasColumn("auctions", "anti_sniping_window_seconds")
+                || !hasColumn("auctions", "extension_seconds")
+                || !hasColumn("auctions", "extension_count")
+                || !hasColumn("auctions", "max_extensions")) {
+            return AuctionExtensionConfig.defaults();
+        }
+
+        String sql = """
+                SELECT anti_sniping_window_seconds,
+                       extension_seconds,
+                       extension_count,
+                       max_extensions
+                FROM auctions
+                WHERE item_id = ?
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, itemId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    AuctionExtensionConfig defaults = AuctionExtensionConfig.defaults();
+                    return new AuctionExtensionConfig(
+                            intColumn(rs, "anti_sniping_window_seconds", (int) defaults.triggerWindowSeconds()),
+                            intColumn(rs, "extension_seconds", (int) defaults.extensionSeconds()),
+                            intColumn(rs, "extension_count", defaults.extensionCount()),
+                            intColumn(rs, "max_extensions", defaults.maxExtensions())
+                    );
+                }
+            }
+        }
+        return AuctionExtensionConfig.defaults();
+    }
+
+    public void recordAuctionExtension(
+            String itemId,
+            String triggerBidId,
+            LocalDateTime previousEndTime,
+            LocalDateTime newEndTime
+    ) throws SQLException {
+        if (itemId == null || itemId.isBlank()
+                || triggerBidId == null || triggerBidId.isBlank()
+                || previousEndTime == null
+                || newEndTime == null
+                || !newEndTime.isAfter(previousEndTime)) {
+            return;
+        }
+
+        if (hasColumn("auctions", "extension_count")) {
+            String updateSql = """
+                    UPDATE auctions
+                    SET end_at = ?,
+                        extension_count = extension_count + 1
+                    WHERE item_id = ?
+                    """;
+            try (PreparedStatement ps = conn.prepareStatement(updateSql)) {
+                ps.setTimestamp(1, timestamp(newEndTime));
+                ps.setString(2, itemId);
+                ps.executeUpdate();
+            }
+        } else {
+            String updateSql = "UPDATE auctions SET end_at = ? WHERE item_id = ?";
+            try (PreparedStatement ps = conn.prepareStatement(updateSql)) {
+                ps.setTimestamp(1, timestamp(newEndTime));
+                ps.setString(2, itemId);
+                ps.executeUpdate();
+            }
+        }
+
+        if (!hasTable("auction_extensions")) {
+            return;
+        }
+
+        String insertSql = """
+                INSERT INTO auction_extensions (
+                    auction_id,
+                    trigger_bid_id,
+                    previous_end_at,
+                    new_end_at
+                ) VALUES (?, ?, ?, ?)
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(insertSql)) {
+            ps.setString(1, itemId);
+            ps.setString(2, triggerBidId);
+            ps.setTimestamp(3, timestamp(previousEndTime));
+            ps.setTimestamp(4, timestamp(newEndTime));
             ps.executeUpdate();
         }
     }
@@ -432,6 +520,42 @@ public class ItemDAO implements AutoCloseable {
 
     private Timestamp timestamp(LocalDateTime value) {
         return value == null ? null : Timestamp.valueOf(value);
+    }
+
+    private int intColumn(ResultSet rs, String columnName, int fallback) throws SQLException {
+        int value = rs.getInt(columnName);
+        return rs.wasNull() ? fallback : value;
+    }
+
+    private boolean hasColumn(String tableName, String columnName) throws SQLException {
+        for (String candidateTable : nameCandidates(tableName)) {
+            for (String candidateColumn : nameCandidates(columnName)) {
+                try (ResultSet rs = conn.getMetaData().getColumns(conn.getCatalog(), null, candidateTable, candidateColumn)) {
+                    if (rs.next()) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean hasTable(String tableName) throws SQLException {
+        for (String candidateTable : nameCandidates(tableName)) {
+            try (ResultSet rs = conn.getMetaData().getTables(conn.getCatalog(), null, candidateTable, null)) {
+                if (rs.next()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private List<String> nameCandidates(String name) {
+        if (name == null || name.isBlank()) {
+            return List.of("");
+        }
+        return List.of(name, name.toUpperCase(), name.toLowerCase());
     }
 
     private boolean isBlank(String value) {

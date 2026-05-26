@@ -259,6 +259,14 @@
     -fx-text-fill: #9c3f2f;
 }
 
+.watch-pill {
+    -fx-font-weight: bold;
+}
+
+.watch-active {
+    -fx-text-fill: #7c3aed;
+}
+
 .eligible-pill {
     -fx-font-weight: bold;
 }

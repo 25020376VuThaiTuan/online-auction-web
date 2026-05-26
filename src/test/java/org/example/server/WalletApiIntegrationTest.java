@@ -65,6 +65,15 @@ class WalletApiIntegrationTest {
         assertEquals(30.0, ((Number) account.get("balance")).doubleValue());
         assertEquals(0.0, ((Number) wallet.get("balance")).doubleValue());
 
+        Map<String, Object> accountTopUpResponse = request("POST", "/users/me/wallet/accounts/" + accountId + "/top-up", token, Map.of(
+                "amount", 10.0,
+                "walletPin", "2468"
+        ));
+        Map<?, ?> accountToppedUpWallet = (Map<?, ?>) accountTopUpResponse.get("wallet");
+        Map<?, ?> accountToppedUp = (Map<?, ?>) ((java.util.List<?>) accountToppedUpWallet.get("linkedAccounts")).getFirst();
+        assertEquals(40.0, ((Number) accountToppedUp.get("balance")).doubleValue());
+        assertEquals(0.0, ((Number) accountToppedUpWallet.get("balance")).doubleValue());
+
         Map<String, Object> topUpResponse = request("POST", "/users/me/wallet/top-up", token, Map.of(
                 "accountId", accountId,
                 "amount", 20.0,
@@ -73,7 +82,7 @@ class WalletApiIntegrationTest {
         Map<?, ?> toppedUpWallet = (Map<?, ?>) topUpResponse.get("wallet");
         Map<?, ?> toppedUpAccount = (Map<?, ?>) ((java.util.List<?>) toppedUpWallet.get("linkedAccounts")).getFirst();
         assertEquals(20.0, ((Number) toppedUpWallet.get("balance")).doubleValue());
-        assertEquals(10.0, ((Number) toppedUpAccount.get("balance")).doubleValue());
+        assertEquals(20.0, ((Number) toppedUpAccount.get("balance")).doubleValue());
 
         Map<String, Object> removeResponse = request("DELETE", "/users/me/wallet/accounts/" + accountId, token, Map.of(
                 "walletPin", "2468"
@@ -100,6 +109,44 @@ class WalletApiIntegrationTest {
         Map<?, ?> recovery = (Map<?, ?>) response.get("recovery");
 
         assertFalse(recovery.containsKey("recoveryCode"));
+    }
+
+    @Test
+    void corsOnlyAllowsConfiguredOrigins() throws Exception {
+        String previousOrigin = System.getProperty("auction.api.allowedOrigin");
+        try {
+            System.setProperty("auction.api.allowedOrigin", "http://auction.example.test");
+
+            HttpResponse<String> rejected = rawOptions("/health", "http://evil.example.test");
+            assertEquals(204, rejected.statusCode());
+            assertTrue(rejected.headers().firstValue("Access-Control-Allow-Origin").isEmpty());
+
+            HttpResponse<String> accepted = rawOptions("/health", "http://auction.example.test");
+            assertEquals(204, accepted.statusCode());
+            assertEquals(
+                    "http://auction.example.test",
+                    accepted.headers().firstValue("Access-Control-Allow-Origin").orElse("")
+            );
+        } finally {
+            if (previousOrigin == null) {
+                System.clearProperty("auction.api.allowedOrigin");
+            } else {
+                System.setProperty("auction.api.allowedOrigin", previousOrigin);
+            }
+        }
+    }
+
+    @Test
+    void sseEndpointRejectsQueryTokens() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + "/events/stream?token=query-token"))
+                .GET()
+                .build();
+
+        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(401, response.statusCode());
+        assertTrue(response.body().contains("Missing bearer token."));
     }
 
     @Test
@@ -144,6 +191,15 @@ class WalletApiIntegrationTest {
         }
         builder.method(method, HttpRequest.BodyPublishers.ofString(ApiJson.stringify(body)));
         return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> rawOptions(String path, String origin) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + path))
+                .header("Origin", origin)
+                .method("OPTIONS", HttpRequest.BodyPublishers.noBody())
+                .build();
+        return client.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
     private record LoginResult(String token, String userId, double balance, String fullName) {

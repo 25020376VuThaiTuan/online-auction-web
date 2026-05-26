@@ -10,10 +10,10 @@ public abstract class User extends Entity {
     private String avatarUrl;
     protected String role;
 
-    public User(String id, String username, String password, String email) {
+    public User(String id, String username, String passwordHash, String email) {
         super(id);
         this.username = username;
-        this.passwordHash = password;
+        this.passwordHash = passwordHash;
         this.email = email;
     }
 
@@ -32,10 +32,6 @@ public abstract class User extends Entity {
 
     public String getUsername() {
         return username;
-    }
-
-    public String getPassword() {
-        return passwordHash;
     }
 
     public String getPasswordHash() {

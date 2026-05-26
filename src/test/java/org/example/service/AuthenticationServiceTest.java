@@ -1,6 +1,7 @@
 package org.example.service;
 
 import org.example.exception.InvalidPasswordException;
+import org.example.exception.UserNotFound;
 import org.example.model.Admin;
 import org.example.model.Bidder;
 import org.example.model.User;
@@ -9,6 +10,7 @@ import org.example.repository.UserRepository;
 import org.example.util.CredentialHasher;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Constructor;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +21,40 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AuthenticationServiceTest {
+    @Test
+    void defaultLocalServiceSeedsDemoAccountsWhenNoDatabaseIsConfigured() throws Exception {
+        String previousDemoAccounts = System.getProperty("auction.demoAccounts.enabled");
+        String previousDatabaseDisabled = System.getProperty("auction.db.disabled");
+        try {
+            System.clearProperty("auction.demoAccounts.enabled");
+            System.setProperty("auction.db.disabled", "true");
+            AuthenticationService service = newDefaultAuthenticationService();
+
+            assertEquals("BIDDER", service.loginOrThrow("bidder", "bid123").getRole());
+            assertTrue(service.getLoginHint().contains("bidder/bid123"));
+        } finally {
+            restoreProperty("auction.demoAccounts.enabled", previousDemoAccounts);
+            restoreProperty("auction.db.disabled", previousDatabaseDisabled);
+        }
+    }
+
+    @Test
+    void explicitDemoAccountOptOutKeepsLocalRepositoryEmpty() throws Exception {
+        String previousDemoAccounts = System.getProperty("auction.demoAccounts.enabled");
+        String previousDatabaseDisabled = System.getProperty("auction.db.disabled");
+        try {
+            System.setProperty("auction.demoAccounts.enabled", "false");
+            System.setProperty("auction.db.disabled", "true");
+            AuthenticationService service = newDefaultAuthenticationService();
+
+            assertThrows(UserNotFound.class, () -> service.loginOrThrow("bidder", "bid123"));
+            assertTrue(service.getLoginHint().contains("existing account"));
+        } finally {
+            restoreProperty("auction.demoAccounts.enabled", previousDemoAccounts);
+            restoreProperty("auction.db.disabled", previousDatabaseDisabled);
+        }
+    }
+
     @Test
     void demoAccountsCanLogInWithoutManualRegistration() throws Exception {
         AuthenticationService service = new AuthenticationService(List.of(DemoUserRepository.getInstance()));
@@ -68,7 +104,7 @@ class AuthenticationServiceTest {
 
         assertEquals("PRIMARY-ADMIN", loggedIn.getId());
         assertEquals("ADMIN", loggedIn.getRole());
-        assertTrue(CredentialHasher.verify("admin123", loggedIn.getPassword()));
+        assertTrue(CredentialHasher.verify("admin123", loggedIn.getPasswordHash()));
     }
 
     @Test
@@ -91,7 +127,7 @@ class AuthenticationServiceTest {
 
         User admin = primaryRepository.findByUsername("admin").orElseThrow();
         assertEquals("ADMIN", admin.getRole());
-        assertTrue(CredentialHasher.verify("admin123", admin.getPassword()));
+        assertTrue(CredentialHasher.verify("admin123", admin.getPasswordHash()));
     }
 
     @Test
@@ -188,7 +224,44 @@ class AuthenticationServiceTest {
 
         assertEquals("john.doe", user.getUsername());
         assertEquals("John Doe", user.getFullName());
-        assertTrue(CredentialHasher.verify("secure123", user.getPassword()));
+        assertTrue(CredentialHasher.verify("secure123", user.getPasswordHash()));
+        assertTrue(user.getPasswordHash().startsWith("$2a$"));
+    }
+
+    @Test
+    void loginMigratesLegacyPbkdf2PasswordHashToBcrypt() throws Exception {
+        InMemoryUserRepository repository = new InMemoryUserRepository();
+        repository.save(new Bidder(
+                "LEGACY-PBKDF2",
+                "legacy_pbkdf2",
+                CredentialHasher.hashLegacyPbkdf2("legacy123"),
+                "legacy@test.local",
+                0.0
+        ));
+        AuthenticationService service = new AuthenticationService(List.of(repository));
+
+        User loggedIn = service.loginOrThrow("legacy_pbkdf2", "legacy123");
+
+        assertTrue(CredentialHasher.verify("legacy123", loggedIn.getPasswordHash()));
+        assertTrue(loggedIn.getPasswordHash().startsWith("$2a$"));
+    }
+
+    @Test
+    void loginMigratesLegacyPlaintextPasswordToBcrypt() throws Exception {
+        InMemoryUserRepository repository = new InMemoryUserRepository();
+        repository.save(new Bidder(
+                "LEGACY-PLAINTEXT",
+                "legacy_plaintext",
+                "legacy123",
+                "legacy-plain@test.local",
+                0.0
+        ));
+        AuthenticationService service = new AuthenticationService(List.of(repository));
+
+        User loggedIn = service.loginOrThrow("legacy_plaintext", "legacy123");
+
+        assertTrue(CredentialHasher.verify("legacy123", loggedIn.getPasswordHash()));
+        assertTrue(loggedIn.getPasswordHash().startsWith("$2a$"));
     }
 
     @Test
@@ -203,6 +276,20 @@ class AuthenticationServiceTest {
         );
 
         assertEquals("Email address is already registered.", exception.getMessage());
+    }
+
+    private AuthenticationService newDefaultAuthenticationService() throws Exception {
+        Constructor<AuthenticationService> constructor = AuthenticationService.class.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        return constructor.newInstance();
+    }
+
+    private static void restoreProperty(String propertyName, String previousValue) {
+        if (previousValue == null) {
+            System.clearProperty(propertyName);
+        } else {
+            System.setProperty(propertyName, previousValue);
+        }
     }
 
     private static class InMemoryUserRepository implements UserRepository {
@@ -252,8 +339,8 @@ class AuthenticationServiceTest {
 
             User current = existing.get();
             User replacement = "ADMIN".equalsIgnoreCase(user.getRole())
-                    ? new Admin(current.getId(), user.getUsername(), user.getPassword(), user.getEmail())
-                    : new Bidder(current.getId(), user.getUsername(), user.getPassword(), user.getEmail(), 0.0);
+                    ? new Admin(current.getId(), user.getUsername(), user.getPasswordHash(), user.getEmail())
+                    : new Bidder(current.getId(), user.getUsername(), user.getPasswordHash(), user.getEmail(), 0.0);
             replacement.copyProfileFrom(user);
             replacement.setRole(user.getRole());
             return super.save(replacement);
