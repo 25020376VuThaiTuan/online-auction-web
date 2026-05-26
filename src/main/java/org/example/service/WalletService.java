@@ -452,6 +452,19 @@ public final class WalletService {
         return getWallet(user, pin);
     }
 
+    public synchronized WalletSummary topUpLinkedAccount(User user, String accountId, double amount, String pin) {
+        requirePin(user, pin);
+        WalletLinkedAccount account = requireLinkedAccount(user, accountId);
+        validateTransferAmount(amount);
+        applyLinkedAccountTopUp(
+                user,
+                account,
+                amount,
+                "Bank account topped up: " + account.displayName() + "."
+        );
+        return getWallet(user, pin);
+    }
+
     synchronized void recordSystemEvent(
             User user,
             String transactionType,
@@ -927,6 +940,49 @@ public final class WalletService {
         transactionsByUserId.computeIfAbsent(user.getId(), ignored -> new ArrayList<>()).add(0, transaction);
     }
 
+    private void applyLinkedAccountTopUp(
+            User user,
+            WalletLinkedAccount account,
+            double amount,
+            String note
+    ) {
+        double balance = balanceOf(user);
+        double updatedAccountBalance;
+        WalletTransaction transaction;
+
+        if (databaseEnabled()) {
+            try (Connection conn = DatabaseConfig.fromEnvironment().openConnection()) {
+                boolean originalAutoCommit = conn.getAutoCommit();
+                try {
+                    conn.setAutoCommit(false);
+                    WalletDAO walletDAO = new WalletDAO(conn);
+                    walletDAO.ensureWallet(user, balance);
+                    balance = walletDAO.findBalanceForUpdate(user.getId()).orElse(balance);
+                    double accountBefore = walletDAO.findLinkedAccountBalanceForUpdate(user.getId(), account.id())
+                            .orElseThrow(() -> new IllegalArgumentException("Wallet account was not found."));
+                    updatedAccountBalance = accountBalanceAfter(accountBefore, amount);
+                    transaction = walletAccountAdjustmentTransaction(user, amount, balance, account.id(), note);
+                    walletDAO.updateLinkedAccountBalance(user.getId(), account.id(), updatedAccountBalance);
+                    walletDAO.addTransaction(transaction);
+                    conn.commit();
+                } catch (SQLException | RuntimeException e) {
+                    conn.rollback();
+                    throw e;
+                } finally {
+                    conn.setAutoCommit(originalAutoCommit);
+                }
+            } catch (SQLException e) {
+                throw databaseFailure("Wallet account top-up save failed", e);
+            }
+        } else {
+            updatedAccountBalance = accountBalanceAfter(account.balance(), amount);
+            transaction = walletAccountAdjustmentTransaction(user, amount, balance, account.id(), note);
+        }
+
+        updateLinkedAccountBalanceInMemory(user, account.id(), updatedAccountBalance);
+        transactionsByUserId.computeIfAbsent(user.getId(), ignored -> new ArrayList<>()).add(0, transaction);
+    }
+
     private void ensureWallet(User user) {
         ensureWallet(user, false);
     }
@@ -1215,6 +1271,26 @@ public final class WalletService {
                 Math.abs(amountDelta),
                 before,
                 after,
+                referenceId,
+                note == null ? "" : note,
+                LocalDateTime.now()
+        );
+    }
+
+    private WalletTransaction walletAccountAdjustmentTransaction(
+            User user,
+            double amount,
+            double balance,
+            String referenceId,
+            String note
+    ) {
+        return new WalletTransaction(
+                UUID.randomUUID().toString(),
+                user.getId(),
+                "ADJUSTMENT",
+                roundCurrency(amount),
+                balance,
+                balance,
                 referenceId,
                 note == null ? "" : note,
                 LocalDateTime.now()

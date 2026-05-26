@@ -209,6 +209,24 @@ class WalletServiceTest {
     }
 
     @Test
+    void usersCanTopUpTheirLinkedBankAccountBeforeFundingWallet() {
+        Bidder bidder = bidder("BANK-TOP-UP", 100.0);
+        walletService.setPin(bidder, "1478");
+        WalletSummary summary = walletService.addLinkedAccount(bidder, bidder.getFullName(), "Provider", "22223333", true, "1478");
+        String accountId = summary.linkedAccounts().getFirst().id();
+
+        WalletSummary accountToppedUp = walletService.topUpLinkedAccount(bidder, accountId, 50.0, "1478");
+
+        assertEquals(100.0, accountToppedUp.balance());
+        assertEquals(50.0, accountToppedUp.linkedAccounts().getFirst().balance());
+        assertEquals("ADJUSTMENT", accountToppedUp.transactions().getFirst().transactionType());
+
+        WalletSummary walletToppedUp = walletService.receiveMoney(bidder, accountId, 25.0, "1478");
+        assertEquals(125.0, walletToppedUp.balance());
+        assertEquals(25.0, walletToppedUp.linkedAccounts().getFirst().balance());
+    }
+
+    @Test
     void ledgerEventsKeepWalletLinkedToUpdatedBidderBalance() {
         Bidder bidder = bidder("LEDGER-SYNC", 100.0);
         walletService.setPin(bidder, "2468");

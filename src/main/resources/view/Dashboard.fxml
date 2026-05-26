@@ -161,8 +161,8 @@
                                     </HBox>
                                     <HBox alignment="CENTER_LEFT" spacing="10.0">
                                         <TextField fx:id="walletTransferAmountField" prefWidth="160.0" promptText="Amount"/>
-                                        <Button onAction="#handleReceiveWalletMoney" text="Receive Money"/>
-                                        <Button onAction="#handleSendWalletMoney" text="Send Money"/>
+                                        <Button onAction="#handleReceiveWalletMoney" text="Top Up Wallet"/>
+                                        <Button onAction="#handleSendWalletMoney" text="Withdraw to Bank"/>
                                     </HBox>
                                     <TableView fx:id="walletTransactionTable" prefHeight="300.0" VBox.vgrow="ALWAYS">
                                         <columns>
@@ -197,6 +197,10 @@
                                         <Button onAction="#handleAddWalletAccount" text="Add Account"/>
                                         <Button onAction="#handleSetPrimaryWalletAccount" text="Set Primary"/>
                                         <Button onAction="#handleRemoveWalletAccount" text="Remove Account"/>
+                                    </HBox>
+                                    <HBox alignment="CENTER_RIGHT" spacing="10.0">
+                                        <TextField fx:id="walletAccountTopUpAmountField" prefWidth="180.0" promptText="Top-up amount"/>
+                                        <Button onAction="#handleTopUpWalletAccount" text="Top Up Bank Account"/>
                                     </HBox>
                                 </VBox>
                             </Tab>

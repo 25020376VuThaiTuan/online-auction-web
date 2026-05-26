@@ -176,6 +176,10 @@ public final class MarketplaceDashboardService {
         return walletService.sendMoney(user, accountId, amount, walletPin);
     }
 
+    public WalletSummary topUpWalletAccount(User user, String accountId, double amount, String walletPin) {
+        return walletService.topUpLinkedAccount(user, accountId, amount, walletPin);
+    }
+
     public List<WalletTransaction> getWalletAuditTransactions(User actor, String userId) {
         return walletService.getTransactionsForAdmin(actor, userId);
     }

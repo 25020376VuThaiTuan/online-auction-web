@@ -65,6 +65,15 @@ class WalletApiIntegrationTest {
         assertEquals(30.0, ((Number) account.get("balance")).doubleValue());
         assertEquals(0.0, ((Number) wallet.get("balance")).doubleValue());
 
+        Map<String, Object> accountTopUpResponse = request("POST", "/users/me/wallet/accounts/" + accountId + "/top-up", token, Map.of(
+                "amount", 10.0,
+                "walletPin", "2468"
+        ));
+        Map<?, ?> accountToppedUpWallet = (Map<?, ?>) accountTopUpResponse.get("wallet");
+        Map<?, ?> accountToppedUp = (Map<?, ?>) ((java.util.List<?>) accountToppedUpWallet.get("linkedAccounts")).getFirst();
+        assertEquals(40.0, ((Number) accountToppedUp.get("balance")).doubleValue());
+        assertEquals(0.0, ((Number) accountToppedUpWallet.get("balance")).doubleValue());
+
         Map<String, Object> topUpResponse = request("POST", "/users/me/wallet/top-up", token, Map.of(
                 "accountId", accountId,
                 "amount", 20.0,
@@ -73,7 +82,7 @@ class WalletApiIntegrationTest {
         Map<?, ?> toppedUpWallet = (Map<?, ?>) topUpResponse.get("wallet");
         Map<?, ?> toppedUpAccount = (Map<?, ?>) ((java.util.List<?>) toppedUpWallet.get("linkedAccounts")).getFirst();
         assertEquals(20.0, ((Number) toppedUpWallet.get("balance")).doubleValue());
-        assertEquals(10.0, ((Number) toppedUpAccount.get("balance")).doubleValue());
+        assertEquals(20.0, ((Number) toppedUpAccount.get("balance")).doubleValue());
 
         Map<String, Object> removeResponse = request("DELETE", "/users/me/wallet/accounts/" + accountId, token, Map.of(
                 "walletPin", "2468"

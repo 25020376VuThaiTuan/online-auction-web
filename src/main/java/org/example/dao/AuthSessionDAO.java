@@ -1,7 +1,6 @@
 package org.example.dao;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -16,8 +15,7 @@ public class AuthSessionDAO implements AutoCloseable {
     private final boolean ownsConnection;
 
     public AuthSessionDAO(String jdbcUrl, String username, String password) throws SQLException {
-        DatabaseConfig.loadDriver();
-        conn = DriverManager.getConnection(jdbcUrl, username, password);
+        conn = new DatabaseConfig(jdbcUrl, username, password).openConnection();
         ownsConnection = true;
     }
 

@@ -132,6 +132,7 @@ public final class AuctionApiHandler implements HttpHandler {
                             "/api/users/me/wallet/pin/reset",
                             "/api/users/me/wallet/accounts",
                             "/api/users/me/wallet/accounts/{id}/primary",
+                            "/api/users/me/wallet/accounts/{id}/top-up",
                             "/api/users/me/wallet/accounts/{id}",
                             "/api/users/me/wallet/top-up",
                             "/api/users/me/wallet/withdraw",
@@ -402,6 +403,26 @@ public final class AuctionApiHandler implements HttpHandler {
                     "wallet", payloads.wallet(dashboardService.removeWalletAccount(
                             currentUser,
                             segments.get(4),
+                            ApiJson.requireString(request, "walletPin")
+                    )),
+                    "user", payloads.user(currentUser)
+            ));
+            return;
+        }
+
+        if (segments.size() == 6
+                && "me".equals(segments.get(1))
+                && "wallet".equals(segments.get(2))
+                && "accounts".equals(segments.get(3))
+                && "top-up".equals(segments.get(5))) {
+            requireMethod(exchange, "POST");
+            Map<String, Object> request = ApiJson.parseObject(readRequestBody(exchange));
+            sendJson(exchange, 200, jsonObject(
+                    "message", "Bank account topped up.",
+                    "wallet", payloads.wallet(dashboardService.topUpWalletAccount(
+                            currentUser,
+                            segments.get(4),
+                            ApiJson.requireDouble(request, "amount"),
                             ApiJson.requireString(request, "walletPin")
                     )),
                     "user", payloads.user(currentUser)

@@ -260,6 +260,9 @@ public class DashboardController {
     private TextField walletAccountOpeningBalanceField;
 
     @FXML
+    private TextField walletAccountTopUpAmountField;
+
+    @FXML
     private TableView<AuctionEligibilityEntry> auctionTable;
 
     @FXML
@@ -753,6 +756,34 @@ public class DashboardController {
     @FXML
     private void handleSendWalletMoney() {
         transferWalletMoney(false);
+    }
+
+    @FXML
+    private void handleTopUpWalletAccount() {
+        String accountId = selectedWalletAccountId();
+        if (accountId == null) {
+            showAlert(Alert.AlertType.WARNING, "Selection required", "Select a wallet account first.");
+            return;
+        }
+
+        try {
+            double amount = parseAmount(walletAccountTopUpAmountField.getText());
+            String walletPin = requestWalletPin("Top Up Bank Account");
+            if (walletPin == null) {
+                return;
+            }
+            WalletSummary summary = useApi()
+                    ? apiClient.topUpWalletAccount(apiToken(), accountId, amount, walletPin)
+                    : dashboardService.topUpWalletAccount(currentUser(), accountId, amount, walletPin);
+            openedWalletSummary = summary;
+            walletAccountTopUpAmountField.clear();
+            refreshWallet(summary);
+            showAlert(Alert.AlertType.INFORMATION, "Bank account topped up", "Selected bank account balance was increased.");
+        } catch (NumberFormatException e) {
+            showAlert(Alert.AlertType.WARNING, "Invalid amount", "Amount must be numeric.");
+        } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
+            showAlert(Alert.AlertType.WARNING, "Bank account top-up failed", e.getMessage());
+        }
     }
 
     @FXML
@@ -1948,31 +1979,6 @@ public class DashboardController {
 
     private void applyNotifications(List<String> lines) {
         notificationList.setItems(FXCollections.observableArrayList(lines));
-        showNewAuctionCompletionPopups(lines);
-    }
-
-    private void showNewAuctionCompletionPopups(List<String> notificationLines) {
-        List<String> popupLines = notificationLines.stream()
-                .filter(this::isAuctionCompletionNotification)
-                .filter(applicationSession::rememberNotificationPopup)
-                .toList();
-        if (popupLines.isEmpty()) {
-            return;
-        }
-
-        Alert alert = new Alert(Alert.AlertType.INFORMATION);
-        alert.setTitle("Auction update");
-        alert.setHeaderText("Auction session update");
-        alert.setContentText(String.join(System.lineSeparator() + System.lineSeparator(), popupLines));
-        alert.show();
-    }
-
-    private boolean isAuctionCompletionNotification(String line) {
-        String normalized = value(line).toLowerCase();
-        return normalized.contains("auction finished")
-                || normalized.contains("buyer admitted result")
-                || normalized.contains("auction result ready")
-                || normalized.contains("you have won this session");
     }
 
     private void applyBidHistory(List<Bid> bidHistory) {

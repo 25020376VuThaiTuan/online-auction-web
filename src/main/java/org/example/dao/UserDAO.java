@@ -8,7 +8,6 @@ import org.example.util.CredentialHasher;
 import org.example.util.MoneyUtils;
 
 import java.sql.Connection;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -41,8 +40,7 @@ public class UserDAO implements AutoCloseable {
     private final boolean ownsConnection;
 
     public UserDAO(String jdbcUrl, String username, String password) throws SQLException {
-        DatabaseConfig.loadDriver();
-        conn = DriverManager.getConnection(jdbcUrl, username, password);
+        conn = new DatabaseConfig(jdbcUrl, username, password).openConnection();
         ownsConnection = true;
     }
 

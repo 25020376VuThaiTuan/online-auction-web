@@ -263,6 +263,14 @@ public final class AuctionApiClient {
         return walletFromResponse(response);
     }
 
+    public WalletSummary topUpWalletAccount(String token, String accountId, double amount, String walletPin) {
+        Map<String, Object> response = request("POST", "/users/me/wallet/accounts/" + segment(accountId) + "/top-up", token, jsonObject(
+                "amount", amount,
+                "walletPin", walletPin
+        ));
+        return walletFromResponse(response);
+    }
+
     public User updateUserRole(String token, String userId, String role) {
         Map<String, Object> response = request("PATCH", "/users/" + segment(userId) + "/role", token, jsonObject(
                 "role", role

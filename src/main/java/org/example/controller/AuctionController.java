@@ -138,7 +138,7 @@ public class AuctionController implements org.example.auction.AuctionObserver {
     public void initialize() {
         selectedAuctionId = applicationSession.getSelectedAuctionId().orElse(null);
         if (selectedAuctionId == null) {
-            Platform.runLater(() -> SceneNavigator.switchScene(placeBidButton, "/view/AuctionList.fxml", "Auction Catalog"));
+            Platform.runLater(() -> SceneNavigator.switchScene(placeBidButton, "/view/Dashboard.fxml", "Auction Dashboard"));
             return;
         }
 
@@ -289,7 +289,7 @@ public class AuctionController implements org.example.auction.AuctionObserver {
     @FXML
     private void handleBack() {
         stopRefreshLoop();
-        SceneNavigator.switchScene(placeBidButton, "/view/AuctionList.fxml", "Auction Catalog");
+        SceneNavigator.switchScene(placeBidButton, "/view/Dashboard.fxml", "Auction Dashboard");
     }
 
     @FXML
