@@ -165,7 +165,7 @@ public class AuctionController implements org.example.auction.AuctionObserver {
     @FXML
     public void handlePlaceBid() {
         if (applicationSession.getCurrentUser().isEmpty()) {
-            showAlert(Alert.AlertType.WARNING, "Authentication required", "Please sign in again.");
+            showAlert(Alert.AlertType.WARNING, "Cảnh báo", "Vui lòng đăng nhập lại.");
             handleLogout();
             return;
         }
@@ -182,7 +182,7 @@ public class AuctionController implements org.example.auction.AuctionObserver {
             confirmAlert.setTitle("Transaction Verification");
             confirmAlert.setHeaderText(null);
             confirmAlert.showAndWait();
-            
+
             if (confirmAlert.getResult() != ButtonType.YES) {
                 return;
             }
@@ -201,6 +201,7 @@ public class AuctionController implements org.example.auction.AuctionObserver {
                             walletPin
                     );
 
+            // Xử lý Result ở đây
             if (!result.accepted()) {
                 refreshViewAsync(false);
                 showAlert(Alert.AlertType.WARNING, "Bid rejected", result.message());
