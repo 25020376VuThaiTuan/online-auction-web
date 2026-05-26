@@ -223,8 +223,14 @@
     -fx-border-color: transparent transparent rgba(120, 86, 42, 0.08) transparent;
 }
 
-.table-row-cell:selected {
-    -fx-background-color: rgba(223, 189, 146, 0.45);
+.table-row-cell:selected,
+.table-row-cell:active-auction {
+    -fx-background-color: rgba(177, 108, 52, 0.34);
+}
+
+.table-row-cell:selected .table-cell,
+.table-row-cell:active-auction .table-cell {
+    -fx-text-fill: #2d2418;
 }
 
 .list-cell {

@@ -2,6 +2,7 @@ package org.example.server;
 
 import org.example.auction.AuctionStatus;
 import org.example.auction.AuctionSummary;
+import org.example.auction.UserNotification;
 import org.example.model.Bidder;
 import org.example.model.Item;
 import org.example.model.ItemFactory;
@@ -102,5 +103,25 @@ class ApiPayloadFactoryTest {
         } finally {
             System.clearProperty("auction.dev.exposeRecoveryCode");
         }
+    }
+
+    @Test
+    void notificationPayloadIncludesStablePopupKey() {
+        UserNotification notification = new UserNotification(
+                "USER-1",
+                "AUCTION",
+                "Auction finished",
+                "A watched auction has finished.",
+                LocalDateTime.of(2026, 5, 26, 12, 0)
+        );
+        ApiPayloadFactory payloadFactory = new ApiPayloadFactory(
+                AuctionWorkflowService.getInstance(),
+                MarketplaceDashboardService.getInstance()
+        );
+
+        Map<String, Object> payload = payloadFactory.notification(notification);
+
+        assertEquals(notification.getPopupKey(), payload.get("popupKey"));
+        assertEquals(notification.getDisplayText(), payload.get("displayText"));
     }
 }

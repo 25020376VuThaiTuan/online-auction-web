@@ -502,9 +502,15 @@ public final class AuctionApiClient {
     }
 
     public List<String> getNotifications(String token) {
+        return getNotificationDetails(token).stream()
+                .map(NotificationDetail::displayText)
+                .toList();
+    }
+
+    public List<NotificationDetail> getNotificationDetails(String token) {
         Map<String, Object> response = request("GET", "/notifications", token, null);
         return objectList(response.get("notifications")).stream()
-                .map(notification -> stringValue(notification.get("displayText")))
+                .map(this::buildNotificationDetail)
                 .toList();
     }
 
@@ -850,6 +856,20 @@ public final class AuctionApiClient {
         );
     }
 
+    private NotificationDetail buildNotificationDetail(Map<String, Object> payload) {
+        String popupKey = stringValue(payload.get("popupKey"));
+        String title = stringValue(payload.get("title"));
+        String body = stringValue(payload.get("body"));
+        String displayText = stringValue(payload.get("displayText"));
+        if (popupKey.isBlank()) {
+            popupKey = title + "|" + body + "|" + displayText;
+        }
+        if (displayText.isBlank()) {
+            displayText = title + (body.isBlank() ? "" : ": " + body);
+        }
+        return new NotificationDetail(popupKey, title, body, displayText);
+    }
+
     private Map<String, Object> jsonObject(Object... fields) {
         Map<String, Object> payload = new LinkedHashMap<>();
         for (int index = 0; index < fields.length; index += 2) {
@@ -1009,6 +1029,9 @@ public final class AuctionApiClient {
     }
 
     public record CurrentUserSnapshot(User user, WalletSummary wallet) {
+    }
+
+    public record NotificationDetail(String popupKey, String title, String body, String displayText) {
     }
 
     public record ConnectionTestResult(String baseUrl, String status, String serverTime) {

@@ -45,11 +45,19 @@ public final class UserNotification {
         return read;
     }
 
+    public String getPopupKey() {
+        return keyPart(userId) + "|" + keyPart(type) + "|" + keyPart(title) + "|" + keyPart(body);
+    }
+
     public void markRead() {
         read = true;
     }
 
     public String getDisplayText() {
         return DISPLAY_DATE_TIME.format(createdAt) + " - " + title + ": " + body;
+    }
+
+    private String keyPart(String value) {
+        return value == null ? "" : value.trim();
     }
 }

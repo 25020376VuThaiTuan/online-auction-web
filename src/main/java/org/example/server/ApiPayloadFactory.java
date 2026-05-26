@@ -161,6 +161,7 @@ final class ApiPayloadFactory {
 
     Map<String, Object> notification(UserNotification notification) {
         return jsonObject(
+                "popupKey", notification.getPopupKey(),
                 "type", notification.getType(),
                 "title", notification.getTitle(),
                 "body", notification.getBody(),

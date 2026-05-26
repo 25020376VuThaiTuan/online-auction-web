@@ -3,6 +3,7 @@ package org.example.controller;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
+import javafx.css.PseudoClass;
 import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
@@ -11,6 +12,7 @@ import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
 import javafx.scene.control.cell.PropertyValueFactory;
@@ -31,6 +33,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class AuctionListController {
+    private static final PseudoClass ACTIVE_AUCTION_PSEUDO_CLASS = PseudoClass.getPseudoClass("active-auction");
     private static final int REFRESH_INTERVAL_MILLIS = 3_000;
     private static final AuctionCatalogFilters.EntryAdapter<AuctionListEntry> AUCTION_LIST_ENTRY_ADAPTER =
             new AuctionCatalogFilters.EntryAdapter<>() {
@@ -68,6 +71,8 @@ public class AuctionListController {
 
     private javafx.animation.Timeline refreshTimeline;
     private volatile boolean refreshActive;
+    private boolean suppressAuctionSelectionRefresh;
+    private String selectedAuctionId;
     private String lastRefreshFailureMessage;
     private List<AuctionListEntry> latestEntries = List.of();
 
@@ -170,8 +175,25 @@ public class AuctionListController {
                 getStyleClass().add("watch-active");
             }
         });
-        auctionTable.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) ->
-                updateAuctionSelectionActions());
+        auctionTable.setRowFactory(table -> new TableRow<>() {
+            @Override
+            protected void updateItem(AuctionListEntry item, boolean empty) {
+                super.updateItem(item, empty);
+                pseudoClassStateChanged(
+                        ACTIVE_AUCTION_PSEUDO_CLASS,
+                        !empty
+                                && item != null
+                                && item.getItemId().equals(selectedAuctionId)
+                );
+            }
+        });
+        auctionTable.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> {
+            if (!suppressAuctionSelectionRefresh) {
+                selectedAuctionId = current == null ? null : current.getItemId();
+            }
+            updateAuctionSelectionActions();
+            auctionTable.refresh();
+        });
         auctionTable.setOnMouseClicked(event -> {
             if (event.getButton() == MouseButton.PRIMARY
                     && event.getClickCount() == 2
@@ -303,9 +325,12 @@ public class AuctionListController {
     }
 
     private void applyAuctionFilters() {
-        String selectedId = auctionTable.getSelectionModel().getSelectedItem() == null
+        AuctionListEntry currentSelection = auctionTable.getSelectionModel().getSelectedItem();
+        String selectedId = selectedAuctionId != null
+                ? selectedAuctionId
+                : currentSelection == null
                 ? null
-                : auctionTable.getSelectionModel().getSelectedItem().getItemId();
+                : currentSelection.getItemId();
         List<AuctionListEntry> filteredEntries = AuctionCatalogFilters.filterAndSort(
                 latestEntries,
                 new FilterRequest(
@@ -319,14 +344,25 @@ public class AuctionListController {
                 applicationSession::isAuctionWatched
         );
 
-        auctionTable.setItems(FXCollections.observableArrayList(filteredEntries));
-        auctionTable.getSelectionModel().clearSelection();
-        if (selectedId != null) {
-            auctionTable.getItems().stream()
-                    .filter(entry -> selectedId.equals(entry.getItemId()))
-                    .findFirst()
-                    .ifPresent(entry -> auctionTable.getSelectionModel().select(entry));
+        suppressAuctionSelectionRefresh = true;
+        try {
+            auctionTable.setItems(FXCollections.observableArrayList(filteredEntries));
+            if (selectedId != null) {
+                auctionTable.getItems().stream()
+                        .filter(entry -> selectedId.equals(entry.getItemId()))
+                        .findFirst()
+                        .ifPresentOrElse(
+                                entry -> auctionTable.getSelectionModel().select(entry),
+                                () -> auctionTable.getSelectionModel().clearSelection()
+                        );
+            } else {
+                auctionTable.getSelectionModel().clearSelection();
+            }
+        } finally {
+            suppressAuctionSelectionRefresh = false;
         }
+        AuctionListEntry selectedAuction = auctionTable.getSelectionModel().getSelectedItem();
+        selectedAuctionId = selectedAuction == null ? null : selectedAuction.getItemId();
         updateAuctionSelectionActions();
         auctionTable.refresh();
         updateResultCountLabel(filteredEntries.size(), latestEntries.size());

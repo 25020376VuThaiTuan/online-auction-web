@@ -3,10 +3,12 @@ package org.example.controller;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
+import javafx.css.PseudoClass;
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.ListView;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import org.example.model.ApprovalStatus;
 import org.example.model.Item;
@@ -23,8 +25,11 @@ import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 final class DashboardTableConfigurator {
+    private static final PseudoClass ACTIVE_AUCTION_PSEUDO_CLASS = PseudoClass.getPseudoClass("active-auction");
+
     private DashboardTableConfigurator() {
     }
 
@@ -125,6 +130,18 @@ final class DashboardTableConfigurator {
         ResponsiveViewSupport.configureCurrencyColumn(config.minimumBidColumn());
         ResponsiveViewSupport.configureCurrencyColumn(config.requiredDepositColumn());
         ResponsiveViewSupport.configureCurrencyColumn(config.availableBalanceColumn());
+        config.table().setRowFactory(table -> new TableRow<>() {
+            @Override
+            protected void updateItem(AuctionEligibilityEntry item, boolean empty) {
+                super.updateItem(item, empty);
+                pseudoClassStateChanged(
+                        ACTIVE_AUCTION_PSEUDO_CLASS,
+                        !empty
+                                && item != null
+                                && item.getItemId().equals(config.selectedAuctionIdSupplier().get())
+                );
+            }
+        });
 
         config.table().getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> {
             if (config.selectionSuppressed().getAsBoolean()) {
@@ -140,6 +157,7 @@ final class DashboardTableConfigurator {
             config.updateWatchAction().accept(current);
             config.showSelectedSummary().accept(current, selectionChanged);
             config.refreshSelectedDetail().accept(current);
+            config.table().refresh();
         });
     }
 
@@ -238,6 +256,7 @@ final class DashboardTableConfigurator {
             BiConsumer<AuctionEligibilityEntry, Boolean> showSelectedSummary,
             Consumer<AuctionEligibilityEntry> refreshSelectedDetail,
             Consumer<String> selectedAuctionIdSetter,
+            Supplier<String> selectedAuctionIdSupplier,
             Function<String, String> eligibleStyleClass
     ) {
     }

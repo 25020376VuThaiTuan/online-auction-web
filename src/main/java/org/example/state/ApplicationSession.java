@@ -37,7 +37,6 @@ public final class ApplicationSession {
         this.apiToken = apiToken;
         selectedAuctionId = null;
         clearTrustedWalletAuthorization();
-        shownNotificationPopupKeys.clear();
         watchedAuctionIds.clear();
     }
 
@@ -50,7 +49,6 @@ public final class ApplicationSession {
         apiToken = null;
         selectedAuctionId = null;
         clearTrustedWalletAuthorization();
-        shownNotificationPopupKeys.clear();
         watchedAuctionIds.clear();
     }
 
@@ -109,7 +107,7 @@ public final class ApplicationSession {
         if (notificationKey == null || notificationKey.isBlank()) {
             return false;
         }
-        return shownNotificationPopupKeys.add(notificationKey);
+        return shownNotificationPopupKeys.add(notificationKey.trim());
     }
 
     public void trustWalletAuthorization(String userId, String authorizationToken, LocalDateTime expiresAt) {

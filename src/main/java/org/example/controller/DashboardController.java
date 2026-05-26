@@ -1314,6 +1314,7 @@ public class DashboardController {
                 this::showSelectedAuctionSummary,
                 this::refreshSelectedAuctionDetailAsync,
                 itemId -> selectedAuctionId = itemId,
+                () -> selectedAuctionId,
                 this::eligibleStyleClass
         ));
         DashboardTableConfigurator.configureSellerTable(new DashboardTableConfigurator.SellerTableConfig(
@@ -1524,17 +1525,19 @@ public class DashboardController {
         WalletSummary walletSnapshot = context.useApi()
                 ? (currentUserSnapshot == null ? null : currentUserSnapshot.wallet())
                 : dashboardService.getWalletSnapshot(snapshotUser);
-        List<String> notificationLines = context.useApi()
-                ? apiClient.getNotifications(context.apiToken())
+        List<DashboardNotification> notifications = context.useApi()
+                ? apiClient.getNotificationDetails(context.apiToken()).stream()
+                .map(DashboardNotification::fromApi)
+                .toList()
                 : dashboardService.getNotifications(snapshotUser).stream()
-                .map(UserNotification::getDisplayText)
+                .map(DashboardNotification::fromLocal)
                 .toList();
         List<AuctionEligibilityEntry> auctionEntries = context.useApi()
                 ? apiClient.getAuctionEligibilityEntries(context.apiToken(), snapshotUser)
                 : dashboardService.getAuctionEligibilityEntries(snapshotUser);
         List<Item> sellerItems = loadSellerItems(context, snapshotUser);
         AdminSectionSnapshot adminSection = loadAdminSectionSnapshot(context, snapshotUser);
-        return new DashboardSnapshot(refreshedUser, walletSnapshot, notificationLines, auctionEntries, sellerItems, adminSection);
+        return new DashboardSnapshot(refreshedUser, walletSnapshot, notifications, auctionEntries, sellerItems, adminSection);
     }
 
     private List<Item> loadSellerItems(DashboardLoadContext context, User user) {
@@ -1599,7 +1602,8 @@ public class DashboardController {
         applyRefreshedUser(snapshot.refreshedUser());
         User user = currentUser();
         refreshAccountSummary(user, snapshot.walletSnapshot());
-        applyNotifications(snapshot.notificationLines());
+        applyNotifications(snapshot.notifications());
+        showNotificationPopups(snapshot.notifications());
         refreshWalletSnapshot(user, snapshot.walletSnapshot());
         applyMarketplaceSummary(snapshot.auctionEntries());
         applyAuctionEntries(snapshot.auctionEntries());
@@ -1742,12 +1746,16 @@ public class DashboardController {
         suppressAuctionSelectionRefresh = true;
         try {
             auctionTable.setItems(FXCollections.observableArrayList(filteredEntries));
-            auctionTable.getSelectionModel().clearSelection();
             if (desiredSelectionId != null) {
                 auctionTable.getItems().stream()
                         .filter(entry -> desiredSelectionId.equals(entry.getItemId()))
                         .findFirst()
-                        .ifPresent(entry -> auctionTable.getSelectionModel().select(entry));
+                        .ifPresentOrElse(
+                                entry -> auctionTable.getSelectionModel().select(entry),
+                                () -> auctionTable.getSelectionModel().clearSelection()
+                        );
+            } else {
+                auctionTable.getSelectionModel().clearSelection();
             }
         } finally {
             suppressAuctionSelectionRefresh = false;
@@ -1850,8 +1858,40 @@ public class DashboardController {
         applyBuyerSettlementButtons(SettlementButtonState.disabled());
     }
 
-    private void applyNotifications(List<String> lines) {
+    private void applyNotifications(List<DashboardNotification> notifications) {
+        List<String> lines = notifications.stream()
+                .map(DashboardNotification::displayText)
+                .toList();
         notificationList.setItems(FXCollections.observableArrayList(lines));
+    }
+
+    private void showNotificationPopups(List<DashboardNotification> notifications) {
+        for (DashboardNotification notification : notifications) {
+            if (!isPopupEligibleNotification(notification)
+                    || !applicationSession.rememberNotificationPopup(notification.popupKey())) {
+                continue;
+            }
+            showAlert(
+                    notification.isWarning() ? Alert.AlertType.WARNING : Alert.AlertType.INFORMATION,
+                    notification.title(),
+                    notification.body()
+            );
+        }
+    }
+
+    private boolean isPopupEligibleNotification(DashboardNotification notification) {
+        return switch (value(notification.title()).toLowerCase()) {
+            case "auction finished",
+                    "auction result ready",
+                    "buyer admitted result",
+                    "item sent",
+                    "sent confirmed",
+                    "payment released",
+                    "payment completed",
+                    "payment hold failed",
+                    "admin fee received" -> true;
+            default -> false;
+        };
     }
 
     private void applyBidHistory(List<Bid> bidHistory) {
@@ -2085,6 +2125,10 @@ public class DashboardController {
         }
 
         lastDashboardRefreshFailureMessage = resolvedMessage;
+        if (!applicationSession.rememberNotificationPopup(dashboardAlertKey("login-refresh", resolvedMessage))) {
+            appendNotificationLine("Dashboard opened with partial data", resolvedMessage);
+            return;
+        }
         showAlert(
                 Alert.AlertType.WARNING,
                 "Dashboard opened with partial data",
@@ -2106,6 +2150,27 @@ public class DashboardController {
         }
         lastSellerDetailFailureMessage = message;
         showAlert(Alert.AlertType.WARNING, "Seller item details unavailable", message);
+    }
+
+    private void appendNotificationLine(String title, String body) {
+        if (notificationList == null) {
+            return;
+        }
+        String line = DashboardFormatters.formatDateTime(LocalDateTime.now())
+                + " - "
+                + title
+                + ": "
+                + body;
+        List<String> lines = new ArrayList<>(notificationList.getItems());
+        lines.add(0, line);
+        notificationList.setItems(FXCollections.observableArrayList(lines));
+    }
+
+    private String dashboardAlertKey(String scope, String message) {
+        String userId = applicationSession.getCurrentUser()
+                .map(User::getId)
+                .orElse("guest");
+        return "dashboard-alert|" + userId + "|" + value(scope) + "|" + value(message);
     }
 
     private void showConnectionSuccess(AuctionApiClient.ConnectionTestResult result) {
@@ -2374,11 +2439,52 @@ public class DashboardController {
     private record DashboardSnapshot(
             User refreshedUser,
             WalletSummary walletSnapshot,
-            List<String> notificationLines,
+            List<DashboardNotification> notifications,
             List<AuctionEligibilityEntry> auctionEntries,
             List<Item> sellerItems,
             AdminSectionSnapshot adminSection
     ) {
+    }
+
+    private record DashboardNotification(String popupKey, String title, String body, String displayText) {
+        private static DashboardNotification fromLocal(UserNotification notification) {
+            return new DashboardNotification(
+                    notification.getPopupKey(),
+                    notification.getTitle(),
+                    notification.getBody(),
+                    notification.getDisplayText()
+            );
+        }
+
+        private static DashboardNotification fromApi(AuctionApiClient.NotificationDetail notification) {
+            return new DashboardNotification(
+                    notification.popupKey(),
+                    notification.title(),
+                    notification.body(),
+                    notification.displayText()
+            );
+        }
+
+        private DashboardNotification {
+            title = safe(title);
+            body = safe(body);
+            displayText = safe(displayText);
+            popupKey = safe(popupKey);
+            if (displayText.isBlank()) {
+                displayText = title + (body.isBlank() ? "" : ": " + body);
+            }
+            if (popupKey.isBlank()) {
+                popupKey = title + "|" + body + "|" + displayText;
+            }
+        }
+
+        private boolean isWarning() {
+            return title.toLowerCase().contains("failed");
+        }
+
+        private static String safe(String value) {
+            return value == null ? "" : value.trim();
+        }
     }
 
     private record AdminSectionSnapshot(
