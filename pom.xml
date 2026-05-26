@@ -31,7 +31,11 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <javafx.version>21.0.6</javafx.version>
         <mysql.version>8.3.0</mysql.version>
+        <h2.version>2.2.224</h2.version>
+        <jbcrypt.version>0.4</jbcrypt.version>
         <junit.version>5.10.2</junit.version>
+        <app.mainClass>org.example.Launcher</app.mainClass>
+        <api.server.mainClass>org.example.server.AuctionApiServerMain</api.server.mainClass>
     </properties>
 
     <dependencies>
@@ -56,8 +60,27 @@
         </dependency>
 
         <dependency>
+            <groupId>org.mindrot</groupId>
+            <artifactId>jbcrypt</artifactId>
+            <version>${jbcrypt.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <version>${h2.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
-            <artifactId>junit-jupiter</artifactId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
             <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
@@ -78,25 +101,58 @@
                 <version>3.2.5</version>
                 <configuration>
                     <useModulePath>false</useModulePath>
+                    <systemPropertyVariables>
+                        <auction.db.disabled>true</auction.db.disabled>
+                        <auction.demoAccounts.enabled>true</auction.demoAccounts.enabled>
+                        <auction.data.file>${project.build.directory}/test-data/data.dat</auction.data.file>
+                    </systemPropertyVariables>
                 </configuration>
             </plugin>
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.1.1</version>
+                <!-- Default developer run path: `mvn exec:java` starts the JavaFX desktop app. -->
                 <configuration>
-                    <mainClass>org.example.server.AuctionApiServerMain</mainClass>
+                    <mainClass>${app.mainClass}</mainClass>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>api-server</id>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                        <configuration>
+                            <!-- Standalone API server path: `mvn exec:java@api-server`. -->
+                            <mainClass>${api.server.mainClass}</mainClass>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <version>3.7.0</version>
+                <configuration>
+                    <ignoredDependencies>
+                        <!-- JavaFX resolves platform-specific classifier artifacts that dependency:analyze reports as undeclared. -->
+                        <ignoredDependency>org.openjfx:*</ignoredDependency>
+                        <!-- MySQL is a runtime JDBC driver loaded by DriverManager when DB env vars are configured. -->
+                        <ignoredDependency>com.mysql:mysql-connector-j</ignoredDependency>
+                        <!-- JUnit's engine is needed at test runtime, not referenced directly by test source. -->
+                        <ignoredDependency>org.junit.jupiter:junit-jupiter-engine</ignoredDependency>
+                    </ignoredDependencies>
                 </configuration>
             </plugin>
 
 
-            <!-- This plugin makes `mvn javafx:run` work on a clean machine. -->
+            <!-- This plugin keeps `mvn javafx:run` aligned with the default JavaFX app entrypoint. -->
             <plugin>
                 <groupId>org.openjfx</groupId>
                 <artifactId>javafx-maven-plugin</artifactId>
                 <version>0.0.8</version>
                 <configuration>
-                    <mainClass>org.example.Launcher</mainClass>
+                    <mainClass>${app.mainClass}</mainClass>
                 </configuration>
             </plugin>
         </plugins>

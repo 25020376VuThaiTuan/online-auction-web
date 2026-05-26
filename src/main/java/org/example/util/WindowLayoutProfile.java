@@ -8,7 +8,7 @@ public record WindowLayoutProfile(
 ) {
     public static WindowLayoutProfile forResource(String resourcePath) {
         if ("/view/Login.fxml".equals(resourcePath)) {
-            return new WindowLayoutProfile(780.0, 520.0, 560.0, 420.0);
+            return new WindowLayoutProfile(780.0, 520.0, 360.0, 420.0);
         }
         if ("/view/Register.fxml".equals(resourcePath)) {
             return new WindowLayoutProfile(780.0, 520.0, 560.0, 420.0);

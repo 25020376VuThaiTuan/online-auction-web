@@ -17,7 +17,7 @@ public final class ApiJson {
             return Map.of();
         }
 
-        Object parsed = new Parser(safeJson).parseValue();
+        Object parsed = new Parser(safeJson).parse();
         if (!(parsed instanceof Map<?, ?> rawMap)) {
             throw new IllegalArgumentException("Expected a JSON object.");
         }
@@ -39,34 +39,38 @@ public final class ApiJson {
         if (value instanceof Number || value instanceof Boolean) {
             return String.valueOf(value);
         }
-        if (value instanceof Enum<?> enumValue) {
-            return stringify(enumValue.name());
-        }
-        if (value instanceof Map<?, ?> map) {
-            StringBuilder builder = new StringBuilder("{");
-            boolean first = true;
-            for (Map.Entry<?, ?> entry : map.entrySet()) {
-                if (!first) {
-                    builder.append(',');
-                }
-                first = false;
-                builder.append(stringify(String.valueOf(entry.getKey())));
-                builder.append(':');
-                builder.append(stringify(entry.getValue()));
+        switch (value) {
+            case Enum<?> enumValue -> {
+                return stringify(enumValue.name());
             }
-            return builder.append('}').toString();
-        }
-        if (value instanceof Collection<?> collection) {
-            StringBuilder builder = new StringBuilder("[");
-            boolean first = true;
-            for (Object item : collection) {
-                if (!first) {
-                    builder.append(',');
+            case Map<?, ?> map -> {
+                StringBuilder builder = new StringBuilder("{");
+                boolean first = true;
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    if (!first) {
+                        builder.append(',');
+                    }
+                    first = false;
+                    builder.append(stringify(String.valueOf(entry.getKey())));
+                    builder.append(':');
+                    builder.append(stringify(entry.getValue()));
                 }
-                first = false;
-                builder.append(stringify(item));
+                return builder.append('}').toString();
             }
-            return builder.append(']').toString();
+            case Collection<?> collection -> {
+                StringBuilder builder = new StringBuilder("[");
+                boolean first = true;
+                for (Object item : collection) {
+                    if (!first) {
+                        builder.append(',');
+                    }
+                    first = false;
+                    builder.append(stringify(item));
+                }
+                return builder.append(']').toString();
+            }
+            default -> {
+            }
         }
         if (value.getClass().isArray()) {
             List<Object> values = new ArrayList<>();
@@ -127,6 +131,15 @@ public final class ApiJson {
 
         private Parser(String text) {
             this.text = text;
+        }
+
+        private Object parse() {
+            Object value = parseValue();
+            skipWhitespace();
+            if (index != text.length()) {
+                throw new IllegalArgumentException("Unexpected trailing JSON content near index " + index + ".");
+            }
+            return value;
         }
 
         private Object parseValue() {

@@ -8,6 +8,10 @@ import java.util.Optional;
 public interface UserRepository {
     Optional<User> findByUsername(String username);
 
+    default Optional<User> findByEmail(String email) {
+        return Optional.empty();
+    }
+
     default Optional<User> findById(String userId) {
         return Optional.empty();
     }
@@ -20,7 +24,15 @@ public interface UserRepository {
         return Optional.empty();
     }
 
+    default boolean update(User user) {
+        return false;
+    }
+
     default boolean updateRole(String userId, String role) {
+        return false;
+    }
+
+    default boolean recordLogin(String userId) {
         return false;
     }
 }

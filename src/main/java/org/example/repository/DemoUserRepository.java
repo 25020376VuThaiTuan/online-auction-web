@@ -4,6 +4,7 @@ import org.example.model.Admin;
 import org.example.model.Bidder;
 import org.example.model.Seller;
 import org.example.model.User;
+import org.example.util.CredentialHasher;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -12,18 +13,25 @@ import java.util.Map;
 import java.util.Optional;
 
 public class DemoUserRepository implements UserRepository {
-    private static final DemoUserRepository INSTANCE = new DemoUserRepository();
+    private static final DemoUserRepository INSTANCE = new DemoUserRepository(true);
 
     private final Map<String, User> usersByUsername = new LinkedHashMap<>();
 
-    private DemoUserRepository() {
-        seedUser(createBidder("U-BID-001", "bidder", "bid123", "bidder@demo.local", 10_000.0, "Primary Bidder"));
-        seedUser(createSeller("U-SEL-001", "seller", "sell123", "seller@demo.local", "Primary Seller"));
-        seedUser(createAdmin("U-ADM-001", "admin", "admin123", "admin@demo.local", "Primary Admin"));
+    private DemoUserRepository(boolean seedDefaults) {
+        if (!seedDefaults) {
+            return;
+        }
+        seedUser(createBidder("U-BID-001", "bidder", CredentialHasher.hash("bid123"), "bidder@demo.local", 10_000.0, "Primary Bidder"));
+        seedUser(createSeller("U-SEL-001", "seller", CredentialHasher.hash("sell123"), "seller@demo.local", "Primary Seller"));
+        seedUser(createAdmin("U-ADM-001", "admin", CredentialHasher.hash("admin123"), "admin@demo.local", "Primary Admin"));
     }
 
     public static DemoUserRepository getInstance() {
         return INSTANCE;
+    }
+
+    public static DemoUserRepository createEmpty() {
+        return new DemoUserRepository(false);
     }
 
     @Override
@@ -33,6 +41,17 @@ public class DemoUserRepository implements UserRepository {
             return Optional.empty();
         }
         return Optional.ofNullable(usersByUsername.get(normalizedUsername));
+    }
+
+    @Override
+    public synchronized Optional<User> findByEmail(String email) {
+        String normalizedEmail = normalizeEmail(email);
+        if (normalizedEmail.isEmpty()) {
+            return Optional.empty();
+        }
+        return usersByUsername.values().stream()
+                .filter(user -> normalizedEmail.equals(normalizeEmail(user.getEmail())))
+                .findFirst();
     }
 
     @Override
@@ -61,6 +80,11 @@ public class DemoUserRepository implements UserRepository {
     }
 
     @Override
+    public synchronized boolean update(User user) {
+        return save(user).isPresent();
+    }
+
+    @Override
     public synchronized boolean updateRole(String userId, String role) {
         Optional<User> existing = findById(userId);
         if (existing.isEmpty()) {
@@ -70,6 +94,11 @@ public class DemoUserRepository implements UserRepository {
         User converted = convertRole(existing.get(), role);
         usersByUsername.put(normalize(converted.getUsername()), converted);
         return true;
+    }
+
+    @Override
+    public synchronized boolean recordLogin(String userId) {
+        return findById(userId).isPresent();
     }
 
     private void seedUser(User user) {
@@ -107,12 +136,12 @@ public class DemoUserRepository implements UserRepository {
     private User convertRole(User source, String role) {
         String safeRole = role == null ? "BIDDER" : role.trim().toUpperCase();
         User converted = switch (safeRole) {
-            case "ADMIN" -> new Admin(source.getId(), source.getUsername(), source.getPassword(), source.getEmail());
-            case "SELLER" -> new Seller(source.getId(), source.getUsername(), source.getPassword(), source.getEmail());
-            case "BIDDER" -> new Bidder(source.getId(), source.getUsername(), source.getPassword(), source.getEmail(),
-                    source instanceof Bidder bidder ? bidder.getBalance() : 10_000.0);
-            default -> new Bidder(source.getId(), source.getUsername(), source.getPassword(), source.getEmail(),
-                    source instanceof Bidder bidder ? bidder.getBalance() : 10_000.0);
+            case "ADMIN" -> new Admin(source.getId(), source.getUsername(), source.getPasswordHash(), source.getEmail());
+            case "SELLER" -> new Seller(source.getId(), source.getUsername(), source.getPasswordHash(), source.getEmail());
+            case "BIDDER" -> new Bidder(source.getId(), source.getUsername(), source.getPasswordHash(), source.getEmail(),
+                    source instanceof Bidder bidder ? bidder.getBalance() : 0.0);
+            default -> new Bidder(source.getId(), source.getUsername(), source.getPasswordHash(), source.getEmail(),
+                    source instanceof Bidder bidder ? bidder.getBalance() : 0.0);
         };
         converted.copyProfileFrom(source);
         converted.setRole(safeRole);
@@ -121,5 +150,9 @@ public class DemoUserRepository implements UserRepository {
 
     private static String normalize(String username) {
         return username == null ? "" : username.trim().toLowerCase();
+    }
+
+    private static String normalizeEmail(String email) {
+        return email == null ? "" : email.trim().toLowerCase();
     }
 }

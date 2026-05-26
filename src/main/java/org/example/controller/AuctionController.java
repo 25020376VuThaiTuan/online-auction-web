@@ -1,40 +1,72 @@
 package org.example.controller;
 
-import javafx.animation.KeyFrame;
-import javafx.animation.Timeline;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
+import javafx.scene.control.ListView;
+import javafx.scene.control.PasswordField;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
-import javafx.scene.control.TextField;
 import javafx.scene.control.cell.PropertyValueFactory;
-import javafx.util.Duration;
+import javafx.scene.layout.VBox;
+import org.example.auction.AuctionDepositResult;
+import org.example.auction.AuctionRules;
+import org.example.auction.AuctionSettlement;
+import org.example.auction.AuctionSettlementStatus;
 import org.example.auction.AuctionStatus;
 import org.example.auction.AuctionSummary;
 import org.example.auction.BidValidationResult;
+import org.example.client.AuctionApiClient;
+import org.example.client.AuctionApiClient.AuctionDetail;
+import org.example.client.AuctionApiClient.EntryDepositResponse;
+import org.example.client.AuctionApiClient.SettlementDetail;
 import org.example.model.Bid;
 import org.example.model.Item;
+import org.example.service.MarketplaceDashboardService;
 import org.example.service.AuctionWorkflowService;
 import org.example.state.ApplicationSession;
 import org.example.util.AuctionDisplayFormatter;
+import org.example.util.BackgroundExecutorFactory;
 import org.example.util.ResponsiveViewSupport;
 import org.example.util.SceneNavigator;
 
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class AuctionController implements org.example.auction.AuctionObserver {
-    private final AuctionWorkflowService workflowService = AuctionWorkflowService.getInstance();
-    private final ApplicationSession applicationSession = ApplicationSession.getInstance();
+    private static final java.time.Duration WALLET_PIN_TRUST_DURATION = java.time.Duration.ofMinutes(120);
+    private static final int CLOCK_REFRESH_INTERVAL_MILLIS = 1_000;
+    private static final DateTimeFormatter BID_NOTIFICATION_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM HH:mm:ss");
 
-    private Timeline refreshTimeline;
+    private final AuctionApiClient apiClient = AuctionApiClient.getInstance();
+    private final AuctionWorkflowService workflowService = AuctionWorkflowService.getInstance();
+    private final MarketplaceDashboardService dashboardService = MarketplaceDashboardService.getInstance();
+    private final ApplicationSession applicationSession = ApplicationSession.getInstance();
+    private final ExecutorService refreshExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("auction-detail-refresh");
+    private final AtomicBoolean refreshInFlight = new AtomicBoolean(false);
+
+    private javafx.animation.Timeline refreshTimeline;
     private String selectedAuctionId;
+    private org.example.auction.AuctionSession observedSession;
+    private volatile boolean refreshActive;
+    private String lastRefreshFailureMessage;
+    private volatile AuctionViewSnapshot lastSnapshot;
+    private volatile long lastSnapshotAppliedAtMillis;
+    private volatile boolean expirationRefreshRequested;
 
     @FXML
     private Label userLabel;
@@ -61,6 +93,21 @@ public class AuctionController implements org.example.auction.AuctionObserver {
     private Label timeRemainingLabel;
 
     @FXML
+    private Label bidEntryTimeRemainingLabel;
+
+    @FXML
+    private Label depositLabel;
+
+    @FXML
+    private Label settlementLabel;
+
+    @FXML
+    private Label currentWinnerLabel;
+
+    @FXML
+    private ListView<String> bidNotificationList;
+
+    @FXML
     private TableView<Bid> bidTable;
 
     @FXML
@@ -77,27 +124,21 @@ public class AuctionController implements org.example.auction.AuctionObserver {
 
     @FXML
     private Button placeBidButton;
+
+    @FXML
+    private Button confirmEntryButton;
     
     @FXML
-    private TextField autoBidMaxField;
-    
+    private Button admitResultButton;
+
     @FXML
-    private Button setAutoBidButton;
-    
-    @FXML
-    private Button fastBid10Button;
-    
-    @FXML
-    private Button fastBid50Button;
-    
-    @FXML
-    private Button fastBid100Button;
+    private Button confirmReceivedButton;
 
     @FXML
     public void initialize() {
         selectedAuctionId = applicationSession.getSelectedAuctionId().orElse(null);
         if (selectedAuctionId == null) {
-            Platform.runLater(() -> SceneNavigator.switchScene(placeBidButton, "/view/AuctionList.fxml", "Auction Catalog"));
+            Platform.runLater(() -> SceneNavigator.switchScene(placeBidButton, "/view/Dashboard.fxml", "Auction Dashboard"));
             return;
         }
 
@@ -115,7 +156,9 @@ public class AuctionController implements org.example.auction.AuctionObserver {
         });
 
         userLabel.setText("Signed in as: " + applicationSession.getCurrentUserLabel());
-        refreshView();
+        refreshActive = true;
+        registerLocalAuctionObserver();
+        refreshViewAsync(true);
         startRefreshLoop();
     }
 
@@ -128,18 +171,15 @@ public class AuctionController implements org.example.auction.AuctionObserver {
         }
 
         try {
-            String selectedAmount = bidAmountCombo.getValue();
-            if (selectedAmount == null || selectedAmount.isEmpty()) {
-                showAlert(Alert.AlertType.WARNING, "Lỗi nhập liệu", "Vui lòng chọn hoặc nhập số tiền.");
+            String selectedAmount = selectedBidAmountText();
+            if (selectedAmount.isEmpty()) {
+                showAlert(Alert.AlertType.WARNING, "Invalid amount", "Please enter or select a bid amount.");
                 return;
             }
-
-            // Parse tiền tệ
-            double bidAmount = Double.parseDouble(selectedAmount.replace("$", "").replace(",", ""));
-
-            // Xác nhận
-            Alert confirmAlert = new Alert(Alert.AlertType.CONFIRMATION, "Chốt đơn với giá $" + bidAmount + "?", ButtonType.YES, ButtonType.NO);
-            confirmAlert.setTitle("Xác nhận");
+            double bidAmount = parseAmount(selectedAmount);
+            
+            Alert confirmAlert = new Alert(Alert.AlertType.CONFIRMATION, "Are you sure you want to place a bid of $" + bidAmount + "?", ButtonType.YES, ButtonType.NO);
+            confirmAlert.setTitle("Transaction Verification");
             confirmAlert.setHeaderText(null);
             confirmAlert.showAndWait();
 
@@ -147,145 +187,604 @@ public class AuctionController implements org.example.auction.AuctionObserver {
                 return;
             }
 
-            // Service trả về Result, KHÔNG ném Exception
-            BidValidationResult result = workflowService.placeBid(
-                    selectedAuctionId,
-                    applicationSession.getCurrentUser().get(),
-                    bidAmount
-            );
-
-            // Xử lý Result ở đây
-            if (!result.accepted()) {
-                refreshView();
-                // Lấy thẳng message lỗi từ backend ra hiện Alert đỏ
-                showAlert(Alert.AlertType.ERROR, "Lỗi Đặt Giá", result.message());
+            String walletPin = requestWalletPin("Place Bid");
+            if (walletPin == null) {
                 return;
             }
 
-            bidAmountCombo.setValue("");
-            refreshView();
-            showAlert(Alert.AlertType.INFORMATION, "Thành công", "Mày đã dẫn đầu!");
+            BidValidationResult result = useApi()
+                    ? apiClient.placeBid(apiToken(), selectedAuctionId, bidAmount, walletPin)
+                    : dashboardService.placeBidWithDeposit(
+                            selectedAuctionId,
+                            applicationSession.getCurrentUser().orElseThrow(),
+                            bidAmount,
+                            walletPin
+                    );
 
+            // Xử lý Result ở đây
+            if (!result.accepted()) {
+                refreshViewAsync(false);
+                showAlert(Alert.AlertType.WARNING, "Bid rejected", result.message());
+                return;
+            }
+
+            String bidderName = applicationSession.getCurrentUser()
+                    .map(user -> user.getFullName())
+                    .orElse(applicationSession.getCurrentUserLabel());
+            addBidActivityNotification(bidderName, bidAmount, LocalDateTime.now(), "accepted");
+            readyBidAmountInput(AuctionRules.minimumNextBid(bidAmount), true);
+            refreshViewAsync(false);
         } catch (NumberFormatException e) {
-            // Chỉ bắt lỗi gõ chữ vào ô nhập số
-            showAlert(Alert.AlertType.WARNING, "Sai định dạng", "Chỉ được nhập số thôi.");
+            showAlert(Alert.AlertType.WARNING, "Invalid amount", "Enter a valid numeric bid amount.");
+        } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
+            showAlert(Alert.AlertType.WARNING, "Bid failed", e.getMessage());
         }
     }
-    
+
     @FXML
-    public void handleFastBid10() {
-        placeFastBid(10.0);
-    }
-    
-    @FXML
-    public void handleFastBid50() {
-        placeFastBid(50.0);
-    }
-    
-    @FXML
-    public void handleFastBid100() {
-        placeFastBid(100.0);
-    }
-    
-    private void placeFastBid(double addedAmount) {
-        AuctionSummary summary = workflowService.getSummary(selectedAuctionId);
-        double fastBid = summary.minimumNextBid() + addedAmount;
-        bidAmountCombo.setValue(String.valueOf(fastBid));
-        handlePlaceBid();
-    }
-    
-    @FXML
-    public void handleSetAutoBid() {
+    public void handleConfirmEntryDeposit() {
         if (applicationSession.getCurrentUser().isEmpty()) {
             showAlert(Alert.AlertType.WARNING, "Authentication required", "Please sign in again.");
             handleLogout();
             return;
         }
-        
+
         try {
-            double maxLimit = Double.parseDouble(autoBidMaxField.getText());
-            boolean success = workflowService.registerAutoBid(
-                selectedAuctionId, 
-                applicationSession.getCurrentUser().orElseThrow(), 
-                maxLimit
-            );
-            
-            if (success) {
-                autoBidMaxField.clear();
-                showAlert(Alert.AlertType.INFORMATION, "Auto-Bid Set", "Your auto-bid limit of $" + maxLimit + " was set successfully.");
-            } else {
-                showAlert(Alert.AlertType.ERROR, "Error", "Could not save auto-bid limit.");
+            String walletPin = requestWalletPin("Confirm Entry Deposit");
+            if (walletPin == null) {
+                return;
             }
-        } catch (NumberFormatException e) {
-            showAlert(Alert.AlertType.WARNING, "Invalid amount", "Enter a valid numeric max limit.");
+            AuctionDepositResult result;
+            if (useApi()) {
+                EntryDepositResponse response = apiClient.confirmAuctionEntry(apiToken(), selectedAuctionId, walletPin);
+                applicationSession.replaceCurrentUser(response.user());
+                result = response.result();
+            } else {
+                result = dashboardService.confirmAuctionEntry(
+                        selectedAuctionId,
+                        applicationSession.getCurrentUser().orElseThrow(),
+                        walletPin
+                );
+            }
+            refreshViewAsync(false);
+            showAlert(result.accepted() ? Alert.AlertType.INFORMATION : Alert.AlertType.WARNING,
+                    result.accepted() ? "Deposit locked" : "Deposit not locked",
+                    result.message());
+        } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
+            showAlert(Alert.AlertType.WARNING, "Deposit failed", e.getMessage());
         }
+    }
+    
+    @FXML
+    public void handleAdmitResult() {
+        String walletPin = requestWalletPin("Admit Result");
+        if (walletPin == null) {
+            return;
+        }
+        runSettlementAction("Result admitted", () -> {
+            if (useApi()) {
+                apiClient.admitWinnerResult(apiToken(), selectedAuctionId, walletPin);
+                refreshApiCurrentUser();
+            } else {
+                dashboardService.admitWinnerResult(selectedAuctionId, applicationSession.getCurrentUser().orElseThrow(), walletPin);
+            }
+        });
+    }
+
+    @FXML
+    public void handleConfirmReceived() {
+        String walletPin = requestWalletPin("Confirm Received");
+        if (walletPin == null) {
+            return;
+        }
+        runSettlementAction("Payment confirmed", () -> {
+            if (useApi()) {
+                apiClient.confirmGoodsReceived(apiToken(), selectedAuctionId, walletPin);
+                refreshApiCurrentUser();
+            } else {
+                dashboardService.confirmGoodsReceived(selectedAuctionId, applicationSession.getCurrentUser().orElseThrow(), walletPin);
+            }
+        });
     }
 
     @FXML
     private void handleBack() {
         stopRefreshLoop();
-        SceneNavigator.switchScene(placeBidButton, "/view/AuctionList.fxml", "Auction Catalog");
+        SceneNavigator.switchScene(placeBidButton, "/view/Dashboard.fxml", "Auction Dashboard");
     }
 
     @FXML
     private void handleLogout() {
+        if (useApi()) {
+            try {
+                apiClient.logout(apiToken());
+            } catch (AuctionApiClient.ApiClientException ignored) {
+            }
+        }
         applicationSession.logout();
         stopRefreshLoop();
         SceneNavigator.switchScene(placeBidButton, "/view/Login.fxml", "Online Auction System");
     }
 
-    private void refreshView() {
-        workflowService.refreshFromStoreIfChanged();
-        Item item = workflowService.findItemById(selectedAuctionId).orElse(null);
-        if (item == null) {
-            showAlert(Alert.AlertType.WARNING, "Auction missing", "The selected auction no longer exists.");
-            handleBack();
+    private void refreshViewAsync(boolean initialLoad) {
+        if (!refreshActive || !refreshInFlight.compareAndSet(false, true)) {
             return;
         }
 
-        AuctionSummary summary = workflowService.getSummary(selectedAuctionId);
-        itemNameLabel.setText(item.getItemName());
-        descriptionLabel.setText(item.getDescription());
-        statusLabel.setText(summary.status().name().replace('_', ' '));
-        currentPriceLabel.setText(AuctionDisplayFormatter.formatCurrency(summary.currentPrice()));
-        minimumBidLabel.setText(AuctionDisplayFormatter.formatCurrency(summary.minimumNextBid()));
-        endTimeLabel.setText(item.getEndTimeString());
-        timeRemainingLabel.setText(AuctionDisplayFormatter.formatRemainingTime(summary.secondsRemaining()));
-        bidTable.setItems(FXCollections.observableArrayList(workflowService.getBidHistory(selectedAuctionId)));
-        bidTable.refresh();
+        CompletableFuture
+                .supplyAsync(this::loadAuctionViewSnapshot, refreshExecutor)
+                .whenComplete((snapshot, throwable) -> Platform.runLater(() -> {
+                    try {
+                        if (!refreshActive) {
+                            return;
+                        }
+                        if (throwable != null) {
+                            handleRefreshFailure(refreshFailureMessage(throwable), initialLoad);
+                            return;
+                        }
+                        if (snapshot.missingAuction()) {
+                            showAlert(Alert.AlertType.WARNING, "Auction missing", "The selected auction no longer exists.");
+                            handleBack();
+                            return;
+                        }
+                        applyAuctionViewSnapshot(snapshot);
+                        lastRefreshFailureMessage = null;
+                    } finally {
+                        refreshInFlight.set(false);
+                    }
+                }));
+    }
 
-        // This guard enforces the rubric rule: only active auctions accept bids.
-        boolean canBid = summary.status() == AuctionStatus.RUNNING && applicationSession.getCurrentUser().isPresent();
+    private AuctionViewSnapshot loadAuctionViewSnapshot() {
+        if (useApi()) {
+            return loadAuctionViewSnapshotFromApi();
+        }
+
+        workflowService.refreshFromStoreIfChanged();
+        Item item = workflowService.findItemById(selectedAuctionId).orElse(null);
+        if (item == null) {
+            return AuctionViewSnapshot.missing();
+        }
+
+        AuctionSummary summary = workflowService.getSummary(selectedAuctionId);
+        boolean depositConfirmed = applicationSession.getCurrentUser()
+                .map(user -> dashboardService.hasConfirmedEntryDeposit(selectedAuctionId, user))
+                .orElse(false);
+        double requiredDeposit = AuctionRules.requiredDeposit(summary.currentPrice());
+        boolean canBid = summary.status() == AuctionStatus.RUNNING
+                && applicationSession.getCurrentUser().isPresent()
+                && depositConfirmed;
+        AuctionSettlement settlement = dashboardService.getSettlement(selectedAuctionId).orElse(null);
+        String currentUserId = applicationSession.getCurrentUser().map(user -> user.getId()).orElse("");
+        SettlementState settlementState = localSettlementState(settlement, currentUserId);
+
+        return new AuctionViewSnapshot(
+                false,
+                item.getItemName(),
+                item.getDescription(),
+                summary.status().name(),
+                summary.currentPrice(),
+                summary.minimumNextBid(),
+                item.getEndTimeString(),
+                summary.secondsRemaining(),
+                workflowService.getBidHistory(selectedAuctionId),
+                requiredDeposit,
+                depositConfirmed,
+                canBid,
+                !applicationSession.getCurrentUser().isPresent() || summary.status().isFinished() || depositConfirmed,
+                settlementState.summary(),
+                settlementState.admitDisabled(),
+                settlementState.confirmDisabled()
+        );
+    }
+
+    private AuctionViewSnapshot loadAuctionViewSnapshotFromApi() {
+        AuctionDetail detail = apiClient.getAuction(apiToken(), selectedAuctionId);
+        boolean canBid = "RUNNING".equalsIgnoreCase(detail.status())
+                && applicationSession.getCurrentUser().isPresent()
+                && detail.depositConfirmed();
+        SettlementDetail settlement = apiClient.getSettlement(apiToken(), selectedAuctionId);
+        String currentUserId = applicationSession.getCurrentUser().map(user -> user.getId()).orElse("");
+        SettlementState settlementState = apiSettlementState(settlement, currentUserId);
+        return new AuctionViewSnapshot(
+                false,
+                detail.itemName(),
+                detail.description(),
+                detail.status(),
+                detail.currentPrice(),
+                detail.minimumNextBid(),
+                detail.displayEndTime(),
+                detail.secondsRemaining(),
+                apiClient.getBidHistory(apiToken(), selectedAuctionId),
+                detail.requiredDeposit(),
+                detail.depositConfirmed(),
+                canBid,
+                !applicationSession.getCurrentUser().isPresent() || isFinishedStatus(detail.status()) || detail.depositConfirmed(),
+                settlementState.summary(),
+                settlementState.admitDisabled(),
+                settlementState.confirmDisabled()
+        );
+    }
+
+    private void applyAuctionViewSnapshot(AuctionViewSnapshot snapshot) {
+        lastSnapshot = snapshot;
+        lastSnapshotAppliedAtMillis = System.currentTimeMillis();
+        expirationRefreshRequested = false;
+
+        itemNameLabel.setText(snapshot.itemName());
+        descriptionLabel.setText(snapshot.description());
+        statusLabel.setText(snapshot.status().replace('_', ' '));
+        currentPriceLabel.setText(AuctionDisplayFormatter.formatCurrency(snapshot.currentPrice()));
+        minimumBidLabel.setText(AuctionDisplayFormatter.formatCurrency(snapshot.minimumNextBid()));
+        endTimeLabel.setText(snapshot.displayEndTime());
+        timeRemainingLabel.setText(AuctionDisplayFormatter.formatRemainingTime(snapshot.secondsRemaining()));
+        bidEntryTimeRemainingLabel.setText("Time remaining: " + AuctionDisplayFormatter.formatRemainingTime(snapshot.secondsRemaining()));
+        bidTable.setItems(FXCollections.observableArrayList(snapshot.bids()));
+        bidTable.refresh();
+        applyBidStatusViews(snapshot.bids());
+
+        depositLabel.setText("Entry deposit: " + AuctionDisplayFormatter.formatCurrency(snapshot.requiredDeposit())
+                + (snapshot.depositConfirmed() ? " locked" : " not locked"));
+        settlementLabel.setText(snapshot.settlementSummary());
+        applyActionState(snapshot, snapshot.secondsRemaining());
+        refreshBidAmountSuggestions(snapshot.minimumNextBid(), snapshot.canBid());
+        registerLocalAuctionObserver();
+    }
+
+    private void applyActionState(AuctionViewSnapshot snapshot, long secondsRemaining) {
+        boolean finished = isFinishedStatus(snapshot.status()) || secondsRemaining <= 0L;
+        boolean canBid = snapshot.canBid() && !finished;
         bidAmountCombo.setDisable(!canBid);
         placeBidButton.setDisable(!canBid);
-        fastBid10Button.setDisable(!canBid);
-        fastBid50Button.setDisable(!canBid);
-        fastBid100Button.setDisable(!canBid);
-        autoBidMaxField.setDisable(!canBid);
-        setAutoBidButton.setDisable(!canBid);
-        
-        // Populate ComboBox suggestions
-        if (bidAmountCombo.getItems().isEmpty() || !bidAmountCombo.getItems().get(0).equals(String.valueOf(summary.minimumNextBid()))) {
+        confirmEntryButton.setDisable(snapshot.confirmEntryDisabled() || finished);
+        setBuyerSettlementButtonsDisabled(snapshot.admitResultDisabled(), snapshot.confirmReceivedDisabled());
+    }
+
+    private String selectedBidAmountText() {
+        String editorText = bidAmountCombo.getEditor() == null ? "" : bidAmountCombo.getEditor().getText();
+        if (editorText != null && !editorText.trim().isEmpty()) {
+            return editorText.trim();
+        }
+        String selectedValue = bidAmountCombo.getValue();
+        return selectedValue == null ? "" : selectedValue.trim();
+    }
+
+    private String requestWalletPin(String title) {
+        String userId = applicationSession.getCurrentUser()
+                .map(user -> user.getId())
+                .orElse("");
+        var trustedAuthorization = applicationSession.getTrustedWalletAuthorization(userId);
+        if (trustedAuthorization.isPresent()) {
+            return trustedAuthorization.get();
+        }
+
+        Dialog<String> dialog = new Dialog<>();
+        dialog.setTitle(title);
+        dialog.setHeaderText(null);
+        PasswordField pinField = new PasswordField();
+        pinField.setPromptText("Wallet PIN");
+        CheckBox rememberPin = new CheckBox("Do not ask PIN for 120 minutes");
+        dialog.getDialogPane().setContent(new VBox(10.0, pinField, rememberPin));
+        dialog.getDialogPane().getButtonTypes().setAll(ButtonType.OK, ButtonType.CANCEL);
+        dialog.setResultConverter(button -> button == ButtonType.OK ? pinField.getText().trim() : null);
+        Platform.runLater(pinField::requestFocus);
+        String pin = dialog.showAndWait().orElse(null);
+        if (pin == null) {
+            return null;
+        }
+        if (pin.isBlank()) {
+            showAlert(Alert.AlertType.WARNING, "Wallet PIN required", "Enter your wallet PIN.");
+            return null;
+        }
+        if (rememberPin.isSelected()) {
+            try {
+                var authorization = useApi()
+                        ? apiClient.authorizeWallet(apiToken(), pin)
+                        : dashboardService.authorizeWallet(
+                                applicationSession.getCurrentUser().orElseThrow(),
+                                pin,
+                                WALLET_PIN_TRUST_DURATION
+                        );
+                applicationSession.trustWalletAuthorization(userId, authorization.token(), authorization.expiresAt());
+                return authorization.token();
+            } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
+                showAlert(Alert.AlertType.WARNING, "Wallet authorization failed", e.getMessage());
+            }
+        }
+        return pin;
+    }
+
+    private double parseAmount(String text) {
+        String normalized = text == null ? "" : text.trim().replace("$", "").replace(",", "");
+        if (normalized.isBlank()) {
+            throw new NumberFormatException("Amount is blank.");
+        }
+        return Double.parseDouble(normalized);
+    }
+
+    private void refreshBidAmountSuggestions(double minimumNextBid, boolean canBid) {
+        bidAmountCombo.setPromptText("Min " + AuctionDisplayFormatter.formatCurrency(minimumNextBid));
+        if (bidAmountCombo.getItems().isEmpty()
+                || !bidAmountCombo.getItems().get(0).equals(String.valueOf(minimumNextBid))) {
             bidAmountCombo.setItems(FXCollections.observableArrayList(
-                String.valueOf(summary.minimumNextBid()),
-                String.valueOf(summary.minimumNextBid() + 10),
-                String.valueOf(summary.minimumNextBid() + 50),
-                String.valueOf(summary.minimumNextBid() + 100)
+                    String.valueOf(minimumNextBid),
+                    String.valueOf(minimumNextBid + 10),
+                    String.valueOf(minimumNextBid + 50),
+                    String.valueOf(minimumNextBid + 100)
             ));
         }
+        if (canBid) {
+            readyBidAmountInput(minimumNextBid, false);
+        }
+    }
+
+    private void readyBidAmountInput(double minimumBid, boolean force) {
+        if (bidAmountCombo == null || bidAmountCombo.isDisabled()) {
+            return;
+        }
+
+        String currentAmount = selectedBidAmountText();
+        if (!force && !currentAmount.isBlank()) {
+            try {
+                if (parseAmount(currentAmount) >= minimumBid) {
+                    return;
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        String formattedAmount = formatAmountInput(minimumBid);
+        bidAmountCombo.setValue(formattedAmount);
+        if (bidAmountCombo.getEditor() != null) {
+            bidAmountCombo.getEditor().setText(formattedAmount);
+        }
+    }
+
+    private String formatAmountInput(double amount) {
+        return String.format(Locale.US, "%.2f", amount);
+    }
+
+    private void applyBidStatusViews(List<Bid> bids) {
+        List<Bid> safeBids = bids == null ? List.of() : bids;
+        if (safeBids.isEmpty()) {
+            currentWinnerLabel.setText("Current winner: No bids yet");
+            bidNotificationList.setItems(FXCollections.observableArrayList());
+            return;
+        }
+
+        Bid winningBid = safeBids.get(safeBids.size() - 1);
+        currentWinnerLabel.setText("Current winner: "
+                + displayBidderName(winningBid.getBidderId())
+                + " - "
+                + AuctionDisplayFormatter.formatCurrency(winningBid.getAmount())
+                + " at "
+                + formatBidNotificationTime(winningBid.getBidTime()));
+
+        List<String> lines = new ArrayList<>();
+        for (int index = safeBids.size() - 1; index >= 0 && lines.size() < 10; index--) {
+            lines.add(formatBidNotificationLine(safeBids.get(index)));
+        }
+        bidNotificationList.setItems(FXCollections.observableArrayList(lines));
+    }
+
+    private String formatBidNotificationLine(Bid bid) {
+        return formatBidNotificationTime(bid.getBidTime())
+                + " - "
+                + displayBidderName(bid.getBidderId())
+                + " - "
+                + AuctionDisplayFormatter.formatCurrency(bid.getAmount());
+    }
+
+    private String formatBidNotificationTime(LocalDateTime value) {
+        return value == null ? "N/A" : BID_NOTIFICATION_TIME_FORMATTER.format(value);
+    }
+
+    private String displayBidderName(String bidderId) {
+        String safeBidderId = bidderId == null ? "" : bidderId.trim();
+        if (safeBidderId.isBlank()) {
+            return "Unknown bidder";
+        }
+        var currentUser = applicationSession.getCurrentUser();
+        if (currentUser.isPresent() && safeBidderId.equals(currentUser.get().getId())) {
+            return currentUser.get().getFullName();
+        }
+        try {
+            return dashboardService.findUserById(safeBidderId)
+                    .map(user -> user.getFullName())
+                    .filter(name -> !name.isBlank())
+                    .orElse(safeBidderId);
+        } catch (RuntimeException ignored) {
+            return safeBidderId;
+        }
+    }
+
+    private void addBidActivityNotification(String bidderName, double amount, LocalDateTime bidTime, String status) {
+        List<String> lines = new ArrayList<>(bidNotificationList.getItems());
+        lines.add(0, formatBidNotificationTime(bidTime)
+                + " - "
+                + bidderName
+                + " - "
+                + AuctionDisplayFormatter.formatCurrency(amount)
+                + " ("
+                + status
+                + ")");
+        if (lines.size() > 10) {
+            lines = new ArrayList<>(lines.subList(0, 10));
+        }
+        bidNotificationList.setItems(FXCollections.observableArrayList(lines));
+        currentWinnerLabel.setText("Current winner: "
+                + bidderName
+                + " - "
+                + AuctionDisplayFormatter.formatCurrency(amount)
+                + " at "
+                + formatBidNotificationTime(bidTime));
     }
 
     private void startRefreshLoop() {
-        // The detail screen refreshes itself so status, timers, and bid history stay near real-time.
-        refreshTimeline = new Timeline(new KeyFrame(Duration.seconds(1), event -> updateClockOnly()));
-        refreshTimeline.setCycleCount(Timeline.INDEFINITE);
+        // Keep the countdown current without rebuilding the full bid view on every tick.
+        refreshTimeline = new javafx.animation.Timeline(
+                new javafx.animation.KeyFrame(javafx.util.Duration.millis(CLOCK_REFRESH_INTERVAL_MILLIS), event -> updateClockOnly())
+        );
+        refreshTimeline.setCycleCount(javafx.animation.Animation.INDEFINITE);
         refreshTimeline.play();
     }
 
+    private SettlementState localSettlementState(AuctionSettlement settlement, String currentUserId) {
+        if (settlement == null) {
+            return new SettlementState("Settlement: N/A", true, true);
+        }
+
+        boolean isWinner = settlement.getWinnerBidderId().equals(currentUserId);
+        boolean admitDisabled = !isWinner
+                || settlement.getStatus() != AuctionSettlementStatus.AWAITING_WINNER_ADMISSION;
+        boolean awaitingBuyer = isWinner
+                && settlement.getStatus() == AuctionSettlementStatus.AWAITING_BUYER_CONFIRMATION;
+        return new SettlementState(
+                "Settlement: " + settlement.getDisplaySummary(),
+                admitDisabled,
+                !awaitingBuyer
+        );
+    }
+
+    private SettlementState apiSettlementState(SettlementDetail settlement, String currentUserId) {
+        if (settlement == null) {
+            return new SettlementState("Settlement: N/A", true, true);
+        }
+
+        boolean isWinner = settlement.winnerBidderId().equals(currentUserId);
+        boolean admitDisabled = !isWinner || !"AWAITING_WINNER_ADMISSION".equals(settlement.status());
+        boolean awaitingBuyer = isWinner && "AWAITING_BUYER_CONFIRMATION".equals(settlement.status());
+        return new SettlementState(
+                "Settlement: " + settlement.displaySummary(),
+                admitDisabled,
+                !awaitingBuyer
+        );
+    }
+
+    private void setBuyerSettlementButtonsDisabled(boolean admitDisabled, boolean confirmDisabled) {
+        admitResultButton.setDisable(admitDisabled);
+        confirmReceivedButton.setDisable(confirmDisabled);
+    }
+
+    private void runSettlementAction(String title, Runnable action) {
+        if (applicationSession.getCurrentUser().isEmpty()) {
+            showAlert(Alert.AlertType.WARNING, "Authentication required", "Please sign in again.");
+            handleLogout();
+            return;
+        }
+        try {
+            action.run();
+            refreshViewAsync(false);
+            showAlert(Alert.AlertType.INFORMATION, title, "Settlement was updated.");
+        } catch (AuctionApiClient.ApiClientException | IllegalArgumentException | IllegalStateException e) {
+            refreshViewAsync(false);
+            showAlert(Alert.AlertType.WARNING, title + " failed", e.getMessage());
+        }
+    }
+
+    private void refreshApiCurrentUser() {
+        applicationSession.replaceCurrentUser(apiClient.getCurrentUser(apiToken()));
+    }
+
+    private boolean isFinishedStatus(String status) {
+        return "FINISHED".equalsIgnoreCase(status)
+                || "PAID".equalsIgnoreCase(status)
+                || "CANCELLED".equalsIgnoreCase(status);
+    }
+
+    private void registerLocalAuctionObserver() {
+        if (useApi() || selectedAuctionId == null || selectedAuctionId.isBlank()) {
+            return;
+        }
+
+        try {
+            org.example.auction.AuctionSession session = workflowService.getSessionForItem(selectedAuctionId);
+            if (session == observedSession) {
+                return;
+            }
+            unregisterLocalAuctionObserver();
+            session.addObserver(this);
+            observedSession = session;
+        } catch (IllegalArgumentException | IllegalStateException ignored) {
+            // The initial async load handles missing or unavailable auctions.
+        }
+    }
+
+    private void unregisterLocalAuctionObserver() {
+        if (observedSession != null) {
+            observedSession.removeObserver(this);
+            observedSession = null;
+        }
+    }
+
+    @Override
+    public void onNewBid(Bid bid) {
+        if (!refreshActive || bid == null || selectedAuctionId == null || !selectedAuctionId.equals(bid.getItemId())) {
+            return;
+        }
+        Platform.runLater(() -> {
+            if (refreshActive) {
+                refreshViewAsync(false);
+            }
+        });
+    }
+
+    private void updateClockOnly() {
+        AuctionViewSnapshot snapshot = lastSnapshot;
+        if (!refreshActive || snapshot == null || snapshot.missingAuction()) {
+            return;
+        }
+
+        long secondsRemaining = currentSecondsRemaining(snapshot);
+        String formattedTime = AuctionDisplayFormatter.formatRemainingTime(secondsRemaining);
+        timeRemainingLabel.setText(formattedTime);
+        bidEntryTimeRemainingLabel.setText("Time remaining: " + formattedTime);
+        applyActionState(snapshot, secondsRemaining);
+
+        if (secondsRemaining == 0L && !isFinishedStatus(snapshot.status()) && !expirationRefreshRequested) {
+            expirationRefreshRequested = true;
+            refreshViewAsync(false);
+        }
+    }
+
+    private long currentSecondsRemaining(AuctionViewSnapshot snapshot) {
+        if (lastSnapshotAppliedAtMillis <= 0L) {
+            return Math.max(0L, snapshot.secondsRemaining());
+        }
+        long elapsedSeconds = Math.max(0L, (System.currentTimeMillis() - lastSnapshotAppliedAtMillis) / 1_000L);
+        return Math.max(0L, snapshot.secondsRemaining() - elapsedSeconds);
+    }
+
     private void stopRefreshLoop() {
+        refreshActive = false;
+        unregisterLocalAuctionObserver();
         if (refreshTimeline != null) {
             refreshTimeline.stop();
+            refreshTimeline = null;
         }
+        refreshExecutor.shutdownNow();
+    }
+
+    private void handleRefreshFailure(String message, boolean initialLoad) {
+        if (!initialLoad && message.equals(lastRefreshFailureMessage)) {
+            return;
+        }
+        lastRefreshFailureMessage = message;
+        showAlert(
+                initialLoad ? Alert.AlertType.WARNING : Alert.AlertType.INFORMATION,
+                initialLoad ? "Could not load auction" : "Auction view refresh failed",
+                message
+        );
+    }
+
+    private String refreshFailureMessage(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null && (current instanceof java.util.concurrent.CompletionException
+                || current instanceof java.util.concurrent.ExecutionException)) {
+            current = current.getCause();
+        }
+        return current.getMessage() == null || current.getMessage().isBlank()
+                ? "Auction details could not be refreshed."
+                : current.getMessage();
     }
 
     private void showAlert(Alert.AlertType type, String title, String content) {
@@ -295,21 +794,56 @@ public class AuctionController implements org.example.auction.AuctionObserver {
         alert.setContentText(content);
         alert.showAndWait();
     }
-    @Override
-    public void onNewBid(org.example.model.Bid bid) {
-        Platform.runLater(() -> refreshView());
-    }
-    private void updateClockOnly() {
-        AuctionSummary summary = workflowService.getSummary(selectedAuctionId);
-        timeRemainingLabel.setText(AuctionDisplayFormatter.formatRemainingTime(summary.secondsRemaining()));
 
-        boolean canBid = summary.status() == AuctionStatus.RUNNING && applicationSession.getCurrentUser().isPresent();
-        bidAmountCombo.setDisable(!canBid);
-        placeBidButton.setDisable(!canBid);
-        fastBid10Button.setDisable(!canBid);
-        fastBid50Button.setDisable(!canBid);
-        fastBid100Button.setDisable(!canBid);
-        autoBidMaxField.setDisable(!canBid);
-        setAutoBidButton.setDisable(!canBid);
+    private boolean useApi() {
+        return apiClient.isEnabled() && applicationSession.getApiToken().isPresent();
+    }
+
+    private String apiToken() {
+        return applicationSession.getApiToken()
+                .orElseThrow(() -> new IllegalStateException("No API token in session."));
+    }
+
+    private record AuctionViewSnapshot(
+            boolean missingAuction,
+            String itemName,
+            String description,
+            String status,
+            double currentPrice,
+            double minimumNextBid,
+            String displayEndTime,
+            long secondsRemaining,
+            List<Bid> bids,
+            double requiredDeposit,
+            boolean depositConfirmed,
+            boolean canBid,
+            boolean confirmEntryDisabled,
+            String settlementSummary,
+            boolean admitResultDisabled,
+            boolean confirmReceivedDisabled
+    ) {
+        private static AuctionViewSnapshot missing() {
+            return new AuctionViewSnapshot(
+                    true,
+                    "",
+                    "",
+                    "",
+                    0.0,
+                    0.0,
+                    "N/A",
+                    0L,
+                    List.of(),
+                    0.0,
+                    false,
+                    false,
+                    true,
+                    "Settlement: N/A",
+                    true,
+                    true
+            );
+        }
+    }
+
+    private record SettlementState(String summary, boolean admitDisabled, boolean confirmDisabled) {
     }
 }

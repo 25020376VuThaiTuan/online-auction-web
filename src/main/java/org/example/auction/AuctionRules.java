@@ -11,6 +11,7 @@ import java.util.Objects;
 public final class AuctionRules {
     public static final long DEFAULT_EXTENSION_TRIGGER_SECONDS = 15;
     public static final long DEFAULT_EXTENSION_SECONDS = 60;
+    public static final int DEFAULT_MAX_EXTENSIONS = 10;
 
     private AuctionRules() {
     }
@@ -56,9 +57,21 @@ public final class AuctionRules {
     }
 
     public static BidValidationResult validateBid(Item item, double bidAmount, LocalDateTime now) {
+        return validateBid(item, bidAmount, now, AuctionExtensionConfig.defaults());
+    }
+
+    public static BidValidationResult validateBid(
+            Item item,
+            double bidAmount,
+            LocalDateTime now,
+            AuctionExtensionConfig extensionConfig
+    ) {
         Objects.requireNonNull(item, "item");
 
         LocalDateTime safeNow = now == null ? LocalDateTime.now() : now;
+        AuctionExtensionConfig safeExtensionConfig = extensionConfig == null
+                ? AuctionExtensionConfig.defaults()
+                : extensionConfig;
         AuctionStatus status = resolveStatus(item.getStartTime(), item.getEndTime(), safeNow);
         double currentPrice = item.getCurrentPrice();
         double minimumAllowedBid = minimumNextBid(currentPrice);
@@ -114,8 +127,10 @@ public final class AuctionRules {
         LocalDateTime extendedEndTime = calculateExtendedEndTime(
                 item.getEndTime(),
                 safeNow,
-                DEFAULT_EXTENSION_TRIGGER_SECONDS,
-                DEFAULT_EXTENSION_SECONDS
+                safeExtensionConfig.triggerWindowSeconds(),
+                safeExtensionConfig.extensionSeconds(),
+                safeExtensionConfig.extensionCount(),
+                safeExtensionConfig.maxExtensions()
         );
 
         String message = extendedEndTime != null && !extendedEndTime.equals(item.getEndTime())
@@ -138,7 +153,28 @@ public final class AuctionRules {
             long extensionTriggerSeconds,
             long extensionSeconds
     ) {
+        return calculateExtendedEndTime(
+                endTime,
+                bidTime,
+                extensionTriggerSeconds,
+                extensionSeconds,
+                0,
+                Integer.MAX_VALUE
+        );
+    }
+
+    public static LocalDateTime calculateExtendedEndTime(
+            LocalDateTime endTime,
+            LocalDateTime bidTime,
+            long extensionTriggerSeconds,
+            long extensionSeconds,
+            int extensionCount,
+            int maxExtensions
+    ) {
         if (endTime == null || bidTime == null || extensionSeconds <= 0) {
+            return endTime;
+        }
+        if (maxExtensions >= 0 && extensionCount >= maxExtensions) {
             return endTime;
         }
 

@@ -1,0 +1,317 @@
+package org.example.client;
+
+import com.sun.net.httpserver.HttpServer;
+import org.example.model.WalletSummary;
+import org.example.server.ApiJson;
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.lang.reflect.Constructor;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class AuctionApiClientTest {
+    @Test
+    void connectivityFailureIsTrueForIoExceptions() {
+        AuctionApiClient.ApiClientException failure =
+                new AuctionApiClient.ApiClientException("Could not reach server", new IOException("Connection refused"));
+
+        assertTrue(AuctionApiClient.isConnectivityFailure(failure));
+    }
+
+    @Test
+    void connectivityFailureIsTrueForNestedIoExceptions() {
+        AuctionApiClient.ApiClientException failure = new AuctionApiClient.ApiClientException(
+                "Could not reach server",
+                new IllegalStateException("wrapper", new IOException("Connection refused"))
+        );
+
+        assertTrue(AuctionApiClient.isConnectivityFailure(failure));
+    }
+
+    @Test
+    void connectivityFailureIsFalseForApplicationErrors() {
+        AuctionApiClient.ApiClientException failure =
+                new AuctionApiClient.ApiClientException("Password does not match.");
+
+        assertFalse(AuctionApiClient.isConnectivityFailure(failure));
+    }
+
+    @Test
+    void testConnectionUsesHealthEndpoint() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicReference<String> requestMethod = new AtomicReference<>();
+        server.createContext("/api/health", exchange -> {
+            requestMethod.set(exchange.getRequestMethod());
+            byte[] response = ApiJson.stringify(Map.of(
+                    "status", "ok",
+                    "serverTime", "2026-05-22T16:00:00"
+            )).getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (var responseBody = exchange.getResponseBody()) {
+                responseBody.write(response);
+            }
+        });
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/api";
+            System.setProperty("auction.api.baseUrl", baseUrl);
+            AuctionApiClient.ConnectionTestResult result = newApiClient().testConnection();
+
+            assertEquals("GET", requestMethod.get());
+            assertEquals(baseUrl, result.baseUrl());
+            assertEquals("ok", result.status());
+            assertEquals("2026-05-22T16:00:00", result.serverTime());
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void testConnectionRejectsUnexpectedHealthStatus() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/health", exchange -> {
+            byte[] response = ApiJson.stringify(Map.of("status", "starting")).getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (var responseBody = exchange.getResponseBody()) {
+                responseBody.write(response);
+            }
+        });
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            System.setProperty("auction.api.baseUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/api");
+            AuctionApiClient.ApiClientException exception = assertThrows(
+                    AuctionApiClient.ApiClientException.class,
+                    () -> newApiClient().testConnection()
+            );
+
+            assertTrue(exception.getMessage().contains("unexpected status"));
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void addWalletAccountSendsInitialBalance() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        server.createContext("/api/users/me/wallet/accounts", exchange -> {
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = ApiJson.stringify(walletResponse()).getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(201, response.length);
+            try (var responseBody = exchange.getResponseBody()) {
+                responseBody.write(response);
+            }
+        });
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            System.setProperty("auction.api.baseUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/api");
+            AuctionApiClient client = newApiClient();
+
+            WalletSummary summary = client.addWalletAccount(
+                    "token",
+                    "Savings",
+                    "Demo Bank",
+                    "1234567890",
+                    125.5,
+                    true,
+                    "2468"
+            );
+
+            Map<String, Object> payload = ApiJson.parseObject(requestBody.get());
+            assertEquals(125.5, ((Number) payload.get("initialBalance")).doubleValue());
+            assertEquals(125.5, summary.linkedAccounts().getFirst().balance());
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void topUpWalletAccountUsesAccountEndpoint() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        AtomicReference<String> requestPath = new AtomicReference<>();
+        AtomicReference<String> requestBody = new AtomicReference<>();
+        server.createContext("/api/users/me/wallet/accounts/account-1/top-up", exchange -> {
+            requestPath.set(exchange.getRequestURI().getPath());
+            requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            byte[] response = ApiJson.stringify(walletResponse()).getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (var responseBody = exchange.getResponseBody()) {
+                responseBody.write(response);
+            }
+        });
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            System.setProperty("auction.api.baseUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/api");
+            AuctionApiClient client = newApiClient();
+
+            WalletSummary summary = client.topUpWalletAccount("token", "account-1", 125.5, "2468");
+
+            Map<String, Object> payload = ApiJson.parseObject(requestBody.get());
+            assertEquals("/api/users/me/wallet/accounts/account-1/top-up", requestPath.get());
+            assertEquals(125.5, ((Number) payload.get("amount")).doubleValue());
+            assertEquals("2468", payload.get("walletPin"));
+            assertEquals(125.5, summary.linkedAccounts().getFirst().balance());
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void nonJsonErrorResponsesStillProduceHelpfulFailures() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/auth/me", exchange -> {
+            byte[] response = "temporary upstream failure".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/plain");
+            exchange.sendResponseHeaders(502, response.length);
+            try (var responseBody = exchange.getResponseBody()) {
+                responseBody.write(response);
+            }
+        });
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            System.setProperty("auction.api.baseUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/api");
+            AuctionApiClient client = newApiClient();
+
+            AuctionApiClient.ApiClientException exception = assertThrows(
+                    AuctionApiClient.ApiClientException.class,
+                    () -> client.getCurrentUser("token")
+            );
+
+            assertEquals("temporary upstream failure", exception.getMessage());
+            assertEquals(502, exception.getStatusCode());
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void currentUserSnapshotIncludesWalletForNonBidderRoles() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/auth/me", exchange -> {
+            byte[] response = ApiJson.stringify(Map.of(
+                    "user", Map.ofEntries(
+                            Map.entry("id", "seller-1"),
+                            Map.entry("username", "seller"),
+                            Map.entry("email", "seller@test.local"),
+                            Map.entry("role", "SELLER"),
+                            Map.entry("fullName", "Demo Seller"),
+                            Map.entry("phoneNumber", ""),
+                            Map.entry("address", ""),
+                            Map.entry("avatarUrl", ""),
+                            Map.entry("balance", 190.0),
+                            Map.entry("lockedBalance", 0.0),
+                            Map.entry("availableBalance", 190.0),
+                            Map.entry("lockedDeposits", Map.of()),
+                            Map.entry("wallet", Map.of(
+                                    "userId", "seller-1",
+                                    "balance", 190.0,
+                                    "lockedBalance", 0.0,
+                                    "availableBalance", 190.0,
+                                    "pinSet", true,
+                                    "linkedAccounts", List.of(),
+                                    "transactions", List.of()
+                            ))
+                    )
+            )).getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (var responseBody = exchange.getResponseBody()) {
+                responseBody.write(response);
+            }
+        });
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            System.setProperty("auction.api.baseUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/api");
+            AuctionApiClient.CurrentUserSnapshot snapshot = newApiClient().getCurrentUserSnapshot("token");
+
+            assertEquals("SELLER", snapshot.user().getRole());
+            assertEquals(190.0, snapshot.wallet().balance(), 0.001);
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
+    }
+
+    private AuctionApiClient newApiClient() throws Exception {
+        Constructor<AuctionApiClient> constructor = AuctionApiClient.class.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        return constructor.newInstance();
+    }
+
+    private Map<String, Object> walletResponse() {
+        return Map.of(
+                "wallet", Map.of(
+                        "userId", "user-1",
+                        "balance", 0.0,
+                        "lockedBalance", 0.0,
+                        "availableBalance", 0.0,
+                        "pinSet", true,
+                        "linkedAccounts", List.of(Map.of(
+                                "id", "account-1",
+                                "userId", "user-1",
+                                "accountName", "Savings",
+                                "providerName", "Demo Bank",
+                                "accountReference", "1234567890",
+                                "balance", 125.5,
+                                "primary", true,
+                                "createdAt", "2026-05-20T00:00:00"
+                        )),
+                        "transactions", List.of()
+                )
+        );
+    }
+}
