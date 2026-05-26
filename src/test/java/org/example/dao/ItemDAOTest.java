@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -70,9 +71,24 @@ class ItemDAOTest {
                     minimum_increment DECIMAL(19,2),
                     start_at TIMESTAMP,
                     end_at TIMESTAMP,
+                    anti_sniping_window_seconds INT DEFAULT 10,
+                    extension_seconds INT DEFAULT 60,
+                    extension_count INT DEFAULT 0,
+                    max_extensions INT DEFAULT 10,
                     status VARCHAR(50),
                     updated_at TIMESTAMP,
                     closed_at TIMESTAMP
+                )
+                """);
+
+        st.execute("""
+                CREATE TABLE auction_extensions (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    auction_id VARCHAR(36),
+                    trigger_bid_id VARCHAR(36),
+                    previous_end_at TIMESTAMP,
+                    new_end_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
                 """);
 
@@ -230,5 +246,53 @@ class ItemDAOTest {
                 8000,
                 updated.getCurrentPrice()
         );
+    }
+
+    @Test
+    void shouldRecordAuctionExtension()
+            throws Exception {
+
+        LocalDateTime previousEndTime = LocalDateTime.of(2026, 5, 26, 16, 0);
+        LocalDateTime extendedEndTime = previousEndTime.plusSeconds(60);
+
+        Item item =
+                ItemFactory.createItem(
+                        "electronics",
+                        "item-4",
+                        "Camera",
+                        "Vintage camera",
+                        500,
+                        LocalDateTime.of(2026, 5, 26, 15, 0),
+                        previousEndTime,
+                        "Nikon",
+                        12
+                );
+
+        item.setSellerId("seller-1");
+        item.setApprovalStatus(ApprovalStatus.APPROVED);
+
+        dao.addItem(item, "electronics", "Nikon", 12);
+        dao.recordAuctionExtension(item.getId(), "bid-1", previousEndTime, extendedEndTime);
+
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("""
+                     SELECT end_at, extension_count
+                     FROM auctions
+                     WHERE item_id = 'item-4'
+                     """)) {
+            assertTrue(rs.next());
+            assertEquals(extendedEndTime, rs.getTimestamp("end_at").toLocalDateTime());
+            assertEquals(1, rs.getInt("extension_count"));
+        }
+
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("""
+                     SELECT COUNT(*) AS total
+                     FROM auction_extensions
+                     WHERE auction_id = 'item-4'
+                     """)) {
+            assertTrue(rs.next());
+            assertEquals(1, rs.getInt("total"));
+        }
     }
 }

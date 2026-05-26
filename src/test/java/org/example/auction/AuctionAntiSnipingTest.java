@@ -6,6 +6,7 @@ import org.example.model.ItemFactory;
 import org.junit.jupiter.api.Test;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -57,6 +58,51 @@ class AuctionAntiSnipingTest {
         assertEquals(expectedEndTime, result.effectiveEndTime());
         assertEquals(expectedEndTime, session.getEndTime());
         assertEquals(expectedEndTime, item.getEndTime());
+    }
+
+    @Test
+    void acceptedLateSessionBidUsesConfiguredExtensionWindow() {
+        LocalDateTime originalEndTime = LocalDateTime.now().plusSeconds(20);
+        Item item = runningItem(originalEndTime);
+        AuctionSession session = new AuctionSession(
+                item,
+                item.getStartingPrice(),
+                item.getEndTime(),
+                List.of(),
+                new AuctionExtensionConfig(30, 120, 0, 10)
+        );
+
+        BidValidationResult result = session.submitBid(bid(item.getId(), 110.0));
+
+        LocalDateTime expectedEndTime = originalEndTime.plusSeconds(120);
+        assertTrue(result.accepted());
+        assertEquals(expectedEndTime, result.effectiveEndTime());
+        assertEquals(1, session.getExtensionCount());
+    }
+
+    @Test
+    void acceptedLateSessionBidDoesNotExtendAfterMaxExtensions() {
+        LocalDateTime originalEndTime = LocalDateTime.now().plusSeconds(10);
+        Item item = runningItem(originalEndTime);
+        AuctionSession session = new AuctionSession(
+                item,
+                item.getStartingPrice(),
+                item.getEndTime(),
+                List.of(),
+                new AuctionExtensionConfig(
+                        AuctionRules.DEFAULT_EXTENSION_TRIGGER_SECONDS,
+                        AuctionRules.DEFAULT_EXTENSION_SECONDS,
+                        10,
+                        10
+                )
+        );
+
+        BidValidationResult result = session.submitBid(bid(item.getId(), 110.0));
+
+        assertTrue(result.accepted());
+        assertEquals(originalEndTime, result.effectiveEndTime());
+        assertEquals(originalEndTime, session.getEndTime());
+        assertEquals(10, session.getExtensionCount());
     }
 
     @Test
