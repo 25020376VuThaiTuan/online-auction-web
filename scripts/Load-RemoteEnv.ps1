@@ -12,7 +12,7 @@ function Import-AuctionRemoteEnv {
     )
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
-        throw "Env file '$Path' was not found. Copy scripts\remote.env.example to scripts\remote.env and fill in your local values."
+        throw "Env file '$Path' was not found. Copy one of the scripts\*.env.example templates and fill in your local values."
     }
 
     $allowedNames = @{}
