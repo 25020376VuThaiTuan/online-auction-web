@@ -52,6 +52,11 @@
             <version>${javafx.version}</version>
         </dependency>
 
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>4.29.1</version>
+        </dependency>
         <!-- JDBC is optional at runtime and only used when DB env vars are configured. -->
         <dependency>
             <groupId>com.mysql</groupId>
