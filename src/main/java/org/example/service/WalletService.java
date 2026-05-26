@@ -41,6 +41,7 @@ public final class WalletService {
     private static final Base64.Encoder TOKEN_ENCODER = Base64.getUrlEncoder().withoutPadding();
 
     private final RecoveryCodeSender recoveryCodeSender;
+    private final WalletTransactionFactory transactionFactory;
     private final Map<String, String> pinHashesByUserId = new ConcurrentHashMap<>();
     private final Map<String, String> recoveryCodesByUserId = new ConcurrentHashMap<>();
     private final Map<String, Double> balancesByUserId = new ConcurrentHashMap<>();
@@ -56,9 +57,14 @@ public final class WalletService {
     }
 
     WalletService(RecoveryCodeSender recoveryCodeSender) {
+        this(recoveryCodeSender, new WalletTransactionFactory());
+    }
+
+    WalletService(RecoveryCodeSender recoveryCodeSender, WalletTransactionFactory transactionFactory) {
         this.recoveryCodeSender = recoveryCodeSender == null
                 ? (email, code) -> { }
                 : recoveryCodeSender;
+        this.transactionFactory = transactionFactory == null ? new WalletTransactionFactory() : transactionFactory;
     }
 
     public static WalletService getInstance() {
@@ -118,7 +124,7 @@ public final class WalletService {
                     walletDAO.ensureWallet(user, balanceOf(user));
                     walletDAO.updatePinHash(user.getId(), pinHash);
                     double balance = balanceOf(user);
-                    WalletTransaction transaction = walletTransaction(
+                    WalletTransaction transaction = transactionFactory.transaction(
                             user,
                             "PIN_RESET",
                             0.0,
@@ -196,7 +202,7 @@ public final class WalletService {
                     }
                     walletDAO.updatePinHash(user.getId(), pinHash);
                     double balance = balanceOf(user);
-                    WalletTransaction transaction = walletTransaction(
+                    WalletTransaction transaction = transactionFactory.transaction(
                             user,
                             "PIN_RESET",
                             0.0,
@@ -747,16 +753,14 @@ public final class WalletService {
     ) {
         ensureWallet(user, true);
         double balance = balanceOf(user);
-        WalletTransaction transaction = new WalletTransaction(
-                UUID.randomUUID().toString(),
-                user.getId(),
+        WalletTransaction transaction = transactionFactory.transaction(
+                user,
                 transactionType,
-                Math.abs(amount),
+                amount,
                 balance,
                 balance,
                 referenceId,
-                note == null ? "" : note,
-                LocalDateTime.now()
+                note
         );
 
         if (databaseEnabled()) {
@@ -800,7 +804,7 @@ public final class WalletService {
             String referenceId,
             String note
     ) throws SQLException {
-        WalletTransaction transaction = walletTransaction(
+        WalletTransaction transaction = transactionFactory.transaction(
                 user,
                 transactionType,
                 amount,
@@ -863,7 +867,15 @@ public final class WalletService {
                     walletDAO.ensureWallet(user, before);
                     before = walletDAO.findBalanceForUpdate(user.getId()).orElse(before);
                     double after = balanceAfter(before, amountDelta);
-                    transaction = walletTransaction(user, transactionType, amountDelta, before, after, referenceId, note);
+                    transaction = transactionFactory.transaction(
+                            user,
+                            transactionType,
+                            amountDelta,
+                            before,
+                            after,
+                            referenceId,
+                            note
+                    );
                     walletDAO.updateBalance(user.getId(), after);
                     walletDAO.addTransaction(transaction);
                     conn.commit();
@@ -878,7 +890,7 @@ public final class WalletService {
             }
         } else {
             double after = balanceAfter(before, amountDelta);
-            transaction = walletTransaction(user, transactionType, amountDelta, before, after, referenceId, note);
+            transaction = transactionFactory.transaction(user, transactionType, amountDelta, before, after, referenceId, note);
         }
 
         balancesByUserId.put(user.getId(), transaction.balanceAfter());
@@ -912,7 +924,15 @@ public final class WalletService {
                             .orElseThrow(() -> new IllegalArgumentException("Wallet account was not found."));
                     updatedAccountBalance = accountBalanceAfter(accountBefore, accountAmountDelta);
                     double after = balanceAfter(before, walletAmountDelta);
-                    transaction = walletTransaction(user, transactionType, walletAmountDelta, before, after, account.id(), note);
+                    transaction = transactionFactory.transaction(
+                            user,
+                            transactionType,
+                            walletAmountDelta,
+                            before,
+                            after,
+                            account.id(),
+                            note
+                    );
                     walletDAO.updateBalance(user.getId(), after);
                     walletDAO.updateLinkedAccountBalance(user.getId(), account.id(), updatedAccountBalance);
                     walletDAO.addTransaction(transaction);
@@ -929,7 +949,15 @@ public final class WalletService {
         } else {
             updatedAccountBalance = accountBalanceAfter(account.balance(), accountAmountDelta);
             double after = balanceAfter(before, walletAmountDelta);
-            transaction = walletTransaction(user, transactionType, walletAmountDelta, before, after, account.id(), note);
+            transaction = transactionFactory.transaction(
+                    user,
+                    transactionType,
+                    walletAmountDelta,
+                    before,
+                    after,
+                    account.id(),
+                    note
+            );
         }
 
         balancesByUserId.put(user.getId(), transaction.balanceAfter());
@@ -961,7 +989,7 @@ public final class WalletService {
                     double accountBefore = walletDAO.findLinkedAccountBalanceForUpdate(user.getId(), account.id())
                             .orElseThrow(() -> new IllegalArgumentException("Wallet account was not found."));
                     updatedAccountBalance = accountBalanceAfter(accountBefore, amount);
-                    transaction = walletAccountAdjustmentTransaction(user, amount, balance, account.id(), note);
+                    transaction = transactionFactory.accountAdjustment(user, amount, balance, account.id(), note);
                     walletDAO.updateLinkedAccountBalance(user.getId(), account.id(), updatedAccountBalance);
                     walletDAO.addTransaction(transaction);
                     conn.commit();
@@ -976,7 +1004,7 @@ public final class WalletService {
             }
         } else {
             updatedAccountBalance = accountBalanceAfter(account.balance(), amount);
-            transaction = walletAccountAdjustmentTransaction(user, amount, balance, account.id(), note);
+            transaction = transactionFactory.accountAdjustment(user, amount, balance, account.id(), note);
         }
 
         updateLinkedAccountBalanceInMemory(user, account.id(), updatedAccountBalance);
@@ -1253,48 +1281,6 @@ public final class WalletService {
 
     private double roundCurrency(double amount) {
         return Math.round(Math.max(0.0, amount) * 100.0) / 100.0;
-    }
-
-    private WalletTransaction walletTransaction(
-            User user,
-            String transactionType,
-            double amountDelta,
-            double before,
-            double after,
-            String referenceId,
-            String note
-    ) {
-        return new WalletTransaction(
-                UUID.randomUUID().toString(),
-                user.getId(),
-                transactionType,
-                Math.abs(amountDelta),
-                before,
-                after,
-                referenceId,
-                note == null ? "" : note,
-                LocalDateTime.now()
-        );
-    }
-
-    private WalletTransaction walletAccountAdjustmentTransaction(
-            User user,
-            double amount,
-            double balance,
-            String referenceId,
-            String note
-    ) {
-        return new WalletTransaction(
-                UUID.randomUUID().toString(),
-                user.getId(),
-                "ADJUSTMENT",
-                roundCurrency(amount),
-                balance,
-                balance,
-                referenceId,
-                note == null ? "" : note,
-                LocalDateTime.now()
-        );
     }
 
     private void validatePin(String pin) {

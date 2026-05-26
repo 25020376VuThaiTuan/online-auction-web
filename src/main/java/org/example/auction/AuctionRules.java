@@ -9,9 +9,9 @@ import java.util.List;
 import java.util.Objects;
 
 public final class AuctionRules {
-    public static final long DEFAULT_EXTENSION_TRIGGER_SECONDS = 15;
+    public static final long DEFAULT_EXTENSION_TRIGGER_SECONDS = 60;
     public static final long DEFAULT_EXTENSION_SECONDS = 60;
-    public static final int DEFAULT_MAX_EXTENSIONS = 10;
+    public static final int DEFAULT_MAX_EXTENSIONS = Integer.MAX_VALUE;
 
     private AuctionRules() {
     }
@@ -174,10 +174,6 @@ public final class AuctionRules {
         if (endTime == null || bidTime == null || extensionSeconds <= 0) {
             return endTime;
         }
-        if (maxExtensions >= 0 && extensionCount >= maxExtensions) {
-            return endTime;
-        }
-
         // If a valid bid lands in the last X seconds, extend the auction by Y seconds.
         long secondsRemaining = ChronoUnit.SECONDS.between(bidTime, endTime);
         if (secondsRemaining >= 0 && secondsRemaining <= extensionTriggerSeconds) {

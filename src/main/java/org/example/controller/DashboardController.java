@@ -56,7 +56,6 @@ import org.example.util.SceneNavigator;
 import org.example.viewmodel.AuctionEligibilityEntry;
 
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -65,8 +64,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class DashboardController {
-    private static final DateTimeFormatter BID_NOTIFICATION_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM HH:mm:ss");
-    private static final DateTimeFormatter DASHBOARD_DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
     private static final java.time.Duration WALLET_PIN_TRUST_DURATION = java.time.Duration.ofMinutes(120);
     private static final int REFRESH_INTERVAL_MILLIS = 3_000;
     private static final AuctionCatalogFilters.EntryAdapter<AuctionEligibilityEntry> AUCTION_ENTRY_ADAPTER =
@@ -100,6 +97,8 @@ public class DashboardController {
     private final AuctionApiClient apiClient = AuctionApiClient.getInstance();
     private final MarketplaceDashboardService dashboardService = MarketplaceDashboardService.getInstance();
     private final ApplicationSession applicationSession = ApplicationSession.getInstance();
+    private final DashboardBidderNameResolver bidderNameResolver =
+            new DashboardBidderNameResolver(applicationSession, dashboardService);
     private final ExecutorService refreshExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("dashboard-refresh");
     private final ExecutorService selectionDetailExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("dashboard-selection-refresh");
     private final ExecutorService connectionTestExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("api-connection-test");
@@ -115,12 +114,12 @@ public class DashboardController {
     private boolean suppressSellerSelectionRefresh;
     private long auctionDetailRequestId;
     private long sellerDetailRequestId;
-    private String lastAdminRefreshFailureMessage;
     private String lastDashboardRefreshFailureMessage;
     private String lastAuctionDetailFailureMessage;
     private String lastSellerDetailFailureMessage;
-    private String lastBidHistoryChartSignature;
     private List<AuctionEligibilityEntry> latestAuctionEntries = List.of();
+    private DashboardBidPanelPresenter bidPanelPresenter;
+    private DashboardAdminPresenter adminPresenter;
 
     @FXML
     private TabPane dashboardTabPane;
@@ -1282,167 +1281,66 @@ public class DashboardController {
     }
 
     private void configureTables() {
-        walletTransactionTimeColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(formatDateTime(cellData.getValue().createdAt())));
-        walletTransactionTypeColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().transactionType().replace('_', ' ')));
-        walletTransactionAmountColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(AuctionDisplayFormatter.formatCurrency(cellData.getValue().amount())));
-        walletTransactionBalanceColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(AuctionDisplayFormatter.formatCurrency(cellData.getValue().balanceAfter())));
-        walletTransactionNoteColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().note()));
-        ResponsiveViewSupport.configureResponsiveTable(walletTransactionTable);
-
-        walletAccountPrimaryColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().primary() ? "Yes" : ""));
-        walletAccountProviderColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().providerName()));
-        walletAccountNameColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().accountName()));
-        walletAccountReferenceColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().maskedReference()));
-        walletAccountBalanceColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(AuctionDisplayFormatter.formatCurrency(cellData.getValue().balance())));
-        ResponsiveViewSupport.configureResponsiveTable(walletAccountTable);
-
-        auctionWatchColumn.setCellValueFactory(cellData -> new SimpleStringProperty(
-                applicationSession.isAuctionWatched(cellData.getValue().getItemId()) ? "Watching" : ""
+        DashboardTableConfigurator.configureWalletTables(new DashboardTableConfigurator.WalletTables(
+                walletTransactionTable,
+                walletTransactionTimeColumn,
+                walletTransactionTypeColumn,
+                walletTransactionAmountColumn,
+                walletTransactionBalanceColumn,
+                walletTransactionNoteColumn,
+                walletAccountTable,
+                walletAccountPrimaryColumn,
+                walletAccountProviderColumn,
+                walletAccountNameColumn,
+                walletAccountReferenceColumn,
+                walletAccountBalanceColumn
         ));
-        auctionWatchColumn.setCellFactory(column -> new TableCell<>() {
-            @Override
-            protected void updateItem(String item, boolean empty) {
-                super.updateItem(item, empty);
-                getStyleClass().removeAll("watch-pill", "watch-active");
-                if (empty || item == null || item.isBlank()) {
-                    setText(null);
-                    return;
-                }
-                setText(item);
-                getStyleClass().add("watch-pill");
-                getStyleClass().add("watch-active");
-            }
-        });
-        auctionNameColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().getItemName()));
-        auctionStatusColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().getStatus()));
-        auctionStatusColumn.setCellFactory(column -> new TableCell<>() {
-            @Override
-            protected void updateItem(String item, boolean empty) {
-                super.updateItem(item, empty);
-                getStyleClass().removeAll("status-pill", "status-open", "status-running", "status-finished", "status-paid", "status-cancelled");
-                if (empty || item == null) {
-                    setText(null);
-                    return;
-                }
-                String normalizedStatus = AuctionCatalogFilters.normalizeStatus(item);
-                setText(item.replace('_', ' '));
-                getStyleClass().add("status-pill");
-                getStyleClass().add(AuctionCatalogFilters.statusStyleClass(normalizedStatus));
-            }
-        });
-        auctionCurrentPriceColumn.setCellValueFactory(cellData ->
-                new SimpleObjectProperty<>(cellData.getValue().getCurrentPrice()));
-        auctionMinimumBidColumn.setCellValueFactory(cellData ->
-                new SimpleObjectProperty<>(cellData.getValue().getMinimumBid()));
-        auctionRequiredDepositColumn.setCellValueFactory(cellData ->
-                new SimpleObjectProperty<>(cellData.getValue().getRequiredDeposit()));
-        auctionAvailableBalanceColumn.setCellValueFactory(cellData ->
-                new SimpleObjectProperty<>(cellData.getValue().getAvailableBalance()));
-        auctionTimeRemainingColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().getRemainingTime()));
-        auctionEndTimeColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().getEndTimeString()));
-        auctionEligibleColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().getEligibleText()));
-        auctionEligibleColumn.setCellFactory(column -> new TableCell<>() {
-            @Override
-            protected void updateItem(String item, boolean empty) {
-                super.updateItem(item, empty);
-                getStyleClass().removeAll("eligible-pill", "eligible-entered", "eligible-ready", "eligible-blocked");
-                if (empty || item == null) {
-                    setText(null);
-                    return;
-                }
-                setText(item);
-                getStyleClass().add("eligible-pill");
-                getStyleClass().add(eligibleStyleClass(item));
-            }
-        });
-        ResponsiveViewSupport.configureResponsiveTable(auctionTable);
-        ResponsiveViewSupport.configureCurrencyColumn(auctionCurrentPriceColumn);
-        ResponsiveViewSupport.configureCurrencyColumn(auctionMinimumBidColumn);
-        ResponsiveViewSupport.configureCurrencyColumn(auctionRequiredDepositColumn);
-        ResponsiveViewSupport.configureCurrencyColumn(auctionAvailableBalanceColumn);
-        auctionTable.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> {
-            if (suppressAuctionSelectionRefresh) {
-                return;
-            }
-            if (current == null) {
-                updateAuctionWatchAction(null);
-                clearBidSection();
-                return;
-            }
-            selectedAuctionId = current.getItemId();
-            updateAuctionWatchAction(current);
-            boolean selectionChanged = previous == null || !current.getItemId().equals(previous.getItemId());
-            showSelectedAuctionSummary(current, selectionChanged);
-            refreshSelectedAuctionDetailAsync(current);
-        });
-
-        sellerItemNameColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().getItemName()));
-        sellerItemStatusColumn.setCellValueFactory(cellData ->
-                new SimpleObjectProperty<>(cellData.getValue().getApprovalStatus()));
-        sellerItemCurrentPriceColumn.setCellValueFactory(cellData ->
-                new SimpleObjectProperty<>(cellData.getValue().getCurrentPrice()));
-        sellerAuctionStartColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(formatDateTime(cellData.getValue().getStartTime())));
-        sellerAuctionEndColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(formatDateTime(cellData.getValue().getEndTime())));
-        ResponsiveViewSupport.configureResponsiveTable(sellerItemsTable);
-        ResponsiveViewSupport.configureCurrencyColumn(sellerItemCurrentPriceColumn);
-        sellerItemsTable.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> {
-            if (suppressSellerSelectionRefresh) {
-                return;
-            }
-            if (current == null) {
-                sellerBidHistoryList.setItems(FXCollections.observableArrayList());
-                applySellerSelectionState(null, false);
-                return;
-            }
-            boolean selectionChanged = previous == null || !current.getId().equals(previous.getId());
-            if (selectionChanged) {
-                sellerBidHistoryList.setItems(FXCollections.observableArrayList());
-            }
-            applySellerSelectionState(current, false);
-            refreshSellerSelectionAsync(current);
-        });
-
-        adminUsernameColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().getUsername()));
-        adminFullNameColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().getFullName()));
-        adminEmailColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().getEmail()));
-        adminRoleColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().getRole()));
-        ResponsiveViewSupport.configureResponsiveTable(userTable);
-        roleChoiceBox.setItems(FXCollections.observableArrayList("BIDDER", "SELLER", "ADMIN"));
-
-        pendingItemNameColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().getItemName()));
-        pendingSellerColumn.setCellValueFactory(cellData ->
-                new SimpleStringProperty(cellData.getValue().getSellerId()));
-        pendingStatusColumn.setCellValueFactory(cellData ->
-                new SimpleObjectProperty<>(cellData.getValue().getApprovalStatus()));
-        ResponsiveViewSupport.configureResponsiveTable(pendingItemsTable);
-
-        sellerItemTypeChoiceBox.setItems(FXCollections.observableArrayList("electronics", "art", "vehicle"));
-        if (!sellerItemTypeChoiceBox.getItems().isEmpty()) {
-            sellerItemTypeChoiceBox.setValue(sellerItemTypeChoiceBox.getItems().get(0));
-        }
+        DashboardTableConfigurator.configureAuctionTable(new DashboardTableConfigurator.AuctionTableConfig(
+                applicationSession,
+                auctionTable,
+                auctionWatchColumn,
+                auctionNameColumn,
+                auctionStatusColumn,
+                auctionCurrentPriceColumn,
+                auctionMinimumBidColumn,
+                auctionRequiredDepositColumn,
+                auctionAvailableBalanceColumn,
+                auctionTimeRemainingColumn,
+                auctionEndTimeColumn,
+                auctionEligibleColumn,
+                () -> suppressAuctionSelectionRefresh,
+                this::updateAuctionWatchAction,
+                this::clearBidSection,
+                this::showSelectedAuctionSummary,
+                this::refreshSelectedAuctionDetailAsync,
+                itemId -> selectedAuctionId = itemId,
+                this::eligibleStyleClass
+        ));
+        DashboardTableConfigurator.configureSellerTable(new DashboardTableConfigurator.SellerTableConfig(
+                sellerItemsTable,
+                sellerItemNameColumn,
+                sellerItemStatusColumn,
+                sellerItemCurrentPriceColumn,
+                sellerAuctionStartColumn,
+                sellerAuctionEndColumn,
+                sellerBidHistoryList,
+                () -> suppressSellerSelectionRefresh,
+                this::applySellerSelectionState,
+                this::refreshSellerSelectionAsync
+        ));
+        DashboardTableConfigurator.configureAdminTables(new DashboardTableConfigurator.AdminTableConfig(
+                userTable,
+                adminUsernameColumn,
+                adminFullNameColumn,
+                adminEmailColumn,
+                adminRoleColumn,
+                roleChoiceBox,
+                pendingItemsTable,
+                pendingItemNameColumn,
+                pendingSellerColumn,
+                pendingStatusColumn
+        ));
+        DashboardTableConfigurator.configureSellerItemTypeChoice(sellerItemTypeChoiceBox);
         configureAuctionFilters();
     }
 
@@ -1776,47 +1674,15 @@ public class DashboardController {
     }
 
     private WalletSummary walletWithCurrentFinancials(WalletSummary wallet, User user) {
-        if (wallet == null || user == null || !wallet.userId().equals(user.getId())) {
-            return wallet;
-        }
-        if (!(user instanceof Bidder bidder)) {
-            return wallet;
-        }
-        return new WalletSummary(
-                wallet.userId(),
-                bidder.getBalance(),
-                bidder.getLockedBalance(),
-                bidder.getAvailableBalance(),
-                wallet.pinSet(),
-                wallet.linkedAccounts(),
-                wallet.transactions()
-        );
+        return DashboardWalletSummaries.withCurrentFinancials(wallet, user);
     }
 
     private WalletSummary dashboardWallet(User user, WalletSummary walletSnapshot) {
-        WalletSummary snapshot = walletWithCurrentFinancials(walletSnapshot, user);
-        if (openedWalletSummary == null || user == null || !openedWalletSummary.userId().equals(user.getId())) {
-            return snapshot;
-        }
-        return mergeWalletFinancials(openedWalletSummary, snapshot);
+        return DashboardWalletSummaries.dashboardWallet(user, walletSnapshot, openedWalletSummary);
     }
 
     private WalletSummary mergeWalletFinancials(WalletSummary detailWallet, WalletSummary financialWallet) {
-        if (detailWallet == null) {
-            return financialWallet;
-        }
-        if (financialWallet == null || !detailWallet.userId().equals(financialWallet.userId())) {
-            return detailWallet;
-        }
-        return new WalletSummary(
-                detailWallet.userId(),
-                financialWallet.balance(),
-                financialWallet.lockedBalance(),
-                financialWallet.availableBalance(),
-                financialWallet.pinSet(),
-                detailWallet.linkedAccounts(),
-                detailWallet.transactions()
-        );
+        return DashboardWalletSummaries.mergeFinancials(detailWallet, financialWallet);
     }
 
     private void applyWalletSummaryToAccountBalance(WalletSummary wallet) {
@@ -1951,8 +1817,7 @@ public class DashboardController {
         registerAutoBidButton.setDisable(!canBid);
         disableAutoBidButton.setDisable(!canBid);
         if (clearHistory) {
-            bidHistoryChart.getData().clear();
-            lastBidHistoryChartSignature = null;
+            bidPanel().clearChart();
             clearBidStatusViews();
             applyBuyerSettlementButtons(SettlementButtonState.disabled());
         }
@@ -1980,8 +1845,7 @@ public class DashboardController {
         disableAutoBidButton.setDisable(true);
         confirmAuctionEntryButton.setDisable(true);
         updateAuctionWatchAction(null);
-        bidHistoryChart.getData().clear();
-        lastBidHistoryChartSignature = null;
+        bidPanel().clearChart();
         clearBidStatusViews();
         applyBuyerSettlementButtons(SettlementButtonState.disabled());
     }
@@ -1991,124 +1855,23 @@ public class DashboardController {
     }
 
     private void applyBidHistory(List<Bid> bidHistory) {
-        List<Bid> safeHistory = bidHistory == null ? List.of() : bidHistory;
-        applyCurrentWinner(safeHistory);
-        applyBidNotifications(safeHistory);
-        String signature = BidChartUtils.signature(safeHistory);
-        if (signature.equals(lastBidHistoryChartSignature)) {
-            return;
-        }
-
-        BidChartUtils.applyBidHistory(bidHistoryChart, safeHistory);
-        lastBidHistoryChartSignature = signature;
-    }
-
-    private void applyCurrentWinner(List<Bid> bidHistory) {
-        if (currentWinnerLabel == null) {
-            return;
-        }
-        if (bidHistory == null || bidHistory.isEmpty()) {
-            currentWinnerLabel.setText("Current winner: No bids yet");
-            return;
-        }
-
-        Bid winningBid = bidHistory.get(bidHistory.size() - 1);
-        currentWinnerLabel.setText("Current winner: "
-                + displayBidderName(winningBid.getBidderId())
-                + " - "
-                + AuctionDisplayFormatter.formatCurrency(winningBid.getAmount())
-                + " at "
-                + formatBidNotificationTime(winningBid.getBidTime()));
-    }
-
-    private void applyBidNotifications(List<Bid> bidHistory) {
-        if (bidNotificationList == null) {
-            return;
-        }
-        if (bidHistory == null || bidHistory.isEmpty()) {
-            bidNotificationList.setItems(FXCollections.observableArrayList());
-            return;
-        }
-
-        List<String> lines = new ArrayList<>();
-        for (int index = bidHistory.size() - 1; index >= 0 && lines.size() < 10; index--) {
-            lines.add(formatBidNotificationLine(bidHistory.get(index)));
-        }
-        bidNotificationList.setItems(FXCollections.observableArrayList(lines));
-    }
-
-    private String formatBidNotificationLine(Bid bid) {
-        return formatBidNotificationTime(bid.getBidTime())
-                + " - "
-                + displayBidderName(bid.getBidderId())
-                + " - "
-                + AuctionDisplayFormatter.formatCurrency(bid.getAmount());
+        bidPanel().applyBidHistory(bidHistory, bidderNameResolver::displayName);
     }
 
     private String formatBidNotificationTime(LocalDateTime value) {
-        return value == null ? "N/A" : BID_NOTIFICATION_TIME_FORMATTER.format(value);
-    }
-
-    private String displayBidderName(String bidderId) {
-        String safeBidderId = value(bidderId);
-        if (safeBidderId.isBlank()) {
-            return "Unknown bidder";
-        }
-        var currentUser = applicationSession.getCurrentUser();
-        if (currentUser.isPresent() && safeBidderId.equals(currentUser.get().getId())) {
-            return currentUser.get().getFullName();
-        }
-        try {
-            return dashboardService.findUserById(safeBidderId)
-                    .map(User::getFullName)
-                    .filter(name -> !value(name).isBlank())
-                    .orElse(safeBidderId);
-        } catch (RuntimeException ignored) {
-            return safeBidderId;
-        }
+        return DashboardFormatters.formatBidNotificationTime(value);
     }
 
     private void addBidActivityNotification(String bidderName, double amount, LocalDateTime bidTime, String status) {
-        String line = formatBidNotificationTime(bidTime)
-                + " - "
-                + bidderName
-                + " - "
-                + AuctionDisplayFormatter.formatCurrency(amount)
-                + " ("
-                + status
-                + ")";
-        prependBidPanelLine(line);
-        currentWinnerLabel.setText("Current winner: "
-                + bidderName
-                + " - "
-                + AuctionDisplayFormatter.formatCurrency(amount)
-                + " at "
-                + formatBidNotificationTime(bidTime));
+        bidPanel().addBidActivityNotification(bidderName, amount, bidTime, status);
     }
 
     private void addBidPanelMessage(String message) {
-        prependBidPanelLine(formatBidNotificationTime(LocalDateTime.now())
-                + " - "
-                + currentUser().getFullName()
-                + " - "
-                + message);
-    }
-
-    private void prependBidPanelLine(String line) {
-        if (bidNotificationList == null) {
-            return;
-        }
-        List<String> lines = new ArrayList<>(bidNotificationList.getItems());
-        lines.add(0, line);
-        if (lines.size() > 10) {
-            lines = new ArrayList<>(lines.subList(0, 10));
-        }
-        bidNotificationList.setItems(FXCollections.observableArrayList(lines));
+        bidPanel().addMessage(currentUser().getFullName(), message);
     }
 
     private void clearBidStatusViews() {
-        currentWinnerLabel.setText("Current winner: N/A");
-        bidNotificationList.setItems(FXCollections.observableArrayList());
+        bidPanel().clearStatusViews();
     }
 
     private void refreshSelectedAuctionDetailAsync(AuctionEligibilityEntry entry) {
@@ -2267,8 +2030,7 @@ public class DashboardController {
     }
 
     private String formatSellerBidHistoryLine(Bid bid) {
-        return bid.getBidderId() + " -> " + AuctionDisplayFormatter.formatCurrency(bid.getAmount())
-                + " at " + (bid.getBidTime() == null ? "N/A" : bid.getBidTime().format(DateTimeFormatter.ofPattern("dd/MM HH:mm:ss")));
+        return DashboardFormatters.formatSellerBidHistoryLine(bid);
     }
 
     private boolean loadSellerCanShip(boolean useApi, String apiToken, String itemId) {
@@ -2290,58 +2052,23 @@ public class DashboardController {
     }
 
     private void applyAdminSection(AdminSectionSnapshot adminSection, User user) {
-        if (!adminSection.admin() || !isAdmin(user)) {
-            clearAdminSection();
-            return;
-        }
-        if (adminSection.failureMessage() != null) {
-            handleAdminRefreshFailure(adminSection.failureMessage());
-            return;
-        }
-
-        userTable.setItems(FXCollections.observableArrayList(adminSection.users()));
-        pendingItemsTable.setItems(FXCollections.observableArrayList(adminSection.pendingItems()));
-        adminSettlementItems.clear();
-        adminSettlementItems.addAll(adminSection.settlementItems());
-        adminSettlementList.setItems(FXCollections.observableArrayList(adminSection.settlementLines()));
-        if (lastAdminRefreshFailureMessage != null) {
-            adminWalletAuditList.setItems(FXCollections.observableArrayList());
-            lastAdminRefreshFailureMessage = null;
-        }
-    }
-
-    private void clearAdminSection() {
-        userTable.setItems(FXCollections.observableArrayList());
-        pendingItemsTable.setItems(FXCollections.observableArrayList());
-        adminSettlementItems.clear();
-        adminSettlementList.setItems(FXCollections.observableArrayList());
-        adminWalletAuditList.setItems(FXCollections.observableArrayList());
-        lastAdminRefreshFailureMessage = null;
+        adminPresenter().apply(
+                adminSection.admin(),
+                isAdmin(user),
+                adminSection.failureMessage(),
+                adminSection.users(),
+                adminSection.pendingItems(),
+                adminSection.settlementLines(),
+                adminSection.settlementItems()
+        );
     }
 
     private String walletAuditLine(WalletTransaction transaction) {
-        return formatDateTime(transaction.createdAt())
-                + " - "
-                + transaction.userId()
-                + " - "
-                + transaction.transactionType().replace('_', ' ')
-                + " - "
-                + AuctionDisplayFormatter.formatCurrency(transaction.amount())
-                + " - balance "
-                + AuctionDisplayFormatter.formatCurrency(transaction.balanceAfter())
-                + (transaction.note() == null || transaction.note().isBlank() ? "" : " - " + transaction.note());
+        return DashboardFormatters.walletAuditLine(transaction);
     }
 
     private void handleAdminRefreshFailure(String message) {
-        String resolvedMessage = message == null || message.isBlank()
-                ? "Admin data is temporarily unavailable."
-                : message;
-        lastAdminRefreshFailureMessage = resolvedMessage;
-        userTable.setItems(FXCollections.observableArrayList());
-        pendingItemsTable.setItems(FXCollections.observableArrayList());
-        adminSettlementItems.clear();
-        adminSettlementList.setItems(FXCollections.observableArrayList("Admin data unavailable."));
-        adminWalletAuditList.setItems(FXCollections.observableArrayList(resolvedMessage));
+        adminPresenter().handleRefreshFailure(message);
     }
 
     private void handleDashboardRefreshFailure(String message, boolean initialLoad) {
@@ -2426,6 +2153,30 @@ public class DashboardController {
                 : current.getMessage();
     }
 
+    private DashboardBidPanelPresenter bidPanel() {
+        if (bidPanelPresenter == null) {
+            bidPanelPresenter = new DashboardBidPanelPresenter(
+                    currentWinnerLabel,
+                    bidNotificationList,
+                    bidHistoryChart
+            );
+        }
+        return bidPanelPresenter;
+    }
+
+    private DashboardAdminPresenter adminPresenter() {
+        if (adminPresenter == null) {
+            adminPresenter = new DashboardAdminPresenter(
+                    userTable,
+                    pendingItemsTable,
+                    adminSettlementList,
+                    adminWalletAuditList,
+                    adminSettlementItems
+            );
+        }
+        return adminPresenter;
+    }
+
     private void startRefreshLoop() {
         refreshTimeline = new Timeline(new KeyFrame(Duration.millis(REFRESH_INTERVAL_MILLIS), event -> refreshViewAsync(false)));
         refreshTimeline.setCycleCount(Timeline.INDEFINITE);
@@ -2475,23 +2226,12 @@ public class DashboardController {
         return "ADMIN".equalsIgnoreCase(user.getRole());
     }
 
-    private String normalizeText(String value) {
-        return AuctionCatalogFilters.normalizeText(value);
-    }
-
     private String eligibleStyleClass(String value) {
-        String normalizedValue = normalizeText(value);
-        if ("entered".equals(normalizedValue)) {
-            return "eligible-entered";
-        }
-        if ("can enter".equals(normalizedValue)) {
-            return "eligible-ready";
-        }
-        return "eligible-blocked";
+        return DashboardFormatters.eligibleStyleClass(value);
     }
 
     private String value(String text) {
-        return text == null ? "" : text.trim();
+        return DashboardFormatters.value(text);
     }
 
     private String requestWalletPin(String title) {
@@ -2607,7 +2347,7 @@ public class DashboardController {
     }
 
     private String formatDateTime(LocalDateTime value) {
-        return value == null ? "N/A" : DASHBOARD_DATE_TIME_FORMATTER.format(value);
+        return DashboardFormatters.formatDateTime(value);
     }
 
     private void runBuyerSettlementAction(String title, String itemId, Runnable action) {

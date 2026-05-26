@@ -81,7 +81,7 @@ class AuctionAntiSnipingTest {
     }
 
     @Test
-    void acceptedLateSessionBidDoesNotExtendAfterMaxExtensions() {
+    void acceptedLateSessionBidExtendsEvenAfterLegacyMaxExtensions() {
         LocalDateTime originalEndTime = LocalDateTime.now().plusSeconds(10);
         Item item = runningItem(originalEndTime);
         AuctionSession session = new AuctionSession(
@@ -99,10 +99,11 @@ class AuctionAntiSnipingTest {
 
         BidValidationResult result = session.submitBid(bid(item.getId(), 110.0));
 
+        LocalDateTime expectedEndTime = originalEndTime.plusSeconds(AuctionRules.DEFAULT_EXTENSION_SECONDS);
         assertTrue(result.accepted());
-        assertEquals(originalEndTime, result.effectiveEndTime());
-        assertEquals(originalEndTime, session.getEndTime());
-        assertEquals(10, session.getExtensionCount());
+        assertEquals(expectedEndTime, result.effectiveEndTime());
+        assertEquals(expectedEndTime, session.getEndTime());
+        assertEquals(11, session.getExtensionCount());
     }
 
     @Test

@@ -19,6 +19,6 @@ public record AuctionExtensionConfig(
         triggerWindowSeconds = Math.max(0L, triggerWindowSeconds);
         extensionSeconds = Math.max(0L, extensionSeconds);
         extensionCount = Math.max(0, extensionCount);
-        maxExtensions = maxExtensions < 0 ? Integer.MAX_VALUE : maxExtensions;
+        maxExtensions = Integer.MAX_VALUE;
     }
 }

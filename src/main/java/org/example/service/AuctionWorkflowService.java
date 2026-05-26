@@ -42,6 +42,8 @@ public final class AuctionWorkflowService {
     private final AuthenticationService authenticationService = AuthenticationService.getInstance();
     private final AuctionSettlementService settlementService = AuctionSettlementService.getInstance();
     private final WalletService walletService = WalletService.getInstance();
+    private final AutoBidPolicy autoBidPolicy;
+    private final BidAuthorizationPolicy bidAuthorizationPolicy;
     
     private final ConcurrentHashMap<String, ReentrantLock> itemLocks = new ConcurrentHashMap<>();
     
@@ -52,6 +54,15 @@ public final class AuctionWorkflowService {
     private Map<String, List<AutoBid>> autoBidsByItemId = new ConcurrentHashMap<>();
 
     private AuctionWorkflowService() {
+        this(AutoBidPolicy.defaultPolicy(), BidAuthorizationPolicy.defaultPolicy());
+    }
+
+    AuctionWorkflowService(AutoBidPolicy autoBidPolicy, BidAuthorizationPolicy bidAuthorizationPolicy) {
+        this.autoBidPolicy = Objects.requireNonNullElse(autoBidPolicy, AutoBidPolicy.defaultPolicy());
+        this.bidAuthorizationPolicy = Objects.requireNonNullElse(
+                bidAuthorizationPolicy,
+                BidAuthorizationPolicy.defaultPolicy()
+        );
     }
 
     public static AuctionWorkflowService getInstance() {
@@ -138,7 +149,7 @@ public final class AuctionWorkflowService {
 
             AuctionSession session = getSessionForItem(itemId);
             double availableBalance = bidCapacity(itemId, user);
-            BidValidationResult authorizationFailure = bidAuthorizationFailure(
+            BidValidationResult authorizationFailure = bidAuthorizationPolicy.failureOrNull(
                     item,
                     session.getSummary(),
                     user,
@@ -301,8 +312,8 @@ public final class AuctionWorkflowService {
             String leadingBidderId = sessionBids.get(sessionBids.size() - 1).getBidderId();
             
             for (AutoBid ab : autoBids) {
-                if (shouldTriggerAutoBid(ab, triggerBidderId, leadingBidderId)) {
-                    double nextAmount = nextAutoBidAmount(
+                if (autoBidPolicy.shouldTrigger(ab, triggerBidderId, leadingBidderId)) {
+                    double nextAmount = autoBidPolicy.nextBidAmount(
                             currentHighest,
                             ab,
                             autoBidAvailableBalance(item.getId(), ab)
@@ -473,7 +484,7 @@ public final class AuctionWorkflowService {
             return false;
         }
         double availableBalance = bidCapacity(itemId, user);
-        BidValidationResult authorizationFailure = bidAuthorizationFailure(
+        BidValidationResult authorizationFailure = bidAuthorizationPolicy.failureOrNull(
                 item.get(),
                 getSessionForItem(itemId).getSummary(),
                 user,
@@ -646,8 +657,8 @@ public final class AuctionWorkflowService {
             String leadingBidderId = sessionBids.get(sessionBids.size() - 1).getBidderId();
 
             for (AutoBid autoBid : autoBids) {
-                if (shouldTriggerAutoBid(autoBid, triggerBidderId, leadingBidderId)) {
-                    double nextAmount = nextAutoBidAmount(
+                if (autoBidPolicy.shouldTrigger(autoBid, triggerBidderId, leadingBidderId)) {
+                    double nextAmount = autoBidPolicy.nextBidAmount(
                             currentHighest,
                             autoBid,
                             autoBidAvailableBalance(item.getId(), autoBid)
@@ -672,33 +683,15 @@ public final class AuctionWorkflowService {
     }
 
     static boolean shouldTriggerAutoBid(AutoBid autoBid, String triggerBidderId, String leadingBidderId) {
-        if (autoBid == null || autoBid.getBidderId() == null || autoBid.getBidderId().isBlank()) {
-            return false;
-        }
-        String autoBidderId = autoBid.getBidderId();
-        return !autoBidderId.equals(triggerBidderId) && !autoBidderId.equals(leadingBidderId);
+        return AutoBidPolicy.defaultPolicy().shouldTrigger(autoBid, triggerBidderId, leadingBidderId);
     }
 
     static double nextAutoBidAmount(double currentHighest, AutoBid autoBid) {
-        return nextAutoBidAmount(currentHighest, autoBid, Double.POSITIVE_INFINITY);
+        return AutoBidPolicy.defaultPolicy().nextBidAmount(currentHighest, autoBid);
     }
 
     static double nextAutoBidAmount(double currentHighest, AutoBid autoBid, double availableBalance) {
-        if (autoBid == null) {
-            return 0.0;
-        }
-        double minNext = AuctionRules.minimumNextBid(currentHighest);
-        double spendLimit = Math.min(autoBid.getMaxLimit(), availableBalance);
-        if (!Double.isFinite(spendLimit) || spendLimit < minNext) {
-            return 0.0;
-        }
-        double requiredIncrement = AuctionRules.minimumIncrement(currentHighest);
-        double configuredIncrement = autoBid.getBidIncrement();
-        double effectiveIncrement = configuredIncrement > 0.0
-                ? Math.max(configuredIncrement, requiredIncrement)
-                : requiredIncrement;
-        double requestedAmount = roundCurrency(currentHighest + effectiveIncrement);
-        return roundCurrency(Math.min(spendLimit, requestedAmount));
+        return AutoBidPolicy.defaultPolicy().nextBidAmount(currentHighest, autoBid, availableBalance);
     }
 
     static BidValidationResult bidAuthorizationFailure(
@@ -709,56 +702,14 @@ public final class AuctionWorkflowService {
             boolean hasEntryDeposit,
             double availableBalance
     ) {
-        double currentPrice = summary == null ? (item == null ? 0.0 : item.getCurrentPrice()) : summary.currentPrice();
-        double minimumNextBid = summary == null ? AuctionRules.minimumNextBid(currentPrice) : summary.minimumNextBid();
-        AuctionStatus status = summary == null ? AuctionStatus.OPEN : summary.status();
-        LocalDateTime effectiveEndTime = item == null ? null : item.getEndTime();
-
-        if (user == null) {
-            return BidValidationResult.rejected(
-                    "Authentication required to place bids.",
-                    amount,
-                    currentPrice,
-                    minimumNextBid,
-                    status,
-                    effectiveEndTime
-            );
-        }
-
-        if (item != null && item.getSellerId() != null && item.getSellerId().equalsIgnoreCase(user.getId())) {
-            return BidValidationResult.rejected(
-                    "Item creators cannot bid on their own auctions.",
-                    amount,
-                    currentPrice,
-                    minimumNextBid,
-                    status,
-                    effectiveEndTime
-            );
-        }
-
-        if (!hasEntryDeposit) {
-            return BidValidationResult.rejected(
-                    "Confirm auction entry and lock the deposit before placing a bid.",
-                    amount,
-                    currentPrice,
-                    minimumNextBid,
-                    status,
-                    effectiveEndTime
-            );
-        }
-
-        if (Double.isFinite(amount) && amount > 0.0 && amount > roundCurrency(availableBalance)) {
-            return BidValidationResult.rejected(
-                    "Available balance is lower than the bid amount after locked deposits.",
-                    amount,
-                    currentPrice,
-                    minimumNextBid,
-                    status,
-                    effectiveEndTime
-            );
-        }
-
-        return null;
+        return BidAuthorizationPolicy.defaultPolicy().failureOrNull(
+                item,
+                summary,
+                user,
+                amount,
+                hasEntryDeposit,
+                availableBalance
+        );
     }
 
     private static double roundCurrency(double amount) {

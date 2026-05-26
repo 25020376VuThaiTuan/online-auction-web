@@ -171,10 +171,16 @@ public class ItemDAO implements AutoCloseable {
                 if (rs.next()) {
                     AuctionExtensionConfig defaults = AuctionExtensionConfig.defaults();
                     return new AuctionExtensionConfig(
-                            intColumn(rs, "anti_sniping_window_seconds", (int) defaults.triggerWindowSeconds()),
+                            Math.max(
+                                    intColumn(rs, "anti_sniping_window_seconds", (int) defaults.triggerWindowSeconds()),
+                                    defaults.triggerWindowSeconds()
+                            ),
                             intColumn(rs, "extension_seconds", (int) defaults.extensionSeconds()),
                             intColumn(rs, "extension_count", defaults.extensionCount()),
-                            intColumn(rs, "max_extensions", defaults.maxExtensions())
+                            Math.max(
+                                    intColumn(rs, "max_extensions", defaults.maxExtensions()),
+                                    defaults.maxExtensions()
+                            )
                     );
                 }
             }

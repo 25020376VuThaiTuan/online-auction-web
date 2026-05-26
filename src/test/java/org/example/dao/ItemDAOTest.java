@@ -1,5 +1,6 @@
 package org.example.dao;
 
+import org.example.auction.AuctionExtensionConfig;
 import org.example.model.ApprovalStatus;
 import org.example.model.Item;
 import org.example.model.ItemFactory;
@@ -71,10 +72,10 @@ class ItemDAOTest {
                     minimum_increment DECIMAL(19,2),
                     start_at TIMESTAMP,
                     end_at TIMESTAMP,
-                    anti_sniping_window_seconds INT DEFAULT 10,
+                    anti_sniping_window_seconds INT DEFAULT 60,
                     extension_seconds INT DEFAULT 60,
                     extension_count INT DEFAULT 0,
-                    max_extensions INT DEFAULT 10,
+                    max_extensions INT DEFAULT 2147483647,
                     status VARCHAR(50),
                     updated_at TIMESTAMP,
                     closed_at TIMESTAMP
@@ -294,5 +295,39 @@ class ItemDAOTest {
             assertTrue(rs.next());
             assertEquals(1, rs.getInt("total"));
         }
+    }
+
+    @Test
+    void shouldUseOneMinuteMinimumAntiSnipingWindowForLegacyRows()
+            throws Exception {
+
+        Item item =
+                ItemFactory.createItem(
+                        "electronics",
+                        "item-5",
+                        "Headphones",
+                        "Legacy anti-sniping window",
+                        100,
+                        LocalDateTime.of(2026, 5, 26, 15, 0),
+                        LocalDateTime.of(2026, 5, 26, 16, 0),
+                        "Sony",
+                        12
+                );
+
+        item.setSellerId("seller-1");
+        item.setApprovalStatus(ApprovalStatus.APPROVED);
+
+        dao.addItem(item, "electronics", "Sony", 12);
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("""
+                    UPDATE auctions
+                    SET anti_sniping_window_seconds = 10
+                    WHERE item_id = 'item-5'
+                    """);
+        }
+
+        AuctionExtensionConfig config = dao.getAuctionExtensionConfig(item.getId());
+
+        assertEquals(60, config.triggerWindowSeconds());
     }
 }
