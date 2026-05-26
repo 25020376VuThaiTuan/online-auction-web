@@ -58,6 +58,7 @@ public class AuctionController implements org.example.auction.AuctionObserver {
     private final ApplicationSession applicationSession = ApplicationSession.getInstance();
     private final ExecutorService refreshExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("auction-detail-refresh");
     private final AtomicBoolean refreshInFlight = new AtomicBoolean(false);
+    private final AtomicBoolean refreshPending = new AtomicBoolean(false);
 
     private javafx.animation.Timeline refreshTimeline;
     private String selectedAuctionId;
@@ -307,10 +308,15 @@ public class AuctionController implements org.example.auction.AuctionObserver {
     }
 
     private void refreshViewAsync(boolean initialLoad) {
-        if (!refreshActive || !refreshInFlight.compareAndSet(false, true)) {
+        if (!refreshActive) {
+            return;
+        }
+        if (!refreshInFlight.compareAndSet(false, true)) {
+            refreshPending.set(true);
             return;
         }
 
+        refreshPending.set(false);
         CompletableFuture
                 .supplyAsync(this::loadAuctionViewSnapshot, refreshExecutor)
                 .whenComplete((snapshot, throwable) -> Platform.runLater(() -> {
@@ -331,6 +337,9 @@ public class AuctionController implements org.example.auction.AuctionObserver {
                         lastRefreshFailureMessage = null;
                     } finally {
                         refreshInFlight.set(false);
+                        if (refreshPending.getAndSet(false) && refreshActive) {
+                            refreshViewAsync(false);
+                        }
                     }
                 }));
     }

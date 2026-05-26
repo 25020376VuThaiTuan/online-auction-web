@@ -104,6 +104,7 @@ public class DashboardController {
     private final ExecutorService selectionDetailExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("dashboard-selection-refresh");
     private final ExecutorService connectionTestExecutor = BackgroundExecutorFactory.newSingleThreadExecutor("api-connection-test");
     private final AtomicBoolean refreshInFlight = new AtomicBoolean(false);
+    private final AtomicBoolean refreshPending = new AtomicBoolean(false);
 
     private Timeline refreshTimeline;
     private volatile boolean refreshActive;
@@ -1475,10 +1476,15 @@ public class DashboardController {
     }
 
     private void refreshViewAsync(boolean initialLoad) {
-        if (!refreshActive || !refreshInFlight.compareAndSet(false, true)) {
+        if (!refreshActive) {
+            return;
+        }
+        if (!refreshInFlight.compareAndSet(false, true)) {
+            refreshPending.set(true);
             return;
         }
 
+        refreshPending.set(false);
         DashboardLoadContext context = captureDashboardLoadContext();
         CompletableFuture
                 .supplyAsync(() -> loadDashboardSnapshot(context), refreshExecutor)
@@ -1495,6 +1501,9 @@ public class DashboardController {
                         lastDashboardRefreshFailureMessage = null;
                     } finally {
                         refreshInFlight.set(false);
+                        if (refreshPending.getAndSet(false) && refreshActive) {
+                            refreshViewAsync(false);
+                        }
                     }
                 }));
     }
