@@ -3,12 +3,20 @@ package org.example.controller;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
+import org.example.client.AuctionApiClient;
+import org.example.exception.InvalidPasswordException;
+import org.example.model.Bidder;
+import org.example.service.AuthenticationService;
+import org.example.state.ApplicationSession;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -24,7 +32,11 @@ class LoginControllerTest {
     @BeforeEach
     void setup() throws Exception {
 
-        controller = new LoginController();
+        controller = new LoginController(
+                newApiClientWithoutBaseUrl(),
+                AuthenticationService.getInstance(),
+                ApplicationSession.getInstance()
+        );
 
         setField(
                 "usernameField",
@@ -40,6 +52,11 @@ class LoginControllerTest {
                 "hintLabel",
                 new Label()
         );
+    }
+
+    @AfterEach
+    void clearSession() {
+        ApplicationSession.getInstance().logout();
     }
 
     private void setField(
@@ -67,6 +84,42 @@ class LoginControllerTest {
         field.setAccessible(true);
 
         return field.get(controller);
+    }
+
+    private AuctionApiClient newApiClientWithoutBaseUrl()
+            throws Exception {
+
+        String previousBaseUrl =
+                System.getProperty(
+                        "auction.api.baseUrl"
+                );
+
+        try {
+            System.clearProperty(
+                    "auction.api.baseUrl"
+            );
+
+            Constructor<AuctionApiClient> constructor =
+                    AuctionApiClient.class
+                            .getDeclaredConstructor();
+
+            constructor.setAccessible(
+                    true
+            );
+
+            return constructor.newInstance();
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty(
+                        "auction.api.baseUrl"
+                );
+            } else {
+                System.setProperty(
+                        "auction.api.baseUrl",
+                        previousBaseUrl
+                );
+            }
+        }
     }
 
     @Test
@@ -164,6 +217,58 @@ class LoginControllerTest {
         assertEquals(
                 "Dashboard data could not be loaded.",
                 result
+        );
+    }
+
+    @Test
+    void authenticateLogsInLocalUserAndRejectsBadPassword()
+            throws Exception {
+
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String username = "login_" + suffix;
+        Bidder bidder = (Bidder) AuthenticationService.getInstance().registerManualBidder(
+                username,
+                "secret",
+                username + "@test.local",
+                "Login Controller " + suffix
+        );
+
+        controller.authenticate(username, "secret");
+
+        assertEquals(
+                bidder.getId(),
+                ApplicationSession.getInstance().getCurrentUser().orElseThrow().getId()
+        );
+
+        ApplicationSession.getInstance().logout();
+
+        assertThrows(
+                InvalidPasswordException.class,
+                () -> controller.authenticate(username, "wrong")
+        );
+    }
+
+    @Test
+    void configuredApiUnavailableMessageExplainsLocalFallbackBoundary()
+            throws Exception {
+
+        Method method =
+                LoginController.class
+                        .getDeclaredMethod(
+                                "configuredApiUnavailable",
+                                AuctionApiClient.ApiClientException.class
+                        );
+
+        method.setAccessible(true);
+
+        AuctionApiClient.ApiClientException result =
+                (AuctionApiClient.ApiClientException) method.invoke(
+                        controller,
+                        new AuctionApiClient.ApiClientException("offline")
+                );
+
+        assertTrue(
+                result.getMessage().contains("Local demo sign-in is used only when AUCTION_API_BASE_URL is not set.")
         );
     }
 }

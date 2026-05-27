@@ -1,5 +1,6 @@
 package org.example.model;
 
+import org.example.auction.AuctionSeedData;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
@@ -17,6 +18,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ModelValueObjectCoverageTest {
@@ -158,6 +160,28 @@ class ModelValueObjectCoverageTest {
         ).displayInfo());
     }
 
+    @Test
+    void seedDataAndLegacyAuctionManagerExposeDemoCatalog() {
+        List<Item> demoItems = AuctionSeedData.createDemoItems();
+
+        assertEquals(3, demoItems.size());
+        assertEquals(List.of("ELEC-001", "ART-001", "VEH-001"), demoItems.stream().map(Item::getId).toList());
+        assertTrue(demoItems.stream().allMatch(Item::isApproved));
+        assertTrue(demoItems.stream().allMatch(item -> item.getEndTime() != null));
+
+        AuctionManager manager = AuctionManager.getInstance();
+        int sizeBefore = manager.getItems().size();
+        manager.addItem(demoItems.getFirst());
+
+        assertSame(manager, AuctionManager.getInstance());
+        assertSame(demoItems.getFirst(), manager.getItems().get(sizeBefore));
+    }
+
+    @Test
+    void legacyModelMainRunsThroughConsoleVerificationFlow() {
+        assertConsoleContains("TEST 1", () -> Main.main(new String[0]));
+    }
+
     private static AuctionStore roundTrip(AuctionStore store) throws Exception {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (ObjectOutputStream output = new ObjectOutputStream(bytes)) {
@@ -170,14 +194,19 @@ class ModelValueObjectCoverageTest {
 
     private static void assertConsoleContains(String expected, Runnable action) {
         PrintStream originalOut = System.out;
+        PrintStream originalErr = System.err;
         ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ByteArrayOutputStream error = new ByteArrayOutputStream();
         try {
             System.setOut(new PrintStream(output, true, StandardCharsets.UTF_8));
+            System.setErr(new PrintStream(error, true, StandardCharsets.UTF_8));
             action.run();
         } finally {
             System.setOut(originalOut);
+            System.setErr(originalErr);
         }
-        assertTrue(output.toString(StandardCharsets.UTF_8).contains(expected));
+        String combinedOutput = output.toString(StandardCharsets.UTF_8) + error.toString(StandardCharsets.UTF_8);
+        assertTrue(combinedOutput.contains(expected));
     }
 
     private static final class TestItem extends Item {

@@ -156,6 +156,75 @@ class WalletApiIntegrationTest {
         assertEquals(0.0, login.balance());
     }
 
+    @Test
+    void userProfileWalletAuthorizationWithdrawalAdminAuditAndLogoutRoutesWorkTogether() throws Exception {
+        LoginResult login = login();
+        String token = login.token();
+
+        Map<String, Object> health = ApiJson.parseObject(rawNoBody("GET", "/health", null).body());
+        assertEquals("ok", health.get("status"));
+
+        Map<String, Object> profile = request("PATCH", "/users/me/profile", token, Map.of(
+                "fullName", login.fullName() + " Updated",
+                "phoneNumber", "555-0200",
+                "address", "Integration Street"
+        ));
+        Map<?, ?> profileUser = (Map<?, ?>) profile.get("user");
+        assertEquals(login.fullName() + " Updated", profileUser.get("fullName"));
+
+        Map<String, Object> avatar = request("PATCH", "/users/me/avatar", token, Map.of(
+                "avatarUrl", "https://example.test/avatar.png"
+        ));
+        Map<?, ?> avatarUser = (Map<?, ?>) avatar.get("user");
+        assertEquals("https://example.test/avatar.png", avatarUser.get("avatarUrl"));
+
+        request("PATCH", "/users/me/wallet/pin", token, Map.of("newPin", "8642"));
+        Map<String, Object> authorization = request("POST", "/users/me/wallet/authorization", token, Map.of("walletPin", "8642"));
+        Map<?, ?> authorizationBody = (Map<?, ?>) authorization.get("authorization");
+        String walletAuthorization = String.valueOf(authorizationBody.get("token"));
+        assertTrue(walletAuthorization.startsWith("wa_"));
+
+        Map<String, Object> accountResponse = request("POST", "/users/me/wallet/accounts", token, Map.of(
+                "accountName", login.fullName() + " Updated",
+                "providerName", "Audit Provider",
+                "accountReference", "9988776655",
+                "initialBalance", 60.0,
+                "primary", true,
+                "walletPin", walletAuthorization
+        ));
+        Map<?, ?> wallet = (Map<?, ?>) accountResponse.get("wallet");
+        Map<?, ?> account = (Map<?, ?>) ((java.util.List<?>) wallet.get("linkedAccounts")).getFirst();
+        String accountId = String.valueOf(account.get("id"));
+
+        request("POST", "/users/me/wallet/top-up", token, Map.of(
+                "accountId", accountId,
+                "amount", 25.0,
+                "walletPin", walletAuthorization
+        ));
+        Map<String, Object> withdrawal = request("POST", "/users/me/wallet/withdraw", token, Map.of(
+                "accountId", accountId,
+                "amount", 10.0,
+                "walletPin", walletAuthorization
+        ));
+        Map<?, ?> withdrawnWallet = (Map<?, ?>) withdrawal.get("wallet");
+        assertEquals(15.0, ((Number) withdrawnWallet.get("balance")).doubleValue());
+
+        Map<String, Object> openedWallet = request("POST", "/users/me/wallet", token, Map.of("walletPin", walletAuthorization));
+        assertEquals(15.0, ((Number) ((Map<?, ?>) openedWallet.get("wallet")).get("balance")).doubleValue());
+
+        LoginResult admin = adminLogin();
+        Map<String, Object> roleResponse = request("PATCH", "/users/" + login.userId() + "/role", admin.token(), Map.of("role", "SELLER"));
+        assertEquals("SELLER", ((Map<?, ?>) roleResponse.get("user")).get("role"));
+
+        Map<String, Object> audit = request("GET", "/users/" + login.userId() + "/wallet/transactions", admin.token(), Map.of());
+        assertTrue(((Number) audit.get("count")).intValue() >= 1);
+
+        Map<String, Object> authMe = ApiJson.parseObject(rawNoBody("GET", "/auth/me", token).body());
+        assertEquals(login.userId(), ((Map<?, ?>) authMe.get("user")).get("id"));
+        assertEquals(200, rawNoBody("POST", "/auth/logout", token).statusCode());
+        assertEquals(401, rawNoBody("GET", "/auth/me", token).statusCode());
+    }
+
     private LoginResult login() throws Exception {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         String fullName = "Integration Bidder " + suffix;
@@ -171,6 +240,29 @@ class WalletApiIntegrationTest {
                 String.valueOf(user.get("id")),
                 ((Number) user.get("balance")).doubleValue(),
                 fullName
+        );
+    }
+
+    private LoginResult adminLogin() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String username = "admin_" + suffix;
+        org.example.model.User user = AuthenticationService.getInstance().registerManualBidder(
+                username,
+                "admin123",
+                username + "@test.local",
+                "Integration Admin " + suffix
+        );
+        AuthenticationService.getInstance().updateUserRole(user.getId(), "ADMIN");
+        Map<String, Object> response = request("POST", "/auth/login", null, Map.of(
+                "username", username,
+                "password", "admin123"
+        ));
+        Map<?, ?> responseUser = (Map<?, ?>) response.get("user");
+        return new LoginResult(
+                String.valueOf(response.get("token")),
+                String.valueOf(responseUser.get("id")),
+                ((Number) responseUser.get("balance")).doubleValue(),
+                String.valueOf(responseUser.get("fullName"))
         );
     }
 
@@ -190,6 +282,16 @@ class WalletApiIntegrationTest {
             builder.header("Authorization", "Bearer " + token);
         }
         builder.method(method, HttpRequest.BodyPublishers.ofString(ApiJson.stringify(body)));
+        return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private HttpResponse<String> rawNoBody(String method, String path, String token) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder()
+                .uri(URI.create(baseUrl + path));
+        if (token != null) {
+            builder.header("Authorization", "Bearer " + token);
+        }
+        builder.method(method, HttpRequest.BodyPublishers.noBody());
         return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 

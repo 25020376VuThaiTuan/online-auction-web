@@ -79,4 +79,43 @@ class AuthSessionDAOTest {
 
         assertTrue(result.isPresent());
     }
+
+    @Test
+    void shouldRevokeAndDeleteExpiredSessions() throws Exception {
+        dao.createSession(
+                "active-session",
+                "user-1",
+                "active_hash",
+                Instant.now(),
+                Instant.now().plusSeconds(3600)
+        );
+        dao.createSession(
+                "revoked-session",
+                "user-1",
+                "revoked_hash",
+                Instant.now(),
+                Instant.now().plusSeconds(3600)
+        );
+        dao.createSession(
+                "expired-session",
+                "user-1",
+                "expired_hash",
+                Instant.now().minusSeconds(7200),
+                Instant.now().minusSeconds(3600)
+        );
+
+        dao.revokeByTokenHash("revoked_hash");
+        dao.deleteExpiredSessions();
+
+        assertTrue(dao.findActiveSessionByTokenHash("active_hash").isPresent());
+        assertTrue(dao.findActiveSessionByTokenHash("revoked_hash").isEmpty());
+        assertTrue(dao.findActiveSessionByTokenHash("expired_hash").isEmpty());
+    }
+
+    @Test
+    void closeDoesNotCloseBorrowedConnection() throws Exception {
+        dao.close();
+
+        assertFalse(connection.isClosed());
+    }
 }

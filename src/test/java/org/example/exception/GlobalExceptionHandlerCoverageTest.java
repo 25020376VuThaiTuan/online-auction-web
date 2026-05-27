@@ -1,34 +1,101 @@
-package org.example.controller;
+package org.example.exception;
 
 import javafx.application.Platform;
 import javafx.scene.Node;
 import javafx.scene.Parent;
 import javafx.scene.control.ButtonBase;
 import javafx.scene.control.ButtonType;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.DialogPane;
-import javafx.scene.control.PasswordField;
 import javafx.stage.Window;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
-final class JavaFxTestSupport {
-    private static final AtomicBoolean STARTED = new AtomicBoolean(false);
+class GlobalExceptionHandlerCoverageTest {
+    private static final Path LOG_FILE = Path.of("system_errors.log");
 
-    private JavaFxTestSupport() {
+    private String originalLogContent;
+    private boolean logExisted;
+
+    @BeforeAll
+    static void initToolkit() {
+        startToolkit();
     }
 
-    static void startToolkit() {
-        if (!STARTED.compareAndSet(false, true)) {
-            Platform.setImplicitExit(false);
-            return;
-        }
+    @BeforeEach
+    void preserveLog() throws Exception {
+        logExisted = Files.exists(LOG_FILE);
+        originalLogContent = logExisted ? Files.readString(LOG_FILE) : null;
+        Files.deleteIfExists(LOG_FILE);
+    }
 
+    @AfterEach
+    void restoreLog() throws Exception {
+        runAndWait(GlobalExceptionHandlerCoverageTest::closeShowingDialogs);
+        if (logExisted) {
+            Files.writeString(LOG_FILE, originalLogContent);
+        } else {
+            Files.deleteIfExists(LOG_FILE);
+        }
+    }
+
+    @Test
+    void handleExceptionFromBackgroundThreadLogsDomainFailureAndShowsAlert() throws Exception {
+        closeNextDialog();
+        Thread thread = new Thread(
+                () -> GlobalExceptionHandler.handleException(Thread.currentThread(), new InvalidPasswordException("bad password")),
+                "handler-background-test"
+        );
+
+        thread.start();
+        thread.join(5_000L);
+
+        String log = waitForLog();
+        assertTrue(log.contains("handler-background-test"));
+        assertTrue(log.contains(InvalidPasswordException.class.getName()));
+        assertTrue(log.contains("bad password"));
+    }
+
+    @Test
+    void handleExceptionOnFxThreadLogsUnknownThreadAndShowsGenericAlert() throws Exception {
+        closeNextDialog();
+
+        runAndWait(() -> GlobalExceptionHandler.handleException(null, new RuntimeException("boom")));
+
+        String log = waitForLog();
+        assertTrue(log.contains("Unknown"));
+        assertTrue(log.contains(RuntimeException.class.getName()));
+        assertTrue(log.contains("boom"));
+    }
+
+    private static String waitForLog() throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (Files.exists(LOG_FILE)) {
+                String log = Files.readString(LOG_FILE);
+                if (!log.isBlank()) {
+                    return log;
+                }
+            }
+            Thread.sleep(25);
+        }
+        fail("Timed out waiting for exception log.");
+        return "";
+    }
+
+    private static void startToolkit() {
         CountDownLatch latch = new CountDownLatch(1);
         try {
             Platform.startup(() -> {
@@ -40,15 +107,13 @@ final class JavaFxTestSupport {
             }
         } catch (IllegalStateException alreadyStarted) {
             Platform.setImplicitExit(false);
-            latch.countDown();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             fail("Interrupted while starting the JavaFX toolkit.");
         }
     }
 
-    static void runAndWait(Runnable action) {
-        startToolkit();
+    private static void runAndWait(Runnable action) {
         if (Platform.isFxApplicationThread()) {
             action.run();
             return;
@@ -68,11 +133,11 @@ final class JavaFxTestSupport {
 
         try {
             if (!latch.await(10, TimeUnit.SECONDS)) {
-                fail("Timed out while waiting for the JavaFX action.");
+                fail("Timed out while waiting for JavaFX action.");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            fail("Interrupted while waiting for the JavaFX action.");
+            fail("Interrupted while waiting for JavaFX action.");
         }
 
         Throwable throwable = failure.get();
@@ -83,43 +148,19 @@ final class JavaFxTestSupport {
             throw error;
         }
         if (throwable != null) {
-            throw new AssertionError("JavaFX action failed.", throwable);
+            throw new AssertionError(throwable);
         }
     }
 
-    static void closeNextDialog(ButtonType buttonType) {
-        respondToNextDialog(null, false, buttonType);
-    }
-
-    static void answerNextPasswordDialog(String password, boolean remember, ButtonType buttonType) {
-        respondToNextDialog(password, remember, buttonType);
-    }
-
-    static void answerNextPasswordDialogThenCloseAlert(String password, boolean remember) {
-        respondToNextDialog(password, remember, ButtonType.OK, () -> respondToNextDialog(null, false, ButtonType.OK));
-    }
-
-    private static void respondToNextDialog(String password, boolean remember, ButtonType buttonType) {
-        respondToNextDialog(password, remember, buttonType, null);
-    }
-
-    private static void respondToNextDialog(
-            String password,
-            boolean remember,
-            ButtonType buttonType,
-            Runnable afterHandled
-    ) {
-        startToolkit();
+    private static void closeNextDialog() {
         AtomicBoolean handled = new AtomicBoolean(false);
         Thread responder = new Thread(() -> {
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
             while (!handled.get() && System.nanoTime() < deadline) {
                 CountDownLatch latch = new CountDownLatch(1);
                 Platform.runLater(() -> {
                     try {
-                        if (tryRespondToOpenDialog(password, remember, buttonType, handled) && afterHandled != null) {
-                            afterHandled.run();
-                        }
+                        handled.set(closeShowingDialogs());
                     } finally {
                         latch.countDown();
                     }
@@ -132,21 +173,14 @@ final class JavaFxTestSupport {
                     return;
                 }
             }
-        }, "javafx-dialog-responder");
+        }, "global-exception-dialog-responder");
         responder.setDaemon(true);
         responder.start();
     }
 
-    private static boolean tryRespondToOpenDialog(
-            String password,
-            boolean remember,
-            ButtonType buttonType,
-            AtomicBoolean handled
-    ) {
-        if (handled.get()) {
-            return false;
-        }
-        for (Window window : Window.getWindows()) {
+    private static boolean closeShowingDialogs() {
+        boolean closed = false;
+        for (Window window : List.copyOf(Window.getWindows())) {
             if (!window.isShowing() || window.getScene() == null) {
                 continue;
             }
@@ -154,20 +188,15 @@ final class JavaFxTestSupport {
             if (dialogPane == null) {
                 continue;
             }
-            if (password != null) {
-                setPasswordFields(dialogPane, password);
-                setCheckBoxes(dialogPane, remember);
-            }
-            Node button = dialogPane.lookupButton(buttonType);
-            handled.set(true);
+            Node button = dialogPane.lookupButton(ButtonType.OK);
             if (button instanceof ButtonBase buttonBase) {
                 buttonBase.fire();
             } else {
                 window.hide();
             }
-            return true;
+            closed = true;
         }
-        return false;
+        return closed;
     }
 
     private static DialogPane findDialogPane(Node node) {
@@ -183,27 +212,5 @@ final class JavaFxTestSupport {
             }
         }
         return null;
-    }
-
-    private static void setPasswordFields(Node node, String password) {
-        if (node instanceof PasswordField passwordField) {
-            passwordField.setText(password);
-        }
-        if (node instanceof Parent parent) {
-            for (Node child : parent.getChildrenUnmodifiable()) {
-                setPasswordFields(child, password);
-            }
-        }
-    }
-
-    private static void setCheckBoxes(Node node, boolean selected) {
-        if (node instanceof CheckBox checkBox) {
-            checkBox.setSelected(selected);
-        }
-        if (node instanceof Parent parent) {
-            for (Node child : parent.getChildrenUnmodifiable()) {
-                setCheckBoxes(child, selected);
-            }
-        }
     }
 }

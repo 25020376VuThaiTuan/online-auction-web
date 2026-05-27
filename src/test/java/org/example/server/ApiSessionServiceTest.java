@@ -4,6 +4,8 @@ import org.example.model.Bidder;
 import org.example.model.User;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Method;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
@@ -11,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ApiSessionServiceTest {
@@ -65,6 +68,93 @@ class ApiSessionServiceTest {
 
         assertFalse(service.findSession(rawToken).isPresent());
         assertFalse(store.findByTokenHash(tokenHash).isPresent());
+    }
+
+    @Test
+    void invalidTokensUsersAndMissingUsersUseSafeNoopPaths() {
+        User user = bidder("U-BID-903", "missing_user_bidder");
+        ApiSessionService.InMemorySessionStore store = new ApiSessionService.InMemorySessionStore();
+        ApiSessionService service = new ApiSessionService(1, store, userId -> Optional.empty());
+
+        assertFalse(service.findSession(null).isPresent());
+        assertFalse(service.findSession(" ").isPresent());
+        service.revoke(null);
+        service.revoke(" ");
+        service.replaceUser(user);
+
+        assertThrows(IllegalArgumentException.class, () -> service.createSession(null));
+        assertThrows(IllegalArgumentException.class, () -> service.createSession(new Bidder("", "blank", "secret", "blank@test.local", 0.0)));
+
+        ApiSessionService.SessionState session = service.createSession(user);
+
+        assertEquals(300L, session.expiresAt().getEpochSecond() - session.createdAt().getEpochSecond());
+        assertFalse(service.findSession(session.token()).isPresent());
+        assertFalse(store.findByTokenHash(ApiSessionService.tokenHash(session.token())).isPresent());
+    }
+
+    @Test
+    void databaseSessionStoreWrapsSqlFailuresWithOperationMessages() throws Exception {
+        String previousDisabled = System.getProperty("auction.db.disabled");
+        try {
+            System.setProperty("auction.db.disabled", "true");
+            Object databaseStore = newDatabaseSessionStore();
+            ApiSessionService.StoredSession session = new ApiSessionService.StoredSession(
+                    "session-database-failure",
+                    "hash-database-failure",
+                    "user-database-failure",
+                    Instant.now(),
+                    Instant.now().plusSeconds(600)
+            );
+
+            assertDatabaseFailure(databaseStore, "save",
+                    new Class<?>[]{ApiSessionService.StoredSession.class},
+                    "Could not persist API session",
+                    session);
+            assertDatabaseFailure(databaseStore, "findByTokenHash",
+                    new Class<?>[]{String.class},
+                    "Could not load API session",
+                    "hash-database-failure");
+            assertDatabaseFailure(databaseStore, "revokeByTokenHash",
+                    new Class<?>[]{String.class},
+                    "Could not revoke API session",
+                    "hash-database-failure");
+            assertDatabaseFailure(databaseStore, "deleteExpiredSessions",
+                    new Class<?>[0],
+                    "Could not clean up API sessions");
+        } finally {
+            if (previousDisabled == null) {
+                System.clearProperty("auction.db.disabled");
+            } else {
+                System.setProperty("auction.db.disabled", previousDisabled);
+            }
+        }
+    }
+
+    private static Object newDatabaseSessionStore() throws Exception {
+        Class<?> type = Class.forName("org.example.server.ApiSessionService$DatabaseSessionStore");
+        Constructor<?> constructor = type.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        return constructor.newInstance();
+    }
+
+    private static void assertDatabaseFailure(
+            Object target,
+            String methodName,
+            Class<?>[] parameterTypes,
+            String expectedMessage,
+            Object... args
+    ) throws Exception {
+        Method method = target.getClass().getDeclaredMethod(methodName, parameterTypes);
+        method.setAccessible(true);
+
+        IllegalStateException exception = assertThrows(IllegalStateException.class, () -> {
+            try {
+                method.invoke(target, args);
+            } catch (java.lang.reflect.InvocationTargetException e) {
+                throw e.getCause();
+            }
+        });
+        assertTrue(exception.getMessage().contains(expectedMessage));
     }
 
     private static User bidder(String id, String username) {
