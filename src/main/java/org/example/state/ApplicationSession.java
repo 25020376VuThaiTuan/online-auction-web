@@ -37,6 +37,7 @@ public final class ApplicationSession {
         this.apiToken = apiToken;
         selectedAuctionId = null;
         clearTrustedWalletAuthorization();
+        shownNotificationPopupKeys.clear();
         watchedAuctionIds.clear();
     }
 
@@ -49,6 +50,7 @@ public final class ApplicationSession {
         apiToken = null;
         selectedAuctionId = null;
         clearTrustedWalletAuthorization();
+        shownNotificationPopupKeys.clear();
         watchedAuctionIds.clear();
     }
 

@@ -1,12 +1,19 @@
 package org.example.service;
 
+import org.example.dao.WalletDAO;
+import org.example.model.Admin;
 import org.example.model.Bidder;
 import org.example.model.WalletAuthorization;
 import org.example.model.WalletSummary;
+import org.example.model.WalletTransaction;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -173,6 +180,161 @@ class WalletServiceCoverageExpansionTest {
         assertThrows(IllegalArgumentException.class, () -> service.sendMoney(noAccount, "", 1.0, "7890"));
     }
 
+    @Test
+    void nullCollaboratorsAccountNameMismatchAndPrimaryPromotionAreHandled() {
+        WalletService service = new WalletService(null, null);
+        Bidder bidder = bidder("PRIMARY", 250.0);
+        service.setPin(bidder, "8901");
+
+        assertThrows(IllegalArgumentException.class, () -> service.addLinkedAccount(
+                bidder,
+                "Different Person",
+                "Provider",
+                "11110000",
+                0.0,
+                false,
+                "8901"
+        ));
+
+        WalletSummary firstAccount = service.addLinkedAccount(
+                bidder,
+                bidder.getFullName(),
+                "Provider A",
+                "11110000",
+                20.0,
+                true,
+                "8901"
+        );
+        String firstAccountId = firstAccount.linkedAccounts().getFirst().id();
+        WalletSummary secondAccount = service.addLinkedAccount(
+                bidder,
+                bidder.getFullName(),
+                "Provider B",
+                "22220000",
+                30.0,
+                true,
+                "8901"
+        );
+        String secondAccountId = secondAccount.linkedAccounts().getFirst().id();
+
+        assertTrue(secondAccount.linkedAccounts().getFirst().primary());
+        assertTrue(secondAccount.linkedAccounts().stream()
+                .filter(account -> account.id().equals(firstAccountId))
+                .noneMatch(org.example.model.WalletLinkedAccount::primary));
+
+        WalletSummary afterPrimarySwitch = service.setPrimaryLinkedAccount(bidder, firstAccountId, "8901");
+        assertTrue(afterPrimarySwitch.linkedAccounts().stream()
+                .filter(account -> account.id().equals(firstAccountId))
+                .findFirst()
+                .orElseThrow()
+                .primary());
+
+        WalletSummary afterRemoval = service.removeLinkedAccount(bidder, firstAccountId, "8901");
+        assertTrue(afterRemoval.linkedAccounts().stream()
+                .filter(account -> account.id().equals(secondAccountId))
+                .findFirst()
+                .orElseThrow()
+                .primary());
+    }
+
+    @Test
+    void transactionConnectionOverloadsPersistWalletHoldsAndLedgerEntries()
+            throws Exception {
+
+        WalletService service = new WalletService((email, recoveryCode) -> { });
+        Bidder bidder = bidder("DB-HOLDS", 300.0);
+
+        try (Connection connection = walletConnection("wallet_service_holds")) {
+            insertPersistedUser(connection, bidder.getId());
+            WalletDAO walletDAO = new WalletDAO(connection);
+            walletDAO.ensureSchema();
+
+            assertEquals(125.0, service.lockDeposit(
+                    connection,
+                    bidder,
+                    "DB-HOLD",
+                    125.0,
+                    "auction-db-hold",
+                    "Database-backed hold"
+            ), 0.001);
+            assertEquals(125.0, walletDAO.listHolds(bidder.getId()).get("DB-HOLD"), 0.001);
+            assertEquals(1, walletDAO.listTransactions(bidder.getId()).size());
+
+            assertEquals(125.0, service.releaseLockedDeposit(
+                    connection,
+                    bidder,
+                    "DB-HOLD",
+                    0.0,
+                    "BID_RELEASE",
+                    "auction-db-hold",
+                    "Database-backed release"
+            ), 0.001);
+            assertTrue(walletDAO.listHolds(bidder.getId()).isEmpty());
+            assertEquals(2, walletDAO.listTransactions(bidder.getId()).size());
+
+            assertEquals(0.0, service.releaseLockedDeposit(
+                    connection,
+                    bidder,
+                    "DB-HOLD",
+                    0.0,
+                    "BID_RELEASE",
+                    "auction-db-hold",
+                    "Nothing to release"
+            ), 0.001);
+        }
+    }
+
+    @Test
+    void transactionReleaseCanUseLocalFallbackHoldWhenDatabaseHoldIsMissing()
+            throws Exception {
+
+        WalletService service = new WalletService((email, recoveryCode) -> { });
+        Bidder bidder = bidder("DB-FALLBACK", 300.0);
+        bidder.lockDeposit("FALLBACK-HOLD", 45.0);
+        service.getWalletSnapshot(bidder);
+
+        try (Connection connection = walletConnection("wallet_service_fallback")) {
+            insertPersistedUser(connection, bidder.getId());
+            WalletDAO walletDAO = new WalletDAO(connection);
+            walletDAO.ensureSchema();
+            walletDAO.ensureWallet(bidder, bidder.getBalance());
+
+            assertEquals(45.0, service.releaseLockedDeposit(
+                    connection,
+                    bidder,
+                    "FALLBACK-HOLD",
+                    100.0,
+                    "BID_RELEASE",
+                    "auction-fallback",
+                    "Fallback release"
+            ), 0.001);
+            assertEquals(1, walletDAO.listTransactions(bidder.getId()).size());
+            assertEquals(0.0, bidder.getLockedAmount("FALLBACK-HOLD"), 0.001);
+        }
+    }
+
+    @Test
+    void adminTransactionLookupRequiresAdminAndSortsInMemoryTransactions() {
+        WalletService service = new WalletService((email, recoveryCode) -> { });
+        Bidder first = bidder("AUDIT-FIRST", 200.0);
+        Bidder second = bidder("AUDIT-SECOND", 200.0);
+        Admin admin = new Admin("admin-audit", "adminAudit", "hash", "admin@test.local");
+        admin.setRole("ADMIN");
+
+        service.recordSystemEvent(first, "ADJUSTMENT", 10.0, "first-ref", "First adjustment");
+        service.recordSystemEvent(second, "ADJUSTMENT", 20.0, "second-ref", "Second adjustment");
+
+        assertThrows(IllegalStateException.class, () -> service.getTransactionsForAdmin(first, null));
+
+        List<WalletTransaction> firstTransactions = service.getTransactionsForAdmin(admin, first.getId());
+        assertEquals(1, firstTransactions.size());
+        assertEquals("first-ref", firstTransactions.getFirst().referenceId());
+
+        List<WalletTransaction> allTransactions = service.getTransactionsForAdmin(admin, " ");
+        assertTrue(allTransactions.size() >= 2);
+        assertTrue(allTransactions.get(0).createdAt().compareTo(allTransactions.get(1).createdAt()) >= 0);
+    }
+
     private Bidder bidder(String label, double balance) {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         String compactLabel = label.toLowerCase().replaceAll("[^a-z0-9]+", "");
@@ -189,5 +351,36 @@ class WalletServiceCoverageExpansionTest {
         bidder.setBalance(balance);
         authenticationService.updateUser(bidder);
         return bidder;
+    }
+
+    private Connection walletConnection(String label) throws Exception {
+        Connection connection = DriverManager.getConnection(
+                "jdbc:h2:mem:" + label + "_" + UUID.randomUUID()
+                        + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE",
+                "sa",
+                ""
+        );
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    CREATE TABLE users (
+                        id VARCHAR(36) PRIMARY KEY
+                    )
+                    """);
+            statement.execute("""
+                    CREATE TABLE bidder_profiles (
+                        user_id VARCHAR(36) PRIMARY KEY,
+                        wallet_balance DECIMAL(15, 2),
+                        updated_at TIMESTAMP
+                    )
+                    """);
+        }
+        return connection;
+    }
+
+    private void insertPersistedUser(Connection connection, String userId) throws Exception {
+        try (Statement statement = connection.createStatement()) {
+            statement.executeUpdate("INSERT INTO users(id) VALUES ('" + userId + "')");
+            statement.executeUpdate("INSERT INTO bidder_profiles(user_id, wallet_balance) VALUES ('" + userId + "', 0.00)");
+        }
     }
 }

@@ -103,7 +103,8 @@ class AuctionSettlementCoverageTest {
         assertEquals("28/05/2026 09:00", settlement.getDisplayDeadline());
         assertFalse(settlement.isBuyerConfirmationExpired(deadline.minusNanos(1)));
         assertTrue(settlement.isBuyerConfirmationExpired(deadline));
-        assertTrue(settlement.isBuyerConfirmationExpired(null));
         assertTrue(settlement.getDisplaySummary().contains("deadline=28/05/2026 09:00"));
+        settlement.setBuyerConfirmationDeadline(LocalDateTime.now().minusSeconds(1));
+        assertTrue(settlement.isBuyerConfirmationExpired(null));
     }
 }

@@ -1,12 +1,15 @@
 package org.example.controller;
 
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import org.example.auction.AuctionDepositResult;
+import org.example.auction.AuctionSettlement;
+import org.example.auction.AuctionSettlementStatus;
 import org.example.auction.AuctionSessionRegistry;
 import org.example.auction.BidValidationResult;
 import org.example.client.AuctionApiClient;
@@ -183,6 +186,86 @@ class AuctionControllerCoverageExpansionTest {
         invoke(controller, "onNewBid", new Bid("BID-IGNORED", bidder.getId(), "ITEM", 220.0, LocalDateTime.now()));
     }
 
+    @Test
+    void publicHandlersAndClockBranchesHandleValidationCancellationAndSettlementStates() throws Exception {
+        Bidder bidder = bidder("acovhandlers" + UUID.randomUUID().toString().substring(0, 8), 400.0);
+        session.login(bidder);
+        AuctionController controller = auctionController();
+        setField(controller, "selectedAuctionId", "missing-auction");
+        setField(controller, "refreshActive", false);
+
+        invokeWithClosedDialog(controller, "handlePlaceBid");
+        field(controller, "bidAmountCombo", ComboBox.class).setValue("bad");
+        invokeWithClosedDialog(controller, "handlePlaceBid");
+        field(controller, "bidAmountCombo", ComboBox.class).setValue("100");
+        JavaFxTestSupport.closeNextDialog(ButtonType.NO);
+        invokeOnFx(controller, "handlePlaceBid");
+
+        JavaFxTestSupport.closeNextDialog(ButtonType.CANCEL);
+        invokeOnFx(controller, "handleConfirmEntryDeposit");
+        JavaFxTestSupport.answerNextPasswordDialogThenCloseAlert("", false);
+        assertNull(invokeOnFx(controller, "requestWalletPin", "Blank PIN"));
+
+        JavaFxTestSupport.answerNextPasswordDialogThenCloseAlert(PIN, false);
+        invokeOnFx(controller, "handleAdmitResult");
+        JavaFxTestSupport.answerNextPasswordDialogThenCloseAlert(PIN, false);
+        invokeOnFx(controller, "handleConfirmReceived");
+
+        AuctionSettlement missing = null;
+        Object missingState = invoke(controller, "localSettlementState", missing, bidder.getId());
+        assertEquals("Settlement: N/A", invoke(missingState, "summary"));
+        assertEquals(true, invoke(missingState, "admitDisabled"));
+
+        AuctionSettlement admitSettlement = settlement("SETTLE-ADMIT", bidder.getId(), AuctionSettlementStatus.AWAITING_WINNER_ADMISSION);
+        Object admitState = invoke(controller, "localSettlementState", admitSettlement, bidder.getId());
+        assertEquals(false, invoke(admitState, "admitDisabled"));
+        assertEquals(true, invoke(admitState, "confirmDisabled"));
+
+        AuctionSettlement confirmSettlement = settlement("SETTLE-CONFIRM", bidder.getId(), AuctionSettlementStatus.AWAITING_BUYER_CONFIRMATION);
+        Object confirmState = invoke(controller, "localSettlementState", confirmSettlement, bidder.getId());
+        assertEquals(true, invoke(confirmState, "admitDisabled"));
+        assertEquals(false, invoke(confirmState, "confirmDisabled"));
+
+        Object missingSnapshot = invokeStaticSnapshotMissing();
+        setField(controller, "lastSnapshot", missingSnapshot);
+        setField(controller, "refreshActive", true);
+        invoke(controller, "updateClockOnly");
+
+        Object runningSnapshot = newNested(
+                "org.example.controller.AuctionController$AuctionViewSnapshot",
+                new Class<?>[]{
+                        boolean.class, String.class, String.class, String.class, double.class, double.class,
+                        String.class, long.class, List.class, double.class, boolean.class, boolean.class,
+                        boolean.class, String.class, boolean.class, boolean.class
+                },
+                false,
+                "Clock Item",
+                "Clock description",
+                "RUNNING",
+                100.0,
+                110.0,
+                "27/05/2026 12:00",
+                0L,
+                List.of(),
+                20.0,
+                true,
+                true,
+                false,
+                "Settlement: N/A",
+                true,
+                true
+        );
+        setField(controller, "lastSnapshot", runningSnapshot);
+        setField(controller, "lastSnapshotAppliedAtMillis", System.currentTimeMillis());
+        setField(controller, "expirationRefreshRequested", false);
+        invoke(controller, "updateClockOnly");
+        assertEquals(true, field(controller, "expirationRefreshRequested"));
+
+        assertEquals(0L, invoke(controller, "currentSecondsRemaining", runningSnapshot));
+        assertTrue((boolean) invoke(controller, "isFinishedStatus", "paid"));
+        assertTrue((boolean) invoke(controller, "isFinishedStatus", "cancelled"));
+    }
+
     private AuctionController auctionController() throws Exception {
         AuctionController controller = new AuctionController();
         setField(controller, "userLabel", new Label());
@@ -282,6 +365,23 @@ class AuctionControllerCoverageExpansionTest {
         return method.invoke(target, args);
     }
 
+    private static Object invokeOnFx(Object target, String name, Object... args) {
+        java.util.concurrent.atomic.AtomicReference<Object> result = new java.util.concurrent.atomic.AtomicReference<>();
+        JavaFxTestSupport.runAndWait(() -> {
+            try {
+                result.set(invoke(target, name, args));
+            } catch (Exception exception) {
+                throw new AssertionError(exception);
+            }
+        });
+        return result.get();
+    }
+
+    private static void invokeWithClosedDialog(Object target, String name) {
+        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+        invokeOnFx(target, name);
+    }
+
     private static Method findMethod(Class<?> type, String name, Class<?>[] argumentTypes) throws NoSuchMethodException {
         for (Method method : type.getDeclaredMethods()) {
             if (!method.getName().equals(name) || method.getParameterCount() != argumentTypes.length) {
@@ -345,5 +445,31 @@ class AuctionControllerCoverageExpansionTest {
         Constructor<?> constructor = type.getDeclaredConstructor(parameterTypes);
         constructor.setAccessible(true);
         return constructor.newInstance(args);
+    }
+
+    private static Object invokeStaticSnapshotMissing() throws Exception {
+        Class<?> type = Class.forName("org.example.controller.AuctionController$AuctionViewSnapshot");
+        Method method = type.getDeclaredMethod("missing");
+        method.setAccessible(true);
+        return method.invoke(null);
+    }
+
+    private static AuctionSettlement settlement(String itemId, String winnerId, AuctionSettlementStatus status) {
+        AuctionSettlement settlement = new AuctionSettlement(
+                itemId,
+                "Settlement Item",
+                "seller",
+                winnerId,
+                200.0,
+                20.0,
+                10.0,
+                210.0,
+                190.0,
+                20.0,
+                180.0,
+                LocalDateTime.of(2026, 5, 27, 10, 0)
+        );
+        settlement.setStatus(status);
+        return settlement;
     }
 }

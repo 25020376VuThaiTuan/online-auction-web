@@ -55,7 +55,14 @@ public class WalletDAO implements AutoCloseable {
                         CHECK (balance >= 0)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                 """);
-        execute("ALTER TABLE wallet_accounts MODIFY pin_recovery_code VARCHAR(255) NULL");
+        if (!hasColumn("wallet_accounts", "pin_recovery_code")) {
+            execute("ALTER TABLE wallet_accounts ADD COLUMN pin_recovery_code VARCHAR(255) NULL");
+        } else {
+            execute("ALTER TABLE wallet_accounts MODIFY pin_recovery_code VARCHAR(255) NULL");
+        }
+        if (!hasColumn("wallet_accounts", "pin_recovery_expires_at")) {
+            execute("ALTER TABLE wallet_accounts ADD COLUMN pin_recovery_expires_at DATETIME NULL");
+        }
         execute("""
                 CREATE TABLE IF NOT EXISTS wallet_linked_accounts (
                     id VARCHAR(36) PRIMARY KEY,

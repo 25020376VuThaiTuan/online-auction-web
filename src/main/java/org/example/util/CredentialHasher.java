@@ -35,7 +35,7 @@ public final class CredentialHasher {
         if (isBcryptHash(storedHash)) {
             try {
                 return BCrypt.checkpw(secret == null ? "" : secret, storedHash);
-            } catch (IllegalArgumentException exception) {
+            } catch (RuntimeException exception) {
                 return false;
             }
         }

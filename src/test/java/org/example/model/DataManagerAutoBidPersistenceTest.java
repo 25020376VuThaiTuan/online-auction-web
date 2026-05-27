@@ -3,14 +3,18 @@ package org.example.model;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ObjectInputFilter;
 import java.io.ObjectOutputStream;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DataManagerAutoBidPersistenceTest {
@@ -55,6 +59,90 @@ class DataManagerAutoBidPersistenceTest {
         assertEquals(1, loaded.getItems().size());
         assertTrue(loaded.getBidHistoryByItemId().isEmpty());
         assertTrue(loaded.getAutoBidsByItemId().isEmpty());
+    }
+
+    @Test
+    void missingNullVersionedAndItemOnlyStoresUseRealPersistencePaths() {
+        Path dataFile = tempDir.resolve("versioned-data.dat");
+        DataManager manager = new DataManager(dataFile);
+
+        StoreSnapshot missing = manager.loadSnapshot();
+        assertTrue(missing.store().getItems().isEmpty());
+        assertEquals(0L, missing.version());
+        assertTrue(manager.loadItems().isEmpty());
+
+        StoreSnapshot nullStore = manager.saveStore(null);
+        assertTrue(nullStore.store().getItems().isEmpty());
+
+        Item item = testItem("ITEM-VERSIONED");
+        AuctionStore itemStore = new AuctionStore(List.of(item), Map.of(), Map.of());
+        Optional<StoreSnapshot> mismatched = manager.saveStoreIfVersionMatches(itemStore, nullStore.version() + 1);
+        assertTrue(mismatched.isEmpty());
+
+        Optional<StoreSnapshot> matched = manager.saveStoreIfVersionMatches(itemStore, nullStore.version());
+        assertTrue(matched.isPresent());
+        assertEquals(1, matched.get().store().getItems().size());
+
+        manager.saveItems(List.of(item));
+        assertEquals(1, manager.loadItems().size());
+    }
+
+    @Test
+    void corruptAndUnsupportedSerializedFilesLoadAsEmptyStores() throws Exception {
+        Path corruptFile = tempDir.resolve("corrupt-data.dat");
+        Files.writeString(corruptFile, "not a serialized store");
+        assertTrue(new DataManager(corruptFile).loadStore().getItems().isEmpty());
+
+        Path unsupportedFile = tempDir.resolve("unsupported-data.dat");
+        try (ObjectOutputStream outputStream = new ObjectOutputStream(Files.newOutputStream(unsupportedFile))) {
+            outputStream.writeObject("unsupported");
+        }
+        assertTrue(new DataManager(unsupportedFile).loadStore().getItems().isEmpty());
+    }
+
+    @Test
+    void objectInputFilterAllowsModelAndJdkTypesButRejectsUnexpectedTypes() throws Exception {
+        DataManager manager = new DataManager(tempDir.resolve("filter-data.dat"));
+
+        assertEquals(ObjectInputFilter.Status.UNDECIDED, filterStatus(manager, null));
+        assertEquals(ObjectInputFilter.Status.ALLOWED, filterStatus(manager, int.class));
+        assertEquals(ObjectInputFilter.Status.ALLOWED, filterStatus(manager, Item[].class));
+        assertEquals(ObjectInputFilter.Status.ALLOWED, filterStatus(manager, AuctionStore.class));
+        assertEquals(ObjectInputFilter.Status.ALLOWED, filterStatus(manager, java.util.ArrayList.class));
+        assertEquals(ObjectInputFilter.Status.ALLOWED, filterStatus(manager, LocalDateTime.class));
+        assertEquals(ObjectInputFilter.Status.ALLOWED, filterStatus(manager, String.class));
+        assertEquals(ObjectInputFilter.Status.REJECTED, filterStatus(manager, java.io.File.class));
+    }
+
+    private ObjectInputFilter.Status filterStatus(DataManager manager, Class<?> serialClass) throws Exception {
+        Method method = DataManager.class.getDeclaredMethod("allowAuctionStoreClass", ObjectInputFilter.FilterInfo.class);
+        method.setAccessible(true);
+        return (ObjectInputFilter.Status) method.invoke(manager, new ObjectInputFilter.FilterInfo() {
+            @Override
+            public Class<?> serialClass() {
+                return serialClass;
+            }
+
+            @Override
+            public long arrayLength() {
+                return -1;
+            }
+
+            @Override
+            public long depth() {
+                return 1;
+            }
+
+            @Override
+            public long references() {
+                return 1;
+            }
+
+            @Override
+            public long streamBytes() {
+                return 0;
+            }
+        });
     }
 
     private Item testItem(String itemId) {

@@ -78,7 +78,7 @@ class ApplicationSessionTest {
     }
 
     @Test
-    void notificationPopupKeysSurviveLoginAndLogout() {
+    void notificationPopupKeysResetWhenSessionChanges() {
         Bidder user = new Bidder("U-SESSION-2", "session-popup-user", "secret", "session-popup@example.test", 100.0);
         String key = "notification-" + UUID.randomUUID();
 
@@ -86,9 +86,24 @@ class ApplicationSessionTest {
         assertFalse(session.rememberNotificationPopup(" " + key + " "));
 
         session.login(user);
+        assertTrue(session.rememberNotificationPopup(key));
         assertFalse(session.rememberNotificationPopup(key));
 
         session.logout();
+        assertTrue(session.rememberNotificationPopup(key));
+    }
+
+    @Test
+    void notificationPopupKeysStayDedupedWhenCurrentUserIsRefreshed() {
+        Bidder user = new Bidder("U-SESSION-POPUP", "session-popup-user", "secret", "session-popup@example.test", 100.0);
+        Bidder refreshedUser = new Bidder("U-SESSION-POPUP", "session-popup-user", "secret", "session-popup@example.test", 125.0);
+        String key = "notification-" + UUID.randomUUID();
+
+        session.login(user);
+        assertTrue(session.rememberNotificationPopup(key));
+
+        session.replaceCurrentUser(refreshedUser);
+
         assertFalse(session.rememberNotificationPopup(key));
     }
 

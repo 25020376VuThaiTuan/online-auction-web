@@ -13,6 +13,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Map;
 import java.util.UUID;
 
@@ -223,6 +225,59 @@ class WalletApiIntegrationTest {
         assertEquals(login.userId(), ((Map<?, ?>) authMe.get("user")).get("id"));
         assertEquals(200, rawNoBody("POST", "/auth/logout", token).statusCode());
         assertEquals(401, rawNoBody("GET", "/auth/me", token).statusCode());
+    }
+
+    @Test
+    void sellerAndAdminItemSettlementAndNotificationRoutesWorkTogether() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        Map<String, Object> sellerAuth = request("POST", "/auth/register", null, Map.of(
+                "username", "seller_" + suffix,
+                "password", "sell123",
+                "email", "seller_" + suffix + "@test.local",
+                "fullName", "Integration Seller " + suffix,
+                "role", "SELLER"
+        ));
+        String sellerToken = String.valueOf(sellerAuth.get("token"));
+        String startTime = LocalDateTime.now().minusMinutes(1).format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        String endTime = LocalDateTime.now().plusMinutes(30).format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+
+        Map<String, Object> created = request("POST", "/items", sellerToken, Map.of(
+                "type", "electronics",
+                "itemName", "API Camera " + suffix,
+                "description", "Camera created through API test",
+                "startingPrice", 120.0,
+                "startTime", startTime,
+                "endTime", endTime,
+                "extraText", "Brand",
+                "extraNumber", 24
+        ));
+        Map<?, ?> createdItem = (Map<?, ?>) created.get("item");
+        String itemId = String.valueOf(createdItem.get("id"));
+        assertEquals("PENDING", createdItem.get("approvalStatus"));
+
+        Map<String, Object> sellerItems = request("GET", "/items/seller", sellerToken, Map.of());
+        assertTrue(((java.util.List<?>) sellerItems.get("items")).stream()
+                .map(item -> String.valueOf(((Map<?, ?>) item).get("id")))
+                .anyMatch(itemId::equals));
+
+        Map<String, Object> allItems = request("GET", "/items", sellerToken, Map.of());
+        assertTrue(((Number) allItems.get("count")).intValue() >= 1);
+
+        LoginResult admin = adminLogin();
+        Map<String, Object> pending = request("GET", "/items/pending", admin.token(), Map.of());
+        assertTrue(((java.util.List<?>) pending.get("items")).stream()
+                .map(item -> String.valueOf(((Map<?, ?>) item).get("id")))
+                .anyMatch(itemId::equals));
+
+        Map<String, Object> approved = request("PATCH", "/items/" + itemId + "/approval", admin.token(), Map.of(
+                "approvalStatus", "APPROVED"
+        ));
+        assertEquals("APPROVED", ((Map<?, ?>) approved.get("item")).get("approvalStatus"));
+
+        Map<String, Object> settlements = request("GET", "/settlements", admin.token(), Map.of());
+        assertTrue(((Number) settlements.get("count")).intValue() >= 0);
+        Map<String, Object> notifications = request("GET", "/notifications", sellerToken, Map.of());
+        assertTrue(((Number) notifications.get("count")).intValue() >= 0);
     }
 
     private LoginResult login() throws Exception {

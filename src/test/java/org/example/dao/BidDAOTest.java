@@ -1,5 +1,6 @@
 package org.example.dao;
 
+import org.example.model.AutoBid;
 import org.example.model.Bid;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,6 +37,12 @@ class BidDAOTest {
         Statement st = connection.createStatement();
 
         st.execute("""
+                CREATE TABLE users (
+                    id VARCHAR(36) PRIMARY KEY
+                )
+                """);
+
+        st.execute("""
                 CREATE TABLE auctions (
                     id VARCHAR(36) PRIMARY KEY,
                     current_price DECIMAL(19,2),
@@ -60,6 +67,10 @@ class BidDAOTest {
         st.execute("""
                 INSERT INTO auctions(id)
                 VALUES ('auction-1')
+                """);
+        st.execute("""
+                INSERT INTO users(id)
+                VALUES ('bidder-1'), ('user-1'), ('user-2')
                 """);
 
         dao = new BidDAO(connection);
@@ -127,5 +138,43 @@ class BidDAOTest {
                 dao.getBidsForItem("unknown");
 
         assertTrue(bids.isEmpty());
+    }
+
+    @Test
+    void shouldPersistNullBidTimeWithCurrentTimestamp() throws Exception {
+        dao.addBid(new Bid("bid-null-time", "bidder-1", "auction-1", 3000.0, null));
+
+        List<Bid> bids = dao.getBidsForItem("auction-1");
+
+        assertEquals(1, bids.size());
+        assertNotNull(bids.getFirst().getBidTime());
+    }
+
+    @Test
+    void shouldCreateUpdateLoadAndDeleteAutoBids() throws Exception {
+        AutoBid initial = new AutoBid(0, "bidder-1", "auction-1", 10_000.0, 250.0);
+        dao.addOrUpdateAutoBid(initial);
+
+        AutoBid loaded = dao.getAutoBid("bidder-1", "auction-1").orElseThrow();
+        assertEquals(10_000.0, loaded.getMaxLimit(), 0.001);
+        assertEquals(250.0, loaded.getBidIncrement(), 0.001);
+
+        dao.addOrUpdateAutoBid(new AutoBid(0, "bidder-1", "auction-1", 12_000.0, 500.0));
+        AutoBid updated = dao.getAutoBid("bidder-1", "auction-1").orElseThrow();
+        assertEquals(12_000.0, updated.getMaxLimit(), 0.001);
+        assertEquals(500.0, updated.getBidIncrement(), 0.001);
+        assertEquals(1, dao.getAllAutoBidsForItem("auction-1").size());
+
+        assertTrue(dao.deleteAutoBid("bidder-1", "auction-1"));
+        assertFalse(dao.deleteAutoBid("bidder-1", "auction-1"));
+        assertTrue(dao.getAutoBid("bidder-1", "auction-1").isEmpty());
+        assertTrue(dao.getAllAutoBidsForItem("auction-1").isEmpty());
+    }
+
+    @Test
+    void closeDoesNotCloseBorrowedConnection() throws Exception {
+        dao.close();
+
+        assertFalse(connection.isClosed());
     }
 }

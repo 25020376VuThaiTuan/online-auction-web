@@ -45,8 +45,10 @@ import java.lang.reflect.Method;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -252,6 +254,38 @@ class DashboardControllerCoverageExpansionTest {
     }
 
     @Test
+    void dashboardNotificationPopupsDeduplicateOnlyWithinActiveSession() throws Exception {
+        Bidder bidder = bidder();
+        session.login(bidder);
+        DashboardController controller = dashboardController();
+        String key = "payment-completed-" + UUID.randomUUID();
+        Object notification = newNested(
+                "org.example.controller.DashboardController$DashboardNotification",
+                new Class<?>[]{String.class, String.class, String.class, String.class},
+                key,
+                "Payment completed",
+                "Funds released",
+                "Payment completed: Funds released"
+        );
+
+        CompletableFuture<Boolean> firstDialog = JavaFxTestSupport.closeNextDialogAndTrack(ButtonType.OK);
+        invokeOnFx(controller, "showNotificationPopups", List.of(notification));
+        assertTrue(firstDialog.get(2, TimeUnit.SECONDS));
+        assertFalse(session.rememberNotificationPopup(key));
+
+        CompletableFuture<Boolean> duplicateDialog = JavaFxTestSupport.closeNextDialogAndTrack(ButtonType.OK, 300);
+        invokeOnFx(controller, "showNotificationPopups", List.of(notification));
+        assertFalse(duplicateDialog.get(1, TimeUnit.SECONDS));
+
+        session.logout();
+        session.login(bidder);
+        CompletableFuture<Boolean> nextSessionDialog = JavaFxTestSupport.closeNextDialogAndTrack(ButtonType.OK);
+        invokeOnFx(controller, "showNotificationPopups", List.of(notification));
+        assertTrue(nextSessionDialog.get(2, TimeUnit.SECONDS));
+        assertFalse(session.rememberNotificationPopup(key));
+    }
+
+    @Test
     void sellerAndAdminSectionsApplyRoleSpecificStateAndSnapshots() throws Exception {
         Seller seller = seller();
         session.login(seller);
@@ -440,6 +474,168 @@ class DashboardControllerCoverageExpansionTest {
         field(bidderController, "walletPinField", PasswordField.class).setText(PIN);
         invoke(bidderController, "handleOpenWallet");
         assertEquals("$500.00", field(bidderController, "walletBalanceLabel", Label.class).getText());
+
+        field(bidderController, "walletAccountNameField", TextField.class).setText(bidder.getFullName());
+        field(bidderController, "walletProviderField", TextField.class).setText("Test Bank");
+        field(bidderController, "walletAccountReferenceField", TextField.class).setText("1234567890");
+        field(bidderController, "walletAccountOpeningBalanceField", TextField.class).setText("50");
+        answerWalletPinThenInfo();
+        invokeOnFx(bidderController, "handleAddWalletAccount");
+        assertEquals(1, field(bidderController, "walletAccountTable", TableView.class).getItems().size());
+        assertEquals("", field(bidderController, "walletAccountNameField", TextField.class).getText());
+
+        field(bidderController, "walletTransferAmountField", TextField.class).setText("25");
+        answerWalletPinThenInfo();
+        invokeOnFx(bidderController, "handleSendWalletMoney");
+        assertEquals("$475.00", field(bidderController, "walletBalanceLabel", Label.class).getText());
+
+        field(bidderController, "walletTransferAmountField", TextField.class).setText("10");
+        answerWalletPinThenInfo();
+        invokeOnFx(bidderController, "handleReceiveWalletMoney");
+        assertEquals("$485.00", field(bidderController, "walletBalanceLabel", Label.class).getText());
+
+        field(bidderController, "walletAccountTopUpAmountField", TextField.class).setText("15");
+        answerWalletPinThenInfo();
+        invokeOnFx(bidderController, "handleTopUpWalletAccount");
+        assertEquals("", field(bidderController, "walletAccountTopUpAmountField", TextField.class).getText());
+
+        answerWalletPinThenInfo();
+        invokeOnFx(bidderController, "handleSetPrimaryWalletAccount");
+
+        session.logout();
+        Seller seller = registeredSeller("dashboard_modal_seller");
+        session.login(seller);
+        DashboardController sellerController = dashboardController();
+        invoke(sellerController, "configureTables");
+        field(sellerController, "sellerItemTypeChoiceBox", ChoiceBox.class).setValue("electronics");
+        field(sellerController, "sellerItemNameField", TextField.class).setText("Modal Camera");
+        field(sellerController, "sellerDescriptionArea", TextArea.class).setText("Camera created from dashboard test");
+        field(sellerController, "sellerStartingPriceField", TextField.class).setText("120");
+        field(sellerController, "sellerExtraTextField", TextField.class).setText("Brand");
+        field(sellerController, "sellerExtraNumberField", TextField.class).setText("12");
+        field(sellerController, "sellerPrepareMinutesField", TextField.class).setText("0");
+        field(sellerController, "sellerBiddingMinutesField", TextField.class).setText("60");
+        closeInfoDialog();
+        invokeOnFx(sellerController, "handleAddSellerItem");
+        assertEquals("", field(sellerController, "sellerItemNameField", TextField.class).getText());
+
+        Item unsaved = item("DASHBOARD-UNSAVED", seller.getId());
+        field(sellerController, "sellerItemsTable", TableView.class).setItems(FXCollections.observableArrayList(unsaved));
+        field(sellerController, "sellerItemsTable", TableView.class).getSelectionModel().select(unsaved);
+        invokeWithClosedDialog(sellerController, "handleStartSellerAuction");
+        invokeWithClosedDialog(sellerController, "handleFinishSellerAuction");
+
+        session.logout();
+        User admin = registeredAdmin("dashboard_modal_admin");
+        session.login(admin);
+        DashboardController adminController = dashboardController();
+        invoke(adminController, "configureTables");
+        field(adminController, "userTable", TableView.class).setItems(FXCollections.observableArrayList(bidder));
+        field(adminController, "userTable", TableView.class).getSelectionModel().select(bidder);
+        field(adminController, "roleChoiceBox", ChoiceBox.class).setValue("SELLER");
+        closeInfoDialog();
+        invokeOnFx(adminController, "handleUpdateRole");
+        assertEquals("SELLER", field(adminController, "roleChoiceBox", ChoiceBox.class).getValue());
+
+        Item pendingItem = MarketplaceDashboardService.getInstance().addSellerItem(
+                seller,
+                "electronics",
+                "Admin Approval Camera",
+                "Pending approval",
+                140.0,
+                LocalDateTime.now(),
+                LocalDateTime.now().plusMinutes(30),
+                "Brand",
+                24
+        );
+        field(adminController, "pendingItemsTable", TableView.class).setItems(FXCollections.observableArrayList(pendingItem));
+        field(adminController, "pendingItemsTable", TableView.class).getSelectionModel().select(pendingItem);
+        closeInfoDialog();
+        invokeOnFx(adminController, "handleApproveItem");
+        assertEquals(ApprovalStatus.APPROVED, pendingItem.getApprovalStatus());
+    }
+
+    @Test
+    void modalHandlersReportMissingSelectionsAndInvalidInputWithoutChangingState() throws Exception {
+        Bidder bidder = registeredBidder("dashboard_validation_bidder");
+        session.login(bidder);
+        DashboardController bidderController = dashboardController();
+        invoke(bidderController, "configureTables");
+
+        invokeWithClosedDialog(bidderController, "handleSetPrimaryWalletAccount");
+        invokeWithClosedDialog(bidderController, "handleRemoveWalletAccount");
+        invokeWithClosedDialog(bidderController, "handleReceiveWalletMoney");
+        invokeWithClosedDialog(bidderController, "handleSendWalletMoney");
+        invokeWithClosedDialog(bidderController, "handleTopUpWalletAccount");
+        invokeWithClosedDialog(bidderController, "handleOpenAuctionDetail");
+        invokeWithClosedDialog(bidderController, "handleToggleSelectedAuctionWatch");
+        invokeWithClosedDialog(bidderController, "handleConfirmAuctionEntry");
+        invokeWithClosedDialog(bidderController, "handlePlaceBidFromDashboard");
+        invokeWithClosedDialog(bidderController, "handleRegisterAutoBidFromDashboard");
+        invokeWithClosedDialog(bidderController, "handleDisableAutoBidFromDashboard");
+        invokeWithClosedDialog(bidderController, "handleAdmitDashboardResult");
+        invokeWithClosedDialog(bidderController, "handleConfirmDashboardReceived");
+        invokeWithClosedDialog(bidderController, "handleAddSellerItem");
+
+        assertNull(field(bidderController, "selectedAuctionId"));
+        assertTrue(field(bidderController, "walletAccountTable", TableView.class).getItems().isEmpty());
+
+        WalletLinkedAccount primary = walletAccount("ACCOUNT-VALIDATION", bidder.getId(), true, 100.0);
+        WalletSummary wallet = new WalletSummary(
+                bidder.getId(),
+                500.0,
+                0.0,
+                500.0,
+                true,
+                List.of(primary),
+                List.of()
+        );
+        setField(bidderController, "openedWalletSummary", wallet);
+        invoke(bidderController, "refreshWallet", wallet);
+
+        field(bidderController, "walletAccountTopUpAmountField", TextField.class).setText("abc");
+        invokeWithClosedDialog(bidderController, "handleTopUpWalletAccount");
+        assertEquals("abc", field(bidderController, "walletAccountTopUpAmountField", TextField.class).getText());
+
+        field(bidderController, "walletTransferAmountField", TextField.class).setText("abc");
+        invokeWithClosedDialog(bidderController, "handleReceiveWalletMoney");
+        assertEquals("abc", field(bidderController, "walletTransferAmountField", TextField.class).getText());
+
+        AuctionEligibilityEntry runningEntry = auctionEntry("A-VALIDATION", "Validation Camera", "RUNNING", 100.0, 110.0, true, true, 120L);
+        field(bidderController, "auctionTable", TableView.class).setItems(FXCollections.observableArrayList(runningEntry));
+        field(bidderController, "auctionTable", TableView.class).getSelectionModel().select(runningEntry);
+        setField(bidderController, "selectedAuctionId", runningEntry.getItemId());
+
+        field(bidderController, "bidAmountField", TextField.class).setText("bad");
+        invokeWithClosedDialog(bidderController, "handlePlaceBidFromDashboard");
+        field(bidderController, "autoBidMaxField", TextField.class).setText("bad");
+        invokeWithClosedDialog(bidderController, "handleRegisterAutoBidFromDashboard");
+        field(bidderController, "autoBidMaxField", TextField.class).setText("150");
+        field(bidderController, "autoBidIncrementField", TextField.class).setText("-1");
+        invokeWithClosedDialog(bidderController, "handleRegisterAutoBidFromDashboard");
+
+        session.logout();
+        Seller seller = registeredSeller("dashboard_validation_seller");
+        session.login(seller);
+        DashboardController sellerController = dashboardController();
+        invoke(sellerController, "configureTables");
+
+        invokeWithClosedDialog(sellerController, "handleStartSellerAuction");
+        invokeWithClosedDialog(sellerController, "handleFinishSellerAuction");
+        invokeWithClosedDialog(sellerController, "handleSellerMarkShipped");
+        field(sellerController, "sellerStartingPriceField", TextField.class).setText("not-a-price");
+        invokeWithClosedDialog(sellerController, "handleAddSellerItem");
+
+        session.logout();
+        Admin admin = admin();
+        session.login(admin);
+        DashboardController adminController = dashboardController();
+        invoke(adminController, "configureTables");
+
+        invokeWithClosedDialog(adminController, "handleUpdateRole");
+        invokeWithClosedDialog(adminController, "handleLoadWalletAudit");
+        invokeWithClosedDialog(adminController, "handleApproveItem");
+        invokeWithClosedDialog(adminController, "handleRejectItem");
     }
 
     private DashboardController dashboardController() throws Exception {
@@ -773,6 +969,11 @@ class DashboardControllerCoverageExpansionTest {
             }
         });
         return result.get();
+    }
+
+    private static void invokeWithClosedDialog(Object target, String name) throws Exception {
+        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+        invokeOnFx(target, name);
     }
 
     private static Method findMethod(Class<?> type, String name, Class<?>[] argumentTypes) throws NoSuchMethodException {

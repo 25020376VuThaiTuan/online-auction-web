@@ -11,6 +11,7 @@ import javafx.scene.control.PasswordField;
 import javafx.stage.Window;
 
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -91,6 +92,14 @@ final class JavaFxTestSupport {
         respondToNextDialog(null, false, buttonType);
     }
 
+    static CompletableFuture<Boolean> closeNextDialogAndTrack(ButtonType buttonType) {
+        return respondToNextDialog(null, false, buttonType);
+    }
+
+    static CompletableFuture<Boolean> closeNextDialogAndTrack(ButtonType buttonType, long timeoutMillis) {
+        return respondToNextDialog(null, false, buttonType, null, timeoutMillis);
+    }
+
     static void answerNextPasswordDialog(String password, boolean remember, ButtonType buttonType) {
         respondToNextDialog(password, remember, buttonType);
     }
@@ -99,20 +108,31 @@ final class JavaFxTestSupport {
         respondToNextDialog(password, remember, ButtonType.OK, () -> respondToNextDialog(null, false, ButtonType.OK));
     }
 
-    private static void respondToNextDialog(String password, boolean remember, ButtonType buttonType) {
-        respondToNextDialog(password, remember, buttonType, null);
+    private static CompletableFuture<Boolean> respondToNextDialog(String password, boolean remember, ButtonType buttonType) {
+        return respondToNextDialog(password, remember, buttonType, null);
     }
 
-    private static void respondToNextDialog(
+    private static CompletableFuture<Boolean> respondToNextDialog(
             String password,
             boolean remember,
             ButtonType buttonType,
             Runnable afterHandled
     ) {
+        return respondToNextDialog(password, remember, buttonType, afterHandled, TimeUnit.SECONDS.toMillis(10));
+    }
+
+    private static CompletableFuture<Boolean> respondToNextDialog(
+            String password,
+            boolean remember,
+            ButtonType buttonType,
+            Runnable afterHandled,
+            long timeoutMillis
+    ) {
         startToolkit();
         AtomicBoolean handled = new AtomicBoolean(false);
+        CompletableFuture<Boolean> result = new CompletableFuture<>();
         Thread responder = new Thread(() -> {
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
             while (!handled.get() && System.nanoTime() < deadline) {
                 CountDownLatch latch = new CountDownLatch(1);
                 Platform.runLater(() -> {
@@ -129,12 +149,15 @@ final class JavaFxTestSupport {
                     Thread.sleep(25);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
+                    result.complete(false);
                     return;
                 }
             }
+            result.complete(handled.get());
         }, "javafx-dialog-responder");
         responder.setDaemon(true);
         responder.start();
+        return result;
     }
 
     private static boolean tryRespondToOpenDialog(

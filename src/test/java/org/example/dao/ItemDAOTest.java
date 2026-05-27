@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -329,5 +330,182 @@ class ItemDAOTest {
         AuctionExtensionConfig config = dao.getAuctionExtensionConfig(item.getId());
 
         assertEquals(60, config.triggerWindowSeconds());
+    }
+
+    @Test
+    void shouldUpdateAuctionLifecycleFieldsAndLockRows()
+            throws Exception {
+
+        LocalDateTime start = LocalDateTime.of(2026, 5, 27, 9, 0);
+        LocalDateTime end = start.plusHours(2);
+        Item item = ItemFactory.createItem(
+                "vehicle",
+                "item-lifecycle",
+                "Scooter",
+                "City scooter",
+                750,
+                start,
+                end,
+                "Vision",
+                1200
+        );
+        item.setSellerId("seller-2");
+        item.setApprovalStatus(ApprovalStatus.PENDING);
+
+        dao.addItem(item, "vehicle", "Vision", 1200);
+
+        LocalDateTime finishedAt = end.plusMinutes(30);
+        dao.updateAuctionProgress(item.getId(), 900.0, finishedAt, "FINISHED");
+        dao.updateAuctionWindow(item.getId(), start.minusHours(1), finishedAt.plusHours(1), "OPEN");
+        dao.updateApprovalStatus(item.getId(), ApprovalStatus.REJECTED);
+        dao.lockAuctionForUpdate(item.getId());
+
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("""
+                     SELECT i.status AS item_status, a.status AS auction_status,
+                            a.current_price, a.start_at, a.end_at
+                     FROM items i
+                     JOIN auctions a ON a.item_id = i.id
+                     WHERE i.id = 'item-lifecycle'
+                     """)) {
+            assertTrue(rs.next());
+            assertEquals("ARCHIVED", rs.getString("item_status"));
+            assertEquals("CANCELLED", rs.getString("auction_status"));
+            assertEquals(900.0, rs.getDouble("current_price"));
+            assertEquals(start.minusHours(1), rs.getTimestamp("start_at").toLocalDateTime());
+            assertEquals(finishedAt.plusHours(1), rs.getTimestamp("end_at").toLocalDateTime());
+        }
+
+        SQLException missing = assertThrows(
+                SQLException.class,
+                () -> dao.lockAuctionForUpdate("missing-item")
+        );
+        assertTrue(missing.getMessage().contains("Auction row not found"));
+        assertNull(dao.getItemById("missing-item"));
+    }
+
+    @Test
+    void shouldHandleMissingExtensionColumnsAndTables()
+            throws Exception {
+
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("ALTER TABLE auctions DROP COLUMN extension_count");
+            statement.execute("DROP TABLE auction_extensions");
+        }
+
+        LocalDateTime previousEndTime = LocalDateTime.of(2026, 5, 27, 11, 0);
+        LocalDateTime newEndTime = previousEndTime.plusMinutes(5);
+        Item item = ItemFactory.createItem(
+                "electronics",
+                "item-legacy-extension",
+                "Tablet",
+                "Legacy extension schema",
+                250,
+                previousEndTime.minusHours(1),
+                previousEndTime,
+                "Samsung",
+                6
+        );
+        item.setSellerId("seller-3");
+        item.setApprovalStatus(ApprovalStatus.APPROVED);
+
+        dao.addItem(item, "electronics", "Samsung", 6);
+
+        AuctionExtensionConfig config = dao.getAuctionExtensionConfig(item.getId());
+        assertEquals(AuctionExtensionConfig.defaults(), config);
+
+        dao.recordAuctionExtension(item.getId(), "bid-legacy", previousEndTime, newEndTime);
+        dao.recordAuctionExtension("", "bid-legacy", previousEndTime, newEndTime);
+        dao.recordAuctionExtension(item.getId(), "", previousEndTime, newEndTime);
+        dao.recordAuctionExtension(item.getId(), "bid-legacy", null, newEndTime);
+        dao.recordAuctionExtension(item.getId(), "bid-legacy", previousEndTime, previousEndTime);
+
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("""
+                     SELECT end_at
+                     FROM auctions
+                     WHERE item_id = 'item-legacy-extension'
+                     """)) {
+            assertTrue(rs.next());
+            assertEquals(newEndTime, rs.getTimestamp("end_at").toLocalDateTime());
+        }
+    }
+
+    @Test
+    void shouldNormalizeTypesDefaultsAndNullTimestamps()
+            throws Exception {
+
+        Item item = ItemFactory.createItem(
+                "electronics",
+                "item-normalized",
+                "Mystery box",
+                "Uses normalized fallback type",
+                100,
+                null,
+                null,
+                "",
+                -5
+        );
+        item.setSellerId("seller-4");
+
+        dao.addItem(item, "  collectibles  ", "   ", -5);
+
+        Item result = dao.getItemById(item.getId());
+        assertNotNull(result);
+        assertEquals(ApprovalStatus.APPROVED, result.getApprovalStatus());
+        assertNull(result.getStartTime());
+        assertNull(result.getEndTime());
+
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("""
+                     SELECT brand, warranty_months
+                     FROM electronics_details
+                     WHERE item_id = 'item-normalized'
+                     """)) {
+            assertTrue(rs.next());
+            assertEquals("Unknown", rs.getString("brand"));
+            assertEquals(0, rs.getInt("warranty_months"));
+        }
+
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("""
+                    INSERT INTO categories (slug, name, description)
+                    VALUES ('collectibles', 'Collectibles', 'Collectible items')
+                    """);
+            statement.execute("""
+                    INSERT INTO items (id, seller_id, category_id, title, description, item_condition, status)
+                    SELECT 'item-raw', 'seller-5', id, 'Raw item', 'Unknown category', 'USED', 'READY'
+                    FROM categories
+                    WHERE slug = 'collectibles'
+                    """);
+            statement.execute("""
+                    INSERT INTO auctions (
+                        id, item_id, seller_id, starting_price, current_price,
+                        minimum_increment, start_at, end_at, status
+                    ) VALUES (
+                        'auction-raw', 'item-raw', 'seller-5', 10.00, 15.00,
+                        1.00, NULL, NULL, 'OPEN'
+                    )
+                    """);
+        }
+
+        Item raw = dao.getItemById("item-raw");
+        assertNotNull(raw);
+        assertEquals(ApprovalStatus.APPROVED, raw.getApprovalStatus());
+        assertEquals(15.0, raw.getCurrentPrice());
+    }
+
+    @Test
+    void shouldCloseOwnedConnection()
+            throws Exception {
+
+        try (ItemDAO ownedDao = new ItemDAO(
+                "jdbc:h2:mem:item_owned_" + UUID.randomUUID()
+                        + ";MODE=MySQL;DATABASE_TO_LOWER=TRUE;CASE_INSENSITIVE_IDENTIFIERS=TRUE",
+                "sa",
+                ""
+        )) {
+            assertNotNull(ownedDao);
+        }
     }
 }
