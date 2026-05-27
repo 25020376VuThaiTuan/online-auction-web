@@ -182,10 +182,11 @@ class AuctionApiClientCoverageExpansionTest {
 
     private void handle(HttpExchange exchange) throws java.io.IOException {
         String path = exchange.getRequestURI().getPath();
+        String rawPath = exchange.getRequestURI().getRawPath();
         String method = exchange.getRequestMethod();
         String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
         String authorization = exchange.getRequestHeaders().getFirst("Authorization");
-        requests.add(new RequestRecord(method, path, body, authorization == null ? "" : authorization));
+        requests.add(new RequestRecord(method, rawPath, body, authorization == null ? "" : authorization));
 
         Object payload;
         int status = 200;
@@ -198,14 +199,23 @@ class AuctionApiClientCoverageExpansionTest {
             payload = Map.of("error", "x".repeat(300));
             status = 400;
         } else {
-            payload = responseFor(method, relativePath);
+            payload = responseFor(method, relativePath, body);
         }
         write(exchange, status, ApiJson.stringify(payload));
     }
 
-    private Map<String, Object> responseFor(String method, String path) {
-        if (path.startsWith("/auth/")) {
+    private Map<String, Object> responseFor(String method, String path, String body) {
+        if (path.equals("/auth/login")) {
             return Map.of("token", "token-1", "user", user("ADMIN"));
+        }
+        if (path.equals("/auth/register")) {
+            return Map.of("token", "token-1", "user", user(body.contains("\"role\":\"SELLER\"") ? "SELLER" : "BIDDER"));
+        }
+        if (path.equals("/auth/me")) {
+            return Map.of("user", user("BIDDER"));
+        }
+        if (path.equals("/auth/logout")) {
+            return Map.of("ok", true);
         }
         if (path.equals("/users/me/wallet/authorization")) {
             return Map.of("authorization", Map.of("token", "wallet-token", "expiresAt", "2026-05-27T11:00:00"));
@@ -228,7 +238,7 @@ class AuctionApiClientCoverageExpansionTest {
         if (path.equals("/auctions")) {
             return Map.of("auctions", List.of(auction("RUNNING", true), auction("FINISHED", false)));
         }
-        if (path.endsWith("/bids")) {
+        if (path.endsWith("/bids") && "GET".equals(method)) {
             return Map.of("bids", List.of(bid("BID-1"), bid("BID-2")));
         }
         if (path.endsWith("/entry-deposit")) {
@@ -250,14 +260,14 @@ class AuctionApiClientCoverageExpansionTest {
         if (path.endsWith("/start") || path.endsWith("/finish")) {
             return Map.of("ok", true);
         }
+        if (path.equals("/settlements")) {
+            return Map.of("settlements", List.of(settlement()));
+        }
         if (path.contains("/settlement")) {
             if (path.equals("/auctions/missing-settlement/settlement")) {
                 return Map.of();
             }
             return Map.of("settlement", settlement());
-        }
-        if (path.equals("/settlements")) {
-            return Map.of("settlements", List.of(settlement()));
         }
         if (path.equals("/notifications")) {
             return Map.of("notifications", List.of(Map.of(
@@ -266,11 +276,11 @@ class AuctionApiClientCoverageExpansionTest {
                     "displayText", ""
             )));
         }
-        if (path.equals("/items") || path.startsWith("/items/")) {
-            return Map.of("item", item("vehicle", "APPROVED"));
-        }
         if (path.equals("/items/seller") || path.equals("/items/pending")) {
             return Map.of("items", List.of(item("art", "PENDING")));
+        }
+        if (path.equals("/items") || path.startsWith("/items/")) {
+            return Map.of("item", item("vehicle", "APPROVED"));
         }
         if (path.startsWith("/auctions/")) {
             return Map.of("auction", auction("RUNNING", true));
