@@ -340,21 +340,21 @@ class AuctionApiClientCoverageExpansionTest {
     }
 
     private static Map<String, Object> auction(String status, boolean eligible) {
-        return Map.ofEntries(
-                Map.entry("itemId", "ITEM-1"),
-                Map.entry("itemName", "Vintage Camera"),
-                Map.entry("description", "Mirrorless"),
-                Map.entry("status", status),
-                Map.entry("currentPrice", "100.0"),
-                Map.entry("minimumNextBid", "110.0"),
-                Map.entry("requiredDeposit", "25.0"),
-                Map.entry("depositConfirmed", "false"),
-                Map.entry("eligible", String.valueOf(eligible)),
-                Map.entry("availableBalance", "300.0"),
-                Map.entry("secondsRemaining", "60"),
-                Map.entry("displayEndTime", "27/05/2026 11:00")
-        );
-    }
+    return Map.ofEntries(
+            Map.entry("itemId", "ITEM-1"),
+            Map.entry("itemName", "Vintage Camera"),
+            Map.entry("description", "Mirrorless"),
+            Map.entry("status", status),
+            Map.entry("currentPrice", "100.0"),
+            Map.entry("minimumNextBid", "110.0"),
+            Map.entry("requiredDeposit", "25.0"),
+            Map.entry("depositConfirmed", "false"),
+            Map.entry("eligible", String.valueOf(eligible)),
+            Map.entry("availableBalance", "300.0"),
+            Map.entry("secondsRemaining", "60"),
+            Map.entry("displayEndTime", "27/05/2026 11:00")
+    );
+}
 
     private static Map<String, Object> bid(String id) {
         return Map.of(
@@ -394,26 +394,26 @@ class AuctionApiClientCoverageExpansionTest {
     }
 
     private static Map<String, Object> settlement() {
-        return Map.ofEntries(
-                Map.entry("itemId", "ITEM-1"),
-                Map.entry("itemName", "Vintage Camera"),
-                Map.entry("sellerId", "SELLER-1"),
-                Map.entry("status", "AWAITING_WINNER_ADMISSION"),
-                Map.entry("winnerBidderId", "BIDDER-1"),
-                Map.entry("winningBidAmount", "200.0"),
-                Map.entry("depositAmount", "25.0"),
-                Map.entry("buyerPremiumAmount", "10.0"),
-                Map.entry("totalBuyerDue", "210.0"),
-                Map.entry("remainingPaymentDue", "185.0"),
-                Map.entry("adminCommission", "20.0"),
-                Map.entry("sellerPayout", "180.0"),
-                Map.entry("lockedRemainingPayment", "185.0"),
-                Map.entry("sellerReleasedAmount", "0.0"),
-                Map.entry("buyerRefundedAmount", "0.0"),
-                Map.entry("buyerConfirmationDeadline", "2026-05-28T10:00:00"),
-                Map.entry("displaySummary", "summary")
-        );
-    }
+    return Map.ofEntries(
+            Map.entry("itemId", "ITEM-1"),
+            Map.entry("itemName", "Vintage Camera"),
+            Map.entry("sellerId", "SELLER-1"),
+            Map.entry("status", "AWAITING_WINNER_ADMISSION"),
+            Map.entry("winnerBidderId", "BIDDER-1"),
+            Map.entry("winningBidAmount", "200.0"),
+            Map.entry("depositAmount", "25.0"),
+            Map.entry("buyerPremiumAmount", "10.0"),
+            Map.entry("totalBuyerDue", "210.0"),
+            Map.entry("remainingPaymentDue", "185.0"),
+            Map.entry("adminCommission", "20.0"),
+            Map.entry("sellerPayout", "180.0"),
+            Map.entry("lockedRemainingPayment", "185.0"),
+            Map.entry("sellerReleasedAmount", "0.0"),
+            Map.entry("buyerRefundedAmount", "0.0"),
+            Map.entry("buyerConfirmationDeadline", "2026-05-28T10:00:00"),
+            Map.entry("displaySummary", "summary")
+    );
+}
 
     private void write(HttpExchange exchange, int status, String body) throws java.io.IOException {
         byte[] response = body.getBytes(StandardCharsets.UTF_8);
