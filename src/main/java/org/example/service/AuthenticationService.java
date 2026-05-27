@@ -69,7 +69,6 @@ public final class AuthenticationService {
             if (candidate.isEmpty()) {
                 continue;
             }
-            usernameFound = true;
 
             User candidateUser = candidate.get();
             if (credentialMatches(safePassword, candidateUser.getPasswordHash())) {

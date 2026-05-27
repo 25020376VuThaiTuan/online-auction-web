@@ -380,7 +380,7 @@ public class AuctionController implements org.example.auction.AuctionObserver {
                 requiredDeposit,
                 depositConfirmed,
                 canBid,
-                !applicationSession.getCurrentUser().isPresent() || summary.status().isFinished() || depositConfirmed,
+                applicationSession.getCurrentUser().isEmpty() || summary.status().isFinished() || depositConfirmed,
                 settlementState.summary(),
                 settlementState.admitDisabled(),
                 settlementState.confirmDisabled()

@@ -645,7 +645,6 @@ public final class AuctionApiClient {
         User user = switch (role) {
             case "ADMIN" -> new Admin(id, username, "", email);
             case "SELLER" -> new Seller(id, username, "", email);
-            case "BIDDER" -> new Bidder(id, username, "", email, balance);
             default -> new Bidder(id, username, "", email, balance);
         };
         user.setRole(role.isBlank() ? "BIDDER" : role);

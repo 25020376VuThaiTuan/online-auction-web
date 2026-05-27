@@ -333,7 +333,6 @@ public class UserDAO implements AutoCloseable {
         User user = switch (role) {
             case "ADMIN" -> new Admin(id, username, password, email);
             case "SELLER" -> new Seller(id, username, password, email);
-            case "BIDDER" -> new Bidder(id, username, password, email, MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("wallet_balance")));
             default -> new Bidder(id, username, password, email, MoneyUtils.fromDatabaseAmount(rs.getBigDecimal("wallet_balance")));
         };
         user.setRole(role);

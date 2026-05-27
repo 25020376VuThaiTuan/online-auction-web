@@ -1049,10 +1049,9 @@ public final class AuctionApiHandler implements HttpHandler {
     private double optionalDouble(Map<String, Object> source, String fieldName) {
         Object value = source.get(fieldName);
         return switch (value) {
-            case null -> 0.0;
             case Number number -> number.doubleValue();
             case String text when !text.isBlank() -> Double.parseDouble(text.trim());
-            default -> 0.0;
+            case null, default -> 0.0;
         };
     }
 
