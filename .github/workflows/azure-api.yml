@@ -1,0 +1,186 @@
+name: Azure API Container Deploy
+
+# Required secrets and variables are documented in AZURE_CONNECTION.md.
+# This workflow is intentionally separate from the Maven CI workflow and runs
+# only when triggered manually.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: azure-api-container-deploy
+  cancel-in-progress: false
+
+env:
+  ACR_NAME: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}
+  ACR_LOGIN_SERVER: ${{ vars.AZURE_CONTAINER_REGISTRY_NAME }}.azurecr.io
+  CONTAINER_APP_NAME: ${{ vars.AZURE_CONTAINER_APP_NAME }}
+  RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+  IMAGE_REPOSITORY: online-auction-api
+  IMAGE_TAG: ${{ github.sha }}
+  AUCTION_DB_URL: ${{ vars.AUCTION_DB_URL }}
+  AUCTION_DB_USER: ${{ vars.AUCTION_DB_USER }}
+
+jobs:
+  build-publish-deploy:
+    name: Build, publish, and deploy Azure API
+    runs-on: ubuntu-latest
+    environment: azure-api
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Validate deployment configuration
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          AUCTION_DB_PASSWORD: ${{ secrets.AUCTION_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          required_values=(
+            "ACR_NAME"
+            "CONTAINER_APP_NAME"
+            "RESOURCE_GROUP"
+            "AUCTION_DB_URL"
+            "AUCTION_DB_USER"
+          )
+
+          for name in "${required_values[@]}"; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required GitHub Actions variable: $name"
+              exit 1
+            fi
+          done
+
+          required_secrets=(
+            "AZURE_CLIENT_ID"
+            "AZURE_TENANT_ID"
+            "AZURE_SUBSCRIPTION_ID"
+            "AUCTION_DB_PASSWORD"
+          )
+
+          for name in "${required_secrets[@]}"; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing required GitHub Actions secret: $name"
+              exit 1
+            fi
+          done
+
+      - name: Azure login
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Get ACR access token
+        id: acr-token
+        shell: bash
+        run: |
+          set -euo pipefail
+          token="$(az acr login --name "$ACR_NAME" --expose-token --output tsv --query accessToken)"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ACR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.ACR_LOGIN_SERVER }}
+          username: 00000000-0000-0000-0000-000000000000
+          password: ${{ steps.acr-token.outputs.token }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and publish API image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}:${{ env.IMAGE_TAG }}
+            ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy image to Azure Container Apps
+        shell: bash
+        env:
+          AUCTION_DB_PASSWORD: ${{ secrets.AUCTION_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          image_ref="$ACR_LOGIN_SERVER/$IMAGE_REPOSITORY@${{ steps.build.outputs.digest }}"
+
+          az containerapp secret set \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --secrets "auction-db-password=$AUCTION_DB_PASSWORD" \
+            --output none
+
+          az containerapp update \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --image "$image_ref" \
+            --set-env-vars \
+              "AUCTION_DB_URL=$AUCTION_DB_URL" \
+              "AUCTION_DB_USER=$AUCTION_DB_USER" \
+              "AUCTION_DB_PASSWORD=secretref:auction-db-password" \
+              "AUCTION_API_PORT=8081" \
+              "WEBSITES_PORT=8081" \
+            --output none
+
+          az containerapp ingress enable \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --type external \
+            --target-port 8081 \
+            --transport auto \
+            --output none
+
+      - name: Smoke check deployed API
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          app_fqdn="$(az containerapp show \
+            --name "$CONTAINER_APP_NAME" \
+            --resource-group "$RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn \
+            --output tsv)"
+
+          if [ -z "$app_fqdn" ]; then
+            echo "::error::Container App has no external ingress FQDN."
+            exit 1
+          fi
+
+          health_url="https://$app_fqdn/api/health"
+          echo "Checking $health_url"
+
+          for attempt in {1..18}; do
+            response_file="$(mktemp)"
+            status="$(curl --silent --show-error --location --output "$response_file" --write-out "%{http_code}" "$health_url" || true)"
+
+            if [ "$status" = "200" ] && grep -q '"status"[[:space:]]*:[[:space:]]*"ok"' "$response_file"; then
+              echo "Smoke check passed."
+              exit 0
+            fi
+
+            echo "Attempt $attempt failed with HTTP $status."
+            cat "$response_file"
+            rm -f "$response_file"
+            sleep 10
+          done
+
+          echo "::error::Smoke check failed for $health_url"
+          exit 1
