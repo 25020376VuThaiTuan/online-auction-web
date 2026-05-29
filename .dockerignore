@@ -1,0 +1,15 @@
+.git
+.github
+.idea
+.metadata
+target
+build
+dist
+data.dat
+*.iml
+*.ipr
+*.iws
+.env
+.env.*
+scripts/*.env
+scripts/*.env.local

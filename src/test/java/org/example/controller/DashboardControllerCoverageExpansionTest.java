@@ -209,7 +209,7 @@ class DashboardControllerCoverageExpansionTest {
         });
 
         assertEquals("api-token", invoke(controller, "apiToken"));
-        assertTrue(invoke(controller, "walletAuthorizationCredential", PIN).toString().startsWith("wa_"));
+        assertTrue(invokeOnFx(controller, "walletAuthorizationCredential", PIN).toString().startsWith("wa_"));
 
         invokeWithClosedDialog(controller, "handleTestConnection");
         JavaFxTestSupport.closeNextDialog(ButtonType.OK);
