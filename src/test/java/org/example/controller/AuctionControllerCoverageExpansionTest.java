@@ -5,8 +5,10 @@ import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
+import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
+import com.sun.net.httpserver.HttpServer;
 import org.example.auction.AuctionDepositResult;
 import org.example.auction.AuctionSettlement;
 import org.example.auction.AuctionSettlementStatus;
@@ -18,7 +20,11 @@ import org.example.model.Bid;
 import org.example.model.Bidder;
 import org.example.model.Item;
 import org.example.model.Seller;
+import org.example.server.ApiSessionService;
+import org.example.server.AuctionApiHandler;
+import org.example.server.AuctionRealtimeBroker;
 import org.example.service.AuthenticationService;
+import org.example.service.AuctionWorkflowService;
 import org.example.service.MarketplaceDashboardService;
 import org.example.state.ApplicationSession;
 import org.junit.jupiter.api.AfterEach;
@@ -28,6 +34,7 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -53,6 +60,7 @@ class AuctionControllerCoverageExpansionTest {
 
     @AfterEach
     void tearDown() {
+        JavaFxTestSupport.closeOpenDialogs();
         session.logout();
         AuctionSessionRegistry.getInstance().clear();
     }
@@ -108,7 +116,6 @@ class AuctionControllerCoverageExpansionTest {
         session.trustWalletAuthorization(bidder.getId(), "wa_controller_token", Duration.ofMinutes(5));
         assertEquals("wa_controller_token", invoke(controller, "requestWalletPin", "Trusted Wallet"));
 
-        invoke(controller, "refreshViewAsync", false);
         setField(controller, "lastRefreshFailureMessage", "same");
         invoke(controller, "handleRefreshFailure", "same", false);
 
@@ -121,6 +128,159 @@ class AuctionControllerCoverageExpansionTest {
             }
         });
         assertNull(field(controller, "refreshTimeline"));
+    }
+
+    @Test
+    void initializeCellFactoryAndSuccessfulLocalBidFlowUseRealHandlers() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        Bidder bidder = bidder("acovflow" + suffix, 800.0);
+        Seller seller = seller("acovseller" + suffix);
+        dashboardService.setWalletPin(bidder, PIN);
+        dashboardService.setWalletPin(seller, PIN);
+
+        Item item = dashboardService.addSellerItem(
+                seller,
+                "electronics",
+                "Auction Controller Flow Camera " + suffix,
+                "Controller success branch item",
+                100.0,
+                LocalDateTime.now().minusMinutes(2),
+                LocalDateTime.now().plusMinutes(20),
+                "Brand",
+                12
+        );
+        dashboardService.updateItemApproval(item.getId(), ApprovalStatus.APPROVED);
+        assertTrue(dashboardService.startAuction(seller, item.getId()));
+        var admin = authenticationService.registerManualBidder(
+                "acovadmin" + suffix,
+                "secret",
+                "acovadmin" + suffix + "@test.local",
+                "Auction Controller Admin " + suffix
+        );
+        authenticationService.updateUserRole(admin.getId(), "ADMIN");
+
+        session.login(bidder);
+        session.setSelectedAuctionId(item.getId());
+        AuctionController controller = auctionController();
+        JavaFxTestSupport.runAndWait(() -> {
+            try {
+                controller.initialize();
+                invoke(controller, "stopRefreshLoop");
+            } catch (Exception exception) {
+                throw new AssertionError(exception);
+            }
+        });
+
+        assertEquals("Signed in as: " + session.getCurrentUserLabel(),
+                field(controller, "userLabel", Label.class).getText());
+        TableColumn<Bid, LocalDateTime> timeColumn = field(controller, "timeColumn");
+        TableCell<Bid, LocalDateTime> cell = timeColumn.getCellFactory().call(timeColumn);
+        invoke(cell, "updateItem", LocalDateTime.of(2026, 5, 27, 12, 0), false);
+        assertFalse(cell.getText().isBlank());
+        invoke(cell, "updateItem", null, true);
+        assertEquals("", cell.getText());
+
+        var authorization = dashboardService.authorizeWallet(bidder, PIN, Duration.ofMinutes(5));
+        session.trustWalletAuthorization(bidder.getId(), authorization.token(), authorization.expiresAt());
+        setField(controller, "selectedAuctionId", item.getId());
+        setField(controller, "refreshActive", false);
+
+        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+        invokeOnFx(controller, "handleConfirmEntryDeposit");
+        assertTrue(dashboardService.hasConfirmedEntryDeposit(item.getId(), bidder));
+
+        ComboBox<String> bidAmountCombo = field(controller, "bidAmountCombo");
+        bidAmountCombo.setDisable(false);
+        bidAmountCombo.setValue("130.00");
+        bidAmountCombo.getEditor().setText("130.00");
+
+        JavaFxTestSupport.closeNextDialog(ButtonType.YES);
+        invokeOnFx(controller, "handlePlaceBid");
+
+        assertFalse(field(controller, "bidNotificationList", ListView.class).getItems().isEmpty());
+        assertTrue(dashboardService.getBidHistory(item.getId()).stream()
+                .anyMatch(bid -> bid.getBidderId().equals(bidder.getId()) && bid.getAmount() >= 130.0));
+
+        assertTrue(dashboardService.finishAuction(seller, item.getId()));
+        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+        invokeOnFx(controller, "handleAdmitResult");
+        assertEquals(AuctionSettlementStatus.AWAITING_SELLER_CONFIRMATION,
+                dashboardService.getSettlement(item.getId()).orElseThrow().getStatus());
+
+        dashboardService.markGoodsShipped(item.getId(), seller, PIN);
+        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+        invokeOnFx(controller, "handleConfirmReceived");
+        assertEquals(AuctionSettlementStatus.PAYMENT_RELEASED,
+                dashboardService.getSettlement(item.getId()).orElseThrow().getStatus());
+
+        session.clearTrustedWalletAuthorization();
+        JavaFxTestSupport.answerNextPasswordDialog(PIN, true, ButtonType.OK);
+        assertTrue(invokeOnFx(controller, "requestWalletPin", "Remember PIN").toString().startsWith("wa_"));
+    }
+
+    @Test
+    void apiSnapshotAndCurrentUserRefreshUseHttpBackedClientBranches() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api", new AuctionApiHandler(
+                AuthenticationService.getInstance(),
+                AuctionWorkflowService.getInstance(),
+                new ApiSessionService(),
+                new AuctionRealtimeBroker()
+        ));
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            System.setProperty("auction.api.baseUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/api");
+            AuctionApiClient client = newApiClient();
+            String suffix = UUID.randomUUID().toString().substring(0, 8);
+            var auth = client.registerManualBidder(
+                    "acov_api_" + suffix,
+                    "secret123",
+                    "acov_api_" + suffix + "@test.local",
+                    "Auction API Bidder " + suffix
+            );
+            Seller seller = seller("acovapiseller" + suffix);
+            Item item = dashboardService.addSellerItem(
+                    seller,
+                    "electronics",
+                    "Auction API Camera " + suffix,
+                    "Controller API snapshot item",
+                    100.0,
+                    LocalDateTime.now().minusMinutes(2),
+                    LocalDateTime.now().plusMinutes(20),
+                    "Brand",
+                    12
+            );
+            dashboardService.updateItemApproval(item.getId(), ApprovalStatus.APPROVED);
+            assertTrue(dashboardService.startAuction(seller, item.getId()));
+
+            session.login(auth.user(), auth.token());
+            session.setSelectedAuctionId(item.getId());
+            AuctionController controller = auctionController();
+            setField(controller, "apiClient", client);
+            setField(controller, "selectedAuctionId", item.getId());
+
+            Object snapshot = invoke(controller, "loadAuctionViewSnapshot");
+
+            assertEquals(false, invoke(snapshot, "missingAuction"));
+            assertEquals(item.getItemName(), invoke(snapshot, "itemName"));
+            assertEquals("RUNNING", invoke(snapshot, "status"));
+            assertEquals(false, invoke(snapshot, "depositConfirmed"));
+            assertEquals("Auction API Bidder " + suffix, session.getCurrentUser().orElseThrow().getFullName());
+
+            invoke(controller, "refreshApiCurrentUser");
+
+            assertEquals(auth.user().getId(), session.getCurrentUser().orElseThrow().getId());
+            assertEquals(auth.token(), invoke(controller, "apiToken"));
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
     }
 
     @Test
@@ -258,12 +418,77 @@ class AuctionControllerCoverageExpansionTest {
         setField(controller, "lastSnapshot", runningSnapshot);
         setField(controller, "lastSnapshotAppliedAtMillis", System.currentTimeMillis());
         setField(controller, "expirationRefreshRequested", false);
+        field(controller, "refreshInFlight", java.util.concurrent.atomic.AtomicBoolean.class).set(true);
         invoke(controller, "updateClockOnly");
         assertEquals(true, field(controller, "expirationRefreshRequested"));
+        assertEquals(true, field(controller, "refreshPending", java.util.concurrent.atomic.AtomicBoolean.class).get());
+        setField(controller, "refreshActive", false);
 
         assertEquals(0L, invoke(controller, "currentSecondsRemaining", runningSnapshot));
         assertTrue((boolean) invoke(controller, "isFinishedStatus", "paid"));
         assertTrue((boolean) invoke(controller, "isFinishedStatus", "cancelled"));
+    }
+
+    @Test
+    void rejectedBidDepositSettlementAndObserverBranchesUseRealAuctionState() throws Exception {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        Bidder bidder = bidder("acovreject" + suffix, 500.0);
+        Seller seller = seller("acovrejectseller" + suffix);
+        dashboardService.setWalletPin(bidder, PIN);
+        dashboardService.setWalletPin(seller, PIN);
+        Item item = dashboardService.addSellerItem(
+                seller,
+                "electronics",
+                "Auction Controller Rejection Camera " + suffix,
+                "Controller rejection branch item",
+                100.0,
+                LocalDateTime.now().minusMinutes(2),
+                LocalDateTime.now().plusMinutes(20),
+                "Brand",
+                12
+        );
+        dashboardService.updateItemApproval(item.getId(), ApprovalStatus.APPROVED);
+        assertTrue(dashboardService.startAuction(seller, item.getId()));
+
+        session.login(bidder);
+        AuctionController controller = auctionController();
+        setField(controller, "selectedAuctionId", item.getId());
+        setField(controller, "refreshActive", false);
+        var bidderAuthorization = dashboardService.authorizeWallet(bidder, PIN, Duration.ofMinutes(5));
+        session.trustWalletAuthorization(bidder.getId(), bidderAuthorization.token(), bidderAuthorization.expiresAt());
+
+        ComboBox<String> bidAmountCombo = field(controller, "bidAmountCombo");
+        bidAmountCombo.setValue("130.00");
+        bidAmountCombo.getEditor().setText("130.00");
+        JavaFxTestSupport.closeNextDialog(ButtonType.YES);
+        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+        invokeOnFx(controller, "handlePlaceBid");
+        assertTrue(dashboardService.getBidHistory(item.getId()).isEmpty());
+
+        field(controller, "refreshInFlight", java.util.concurrent.atomic.AtomicBoolean.class).set(true);
+        setField(controller, "refreshActive", true);
+        invoke(controller, "onNewBid", new Bid("BID-OBSERVER", bidder.getId(), item.getId(), 130.0, LocalDateTime.now()));
+        JavaFxTestSupport.runAndWait(() -> {
+        });
+        assertTrue(field(controller, "refreshPending", java.util.concurrent.atomic.AtomicBoolean.class).get());
+        invoke(controller, "stopRefreshLoop");
+
+        session.login(seller);
+        AuctionController sellerController = auctionController();
+        setField(sellerController, "selectedAuctionId", item.getId());
+        setField(sellerController, "refreshActive", false);
+        var sellerAuthorization = dashboardService.authorizeWallet(seller, PIN, Duration.ofMinutes(5));
+        session.trustWalletAuthorization(seller.getId(), sellerAuthorization.token(), sellerAuthorization.expiresAt());
+        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+        invokeOnFx(sellerController, "handleConfirmEntryDeposit");
+        assertFalse(dashboardService.hasConfirmedEntryDeposit(item.getId(), seller));
+
+        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+        invokeOnFx(sellerController, "runSettlementAction", "Rejected settlement",
+                (Runnable) () -> {
+                    throw new IllegalStateException("settlement unavailable");
+                });
+        invoke(sellerController, "stopRefreshLoop");
     }
 
     private AuctionController auctionController() throws Exception {
@@ -445,6 +670,12 @@ class AuctionControllerCoverageExpansionTest {
         Constructor<?> constructor = type.getDeclaredConstructor(parameterTypes);
         constructor.setAccessible(true);
         return constructor.newInstance(args);
+    }
+
+    private static AuctionApiClient newApiClient() throws Exception {
+        Constructor<AuctionApiClient> constructor = AuctionApiClient.class.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        return constructor.newInstance();
     }
 
     private static Object invokeStaticSnapshotMissing() throws Exception {

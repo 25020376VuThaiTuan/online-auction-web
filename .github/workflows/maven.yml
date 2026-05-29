@@ -2,9 +2,9 @@ name: Project CI with Maven
 
 on:
   push:
-    branches: [ "full_app" ]
+    branches: [ "master" ]
   pull_request:
-    branches: [ "full_app" ]
+    branches: [ "master" ]
 
 jobs:
   build:
@@ -31,4 +31,4 @@ jobs:
 
       # Bước chạy test của bạn giữ nguyên, lúc này xvfb-run mới có hiệu lực
       - name: Build and test
-        run: xvfb-run -a mvn --batch-mode clean test
+        run: xvfb-run -a mvn --batch-mode clean verify

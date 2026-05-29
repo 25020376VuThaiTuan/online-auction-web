@@ -4,7 +4,9 @@ import javafx.collections.FXCollections;
 import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListView;
+import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import org.example.model.ApprovalStatus;
 import org.example.model.Bidder;
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -120,7 +123,7 @@ class DashboardTableConfiguratorTest {
     }
 
     @Test
-    void auctionTableColumnsAndSelectionCallbacksReflectCurrentEntry() {
+    void auctionTableColumnsAndSelectionCallbacksReflectCurrentEntry() throws Exception {
         session.watchAuction("ITEM-1");
         TableView<AuctionEligibilityEntry> table = new TableView<>();
         TableColumn<AuctionEligibilityEntry, String> watchColumn = new TableColumn<>();
@@ -208,6 +211,28 @@ class DashboardTableConfiguratorTest {
         assertSame(entry, summaryEntry.get());
         assertEquals(Boolean.TRUE, summarySelectionChanged.get());
         assertSame(entry, refreshedEntry.get());
+
+        TableCell<AuctionEligibilityEntry, String> watchCell = watchColumn.getCellFactory().call(watchColumn);
+        invokeUpdateItem(watchCell, "Watching", false);
+        assertEquals("Watching", watchCell.getText());
+        invokeUpdateItem(watchCell, "", false);
+        assertEquals(null, watchCell.getText());
+
+        TableCell<AuctionEligibilityEntry, String> statusCell = statusColumn.getCellFactory().call(statusColumn);
+        invokeUpdateItem(statusCell, "RUNNING", false);
+        assertEquals("RUNNING", statusCell.getText());
+        invokeUpdateItem(statusCell, null, false);
+        assertEquals(null, statusCell.getText());
+
+        TableCell<AuctionEligibilityEntry, String> eligibleCell = eligibleColumn.getCellFactory().call(eligibleColumn);
+        invokeUpdateItem(eligibleCell, "Can Enter", false);
+        assertEquals("Can Enter", eligibleCell.getText());
+        invokeUpdateItem(eligibleCell, null, false);
+        assertEquals(null, eligibleCell.getText());
+
+        TableRow<AuctionEligibilityEntry> row = table.getRowFactory().call(table);
+        invokeUpdateItem(row, entry, false);
+        invokeUpdateItem(row, null, true);
 
         table.getSelectionModel().clearSelection();
 
@@ -332,5 +357,24 @@ class DashboardTableConfiguratorTest {
         item.setSellerId(sellerId);
         item.setApprovalStatus(status);
         return item;
+    }
+
+    private static void invokeUpdateItem(Object target, Object value, boolean empty) throws Exception {
+        Method method = updateItemMethod(target.getClass());
+        method.setAccessible(true);
+        method.invoke(target, value, empty);
+    }
+
+    private static Method updateItemMethod(Class<?> type) throws NoSuchMethodException {
+        Class<?> current = type;
+        while (current != null) {
+            for (Method method : current.getDeclaredMethods()) {
+                if ("updateItem".equals(method.getName()) && method.getParameterCount() == 2) {
+                    return method;
+                }
+            }
+            current = current.getSuperclass();
+        }
+        throw new NoSuchMethodException("updateItem");
     }
 }

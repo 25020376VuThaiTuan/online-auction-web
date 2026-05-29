@@ -4,16 +4,24 @@ import org.example.dao.WalletDAO;
 import org.example.model.Admin;
 import org.example.model.Bidder;
 import org.example.model.WalletAuthorization;
+import org.example.model.WalletRecoveryResult;
 import org.example.model.WalletSummary;
 import org.example.model.WalletTransaction;
+import org.example.util.CredentialHasher;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -335,6 +343,116 @@ class WalletServiceCoverageExpansionTest {
         assertTrue(allTransactions.get(0).createdAt().compareTo(allTransactions.get(1).createdAt()) >= 0);
     }
 
+    @Test
+    void authorizationExpiryKnownUserMismatchAndValidationBranchesAreRejected() throws Exception {
+        WalletService service = new WalletService((email, recoveryCode) -> { });
+        Bidder bidder = bidder("EXPIRY", 50.0);
+        service.setPin(bidder, "1357");
+
+        WalletAuthorization shortLived = service.authorize(bidder, "1357", Duration.ofNanos(1));
+        Thread.sleep(5L);
+        assertThrows(IllegalArgumentException.class, () -> service.getWallet(bidder, shortLived.token()));
+        assertEquals(50.0, service.getWallet(bidder, "1357").balance(), 0.001);
+
+        service.recordTransaction(bidder, "ADJUSTMENT", 10.0, "adjust", "Manual adjustment.", "1357");
+        assertEquals(60.0, service.getWalletSnapshot(bidder).balance(), 0.001);
+        assertThrows(IllegalArgumentException.class, () -> service.addLinkedAccount(
+                bidder,
+                bidder.getFullName(),
+                "Provider",
+                "NEGATIVE",
+                -1.0,
+                false,
+                "1357"
+        ));
+
+        Bidder mismatchedCredentials = new Bidder(
+                bidder.getId(),
+                bidder.getUsername() + "_other",
+                bidder.getPasswordHash(),
+                bidder.getEmail(),
+                bidder.getBalance()
+        );
+        mismatchedCredentials.setRole("BIDDER");
+        assertThrows(IllegalStateException.class, () -> service.getWalletSnapshot(mismatchedCredentials));
+
+        Bidder limited = bidder("PIN-LIMIT", 40.0);
+        service.setPin(limited, "2468");
+        for (int attempt = 0; attempt < 5; attempt++) {
+            assertThrows(IllegalArgumentException.class, () -> service.getWallet(limited, "0000"));
+        }
+        IllegalArgumentException limitedException = assertThrows(
+                IllegalArgumentException.class,
+                () -> service.getWallet(limited, "2468")
+        );
+        assertEquals("Too many wallet PIN attempts. Try again later.", limitedException.getMessage());
+    }
+
+    @Test
+    void privateBranchesCoverLegacyPinsNullCollaboratorsAndUtilityFailures() throws Exception {
+        WalletService noOpSenderService = new WalletService(null, null);
+        Bidder noOpBidder = bidder("NOOP-SENDER", 40.0);
+
+        WalletRecoveryResult recovery = noOpSenderService.requestPinRecovery(noOpBidder);
+
+        assertTrue(recovery.accepted());
+
+        WalletService service = new WalletService((email, recoveryCode) -> { });
+        Bidder bidder = bidder("LEGACY-PIN", 50.0);
+        @SuppressWarnings("unchecked")
+        Map<String, String> pinHashes = (Map<String, String>) field(service, "pinHashesByUserId");
+        pinHashes.put(bidder.getId(), CredentialHasher.sha256Hex(bidder.getId() + ":1234"));
+
+        assertEquals(50.0, service.getWallet(bidder, "1234").balance(), 0.001);
+        assertTrue(CredentialHasher.isHashed(pinHashes.get(bidder.getId())));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.recordTransaction(bidder, "WITHDRAWAL", -60.0, "too-much", "Too much.", "1234"));
+        assertThrows(IllegalArgumentException.class,
+                () -> service.lockDeposit(bidder, "OVER-HOLD", 999.0, "OVER-HOLD", "Too large."));
+
+        assertEquals(10.0, service.lockDeposit(
+                (Connection) null,
+                bidder,
+                "NULL-CONN-HOLD",
+                10.0,
+                "NULL-CONN-HOLD",
+                "Null connection hold."
+        ), 0.001);
+        assertEquals(10.0, service.releaseLockedDeposit(
+                (Connection) null,
+                bidder,
+                "NULL-CONN-HOLD",
+                0.0,
+                "BID_RELEASE",
+                "NULL-CONN-HOLD",
+                "Null connection release."
+        ), 0.001);
+
+        Map<String, Double> holds = new HashMap<>();
+        holds.put("NULL", null);
+        holds.put("AMOUNT", 2.345);
+        assertEquals(2.35, (double) method("lockedBalanceOf", Map.class).invoke(service, holds), 0.001);
+        assertEquals(0.0, (double) method("lockedBalanceOf", Map.class).invoke(service, new Object[]{null}), 0.001);
+        assertEquals(7.89, (double) method("heldAmount", org.example.model.User.class, String.class, double.class)
+                .invoke(service, bidder, " ", 7.891), 0.001);
+        assertTrue((boolean) method("differs", double.class, double.class).invoke(service, 1.0, 1.01));
+        assertTrue((boolean) method("recoveryCodeAccepted", String.class, String.class)
+                .invoke(service, "654321", "654321"));
+        assertTrue(((IllegalStateException) method("databaseFailure", String.class, SQLException.class)
+                .invoke(service, "Operation failed", new SQLException("broken")))
+                .getMessage()
+                .contains("Operation failed: broken"));
+
+        try (Connection connection = walletConnection("wallet_service_missing_user")) {
+            InvocationTargetException exception = assertThrows(
+                    InvocationTargetException.class,
+                    () -> method("requirePersistedUser", Connection.class, org.example.model.User.class)
+                            .invoke(service, connection, bidder)
+            );
+            assertTrue(exception.getCause() instanceof SQLException);
+        }
+    }
+
     private Bidder bidder(String label, double balance) {
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         String compactLabel = label.toLowerCase().replaceAll("[^a-z0-9]+", "");
@@ -382,5 +500,17 @@ class WalletServiceCoverageExpansionTest {
             statement.executeUpdate("INSERT INTO users(id) VALUES ('" + userId + "')");
             statement.executeUpdate("INSERT INTO bidder_profiles(user_id, wallet_balance) VALUES ('" + userId + "', 0.00)");
         }
+    }
+
+    private static Object field(WalletService service, String name) throws Exception {
+        Field field = WalletService.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(service);
+    }
+
+    private static Method method(String name, Class<?>... parameterTypes) throws Exception {
+        Method method = WalletService.class.getDeclaredMethod(name, parameterTypes);
+        method.setAccessible(true);
+        return method;
     }
 }

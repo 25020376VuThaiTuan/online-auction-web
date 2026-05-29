@@ -4,7 +4,11 @@ import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicBoolean;
+import com.sun.net.httpserver.HttpServer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -87,6 +91,29 @@ class AuctionApiBootstrapTest {
     }
 
     @Test
+    void privateHealthCheckHandlesHealthyUnhealthyAndInvalidTargets() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api/health", exchange -> {
+            byte[] response = "{}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, response.length);
+            try (var body = exchange.getResponseBody()) {
+                body.write(response);
+            }
+        });
+        server.start();
+
+        try {
+            String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/api";
+
+            assertTrue(isHealthy(baseUrl));
+            assertFalse(isHealthy("http://127.0.0.1:" + server.getAddress().getPort() + "/missing"));
+            assertFalse(isHealthy("not a url"));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void privateConstructorCanBeInvokedForCoverage() throws Exception {
         Constructor<AuctionApiBootstrap> constructor = AuctionApiBootstrap.class.getDeclaredConstructor();
         constructor.setAccessible(true);
@@ -102,5 +129,11 @@ class AuctionApiBootstrapTest {
         Field field = AuctionApiBootstrap.class.getDeclaredField("BOOTSTRAP_ATTEMPTED");
         field.setAccessible(true);
         return (AtomicBoolean) field.get(null);
+    }
+
+    private static boolean isHealthy(String baseUrl) throws Exception {
+        Method method = AuctionApiBootstrap.class.getDeclaredMethod("isHealthy", String.class);
+        method.setAccessible(true);
+        return (boolean) method.invoke(null, baseUrl);
     }
 }

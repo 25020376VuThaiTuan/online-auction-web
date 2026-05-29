@@ -15,7 +15,14 @@ $requiredNames = @(
 $optionalNames = @(
     "AUCTION_API_PORT",
     "AUCTION_API_WORKER_THREADS",
-    "AUCTION_API_TOKEN_TTL_SECONDS"
+    "AUCTION_API_TOKEN_TTL_SECONDS",
+    "AUCTION_API_ALLOWED_ORIGIN",
+    "AUCTION_API_VIRTUAL_THREADS",
+    "AUCTION_DB_MAX_POOL_SIZE",
+    "AUCTION_DB_BORROW_TIMEOUT_MILLIS",
+    "PORT",
+    "WEBSITES_PORT",
+    "CONTAINER_APP_PORT"
 )
 
 Import-AuctionRemoteEnv -Path $EnvFile -RequiredNames $requiredNames -OptionalNames $optionalNames | Out-Null

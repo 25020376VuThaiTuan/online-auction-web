@@ -88,6 +88,20 @@ final class JavaFxTestSupport {
         }
     }
 
+    static void closeOpenDialogs() {
+        startToolkit();
+        runAndWait(() -> {
+            for (Window window : java.util.List.copyOf(Window.getWindows())) {
+                if (!window.isShowing() || window.getScene() == null) {
+                    continue;
+                }
+                if (findDialogPane(window.getScene().getRoot()) != null) {
+                    window.hide();
+                }
+            }
+        });
+    }
+
     static void closeNextDialog(ButtonType buttonType) {
         respondToNextDialog(null, false, buttonType);
     }
@@ -106,6 +120,10 @@ final class JavaFxTestSupport {
 
     static void answerNextPasswordDialogThenCloseAlert(String password, boolean remember) {
         respondToNextDialog(password, remember, ButtonType.OK, () -> respondToNextDialog(null, false, ButtonType.OK));
+    }
+
+    static void closeNextDialogThenCloseAlert(ButtonType buttonType) {
+        respondToNextDialog(null, false, buttonType, () -> respondToNextDialog(null, false, ButtonType.OK));
     }
 
     private static CompletableFuture<Boolean> respondToNextDialog(String password, boolean remember, ButtonType buttonType) {

@@ -6,6 +6,7 @@ import javafx.scene.control.ChoiceBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
+import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextField;
 import org.example.model.Bidder;
@@ -23,6 +24,7 @@ import java.util.concurrent.CompletionException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AuctionListControllerCoverageTest {
@@ -35,6 +37,7 @@ class AuctionListControllerCoverageTest {
 
     @AfterEach
     void tearDown() {
+        JavaFxTestSupport.closeOpenDialogs();
         session.clearWatchedAuctions();
         session.logout();
     }
@@ -72,6 +75,13 @@ class AuctionListControllerCoverageTest {
         assertTrue(watchCell.getStyleClass().contains("watch-active"));
         invokeUpdateItem(watchCell, "", false);
         assertEquals(null, watchCell.getText());
+
+        TableView<AuctionListEntry> table = field(controller, "auctionTable");
+        TableRow<AuctionListEntry> row = table.getRowFactory().call(table);
+        setField(controller, "selectedAuctionId", "A-ROW");
+        invokeUpdateItem(row, entry("A-ROW", "Watched Camera", "RUNNING", 30L), false);
+        assertTrue(row.getPseudoClassStates().stream().anyMatch(pseudoClass -> "active-auction".equals(pseudoClass.getPseudoClassName())));
+        invokeUpdateItem(row, null, true);
     }
 
     @Test
@@ -123,10 +133,28 @@ class AuctionListControllerCoverageTest {
                 assertEquals(3, table.getItems().size());
 
                 JavaFxTestSupport.closeNextDialog(javafx.scene.control.ButtonType.OK);
+                table.getSelectionModel().clearSelection();
+                invoke(controller, "handleOpenAuction");
+                JavaFxTestSupport.closeNextDialog(javafx.scene.control.ButtonType.OK);
                 invoke(controller, "handleToggleWatch");
                 JavaFxTestSupport.closeNextDialog(javafx.scene.control.ButtonType.OK);
                 invoke(controller, "handleRefreshFailure", "offline", true);
                 invoke(controller, "handleRefreshFailure", "offline", false);
+                invoke(controller, "updateResultCountLabel", 0, 0);
+                assertEquals("No auctions are available right now.", field(controller, "resultCountLabel", Label.class).getText());
+                assertThrows(IllegalStateException.class, () -> {
+                    try {
+                        invoke(controller, "apiToken");
+                    } catch (IllegalStateException e) {
+                        throw e;
+                    } catch (Exception e) {
+                        Throwable cause = e.getCause();
+                        if (cause instanceof IllegalStateException illegalStateException) {
+                            throw illegalStateException;
+                        }
+                        throw new AssertionError(e);
+                    }
+                });
                 assertEquals("deep", invoke(controller, "refreshFailureMessage", new CompletionException(new IllegalStateException("deep"))));
                 assertEquals("Auction data could not be refreshed.", invoke(controller, "refreshFailureMessage", new RuntimeException(" ")));
             } catch (Exception e) {
@@ -168,12 +196,12 @@ class AuctionListControllerCoverageTest {
         return bidder;
     }
 
-    private static void invokeUpdateItem(TableCell<?, ?> cell, Object value, boolean empty) throws Exception {
+    private static void invokeUpdateItem(Object cell, Object value, boolean empty) throws Exception {
         Method method = findUpdateItem(cell);
         method.invoke(cell, value, empty);
     }
 
-    private static Method findUpdateItem(TableCell<?, ?> cell) throws NoSuchMethodException {
+    private static Method findUpdateItem(Object cell) throws NoSuchMethodException {
         Class<?> type = cell.getClass();
         while (type != null) {
             for (Method method : type.getDeclaredMethods()) {

@@ -17,8 +17,10 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import com.sun.net.httpserver.HttpServer;
 import org.example.auction.AuctionSettlement;
 import org.example.auction.AuctionSettlementStatus;
+import org.example.client.AuctionApiClient;
 import org.example.model.Admin;
 import org.example.model.ApprovalStatus;
 import org.example.model.Bid;
@@ -30,10 +32,16 @@ import org.example.model.User;
 import org.example.model.WalletLinkedAccount;
 import org.example.model.WalletSummary;
 import org.example.model.WalletTransaction;
+import org.example.server.ApiSessionService;
+import org.example.server.AuctionApiHandler;
+import org.example.server.AuctionRealtimeBroker;
 import org.example.service.AuthenticationService;
+import org.example.service.AuctionWorkflowService;
 import org.example.service.MarketplaceDashboardService;
+import org.example.service.WalletService;
 import org.example.state.ApplicationSession;
 import org.example.util.AuctionCatalogFilters;
+import org.example.util.CredentialHasher;
 import org.example.viewmodel.AuctionEligibilityEntry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -42,6 +50,8 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -50,6 +60,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -71,6 +82,7 @@ class DashboardControllerCoverageExpansionTest {
 
     @AfterEach
     void clearSession() {
+        JavaFxTestSupport.closeOpenDialogs();
         session.clearWatchedAuctions();
         session.logout();
     }
@@ -121,6 +133,21 @@ class DashboardControllerCoverageExpansionTest {
         assertEquals("ACCOUNT-1", invoke(controller, "selectedWalletAccountId"));
         field(controller, "walletAccountTable", TableView.class).getSelectionModel().select(secondary);
         assertEquals("ACCOUNT-2", invoke(controller, "selectedWalletAccountId"));
+        WalletSummary financialRefresh = new WalletSummary(
+                bidder.getId(),
+                975.0,
+                25.0,
+                950.0,
+                true,
+                List.of(),
+                List.of()
+        );
+        bidder.setBalance(975.0);
+        invoke(controller, "refreshWalletSnapshot", bidder, financialRefresh);
+        assertEquals("$975.00", field(controller, "walletBalanceLabel", Label.class).getText());
+        assertEquals(975.0, bidder.getBalance(), 0.001);
+        invoke(controller, "refreshWalletSnapshot", bidder);
+        assertEquals("$975.00", field(controller, "walletBalanceLabel", Label.class).getText());
 
         List<AuctionEligibilityEntry> entries = List.of(
                 auctionEntry("A-1", "Camera Kit", "RUNNING", 200.0, 210.0, true, true, 60L),
@@ -163,6 +190,82 @@ class DashboardControllerCoverageExpansionTest {
         invoke(controller, "handleClearAuctionFilters");
         assertFalse(field(controller, "dashboardWatchedOnlyCheckBox", CheckBox.class).isSelected());
         assertEquals(3, field(controller, "auctionTable", TableView.class).getItems().size());
+    }
+
+    @Test
+    void initializationProfileAvatarRecoveryAndBidIncrementHandlersUseLocalBranches() throws Exception {
+        Bidder bidder = registeredBidder("dashboard-init");
+        dashboardService.setWalletPin(bidder, PIN);
+        session.login(bidder, "api-token");
+        DashboardController controller = dashboardController();
+
+        JavaFxTestSupport.runAndWait(() -> {
+            try {
+                controller.initialize();
+                invoke(controller, "stopRefreshLoop");
+            } catch (Exception e) {
+                throw new AssertionError(e);
+            }
+        });
+
+        assertEquals("api-token", invoke(controller, "apiToken"));
+        assertTrue(invoke(controller, "walletAuthorizationCredential", PIN).toString().startsWith("wa_"));
+
+        invokeWithClosedDialog(controller, "handleTestConnection");
+        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+        invokeOnFx(controller, "showConnectionSuccess",
+                new AuctionApiClient.ConnectionTestResult("http://127.0.0.1/api", "ok", "2026-05-27T12:00:00"));
+        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+        invokeOnFx(controller, "showConnectionFailure",
+                new AuctionApiClient.ApiClientException("Could not reach API", new IOException("down")));
+        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+        invokeOnFx(controller, "showConnectionFailure", new IllegalStateException("bad status"));
+
+        field(controller, "fullNameField", TextField.class).setText("Dashboard Init Updated");
+        field(controller, "phoneField", TextField.class).setText("555-0200");
+        field(controller, "addressArea", TextArea.class).setText("Updated Avenue");
+        invokeWithClosedDialog(controller, "handleSaveProfile");
+        assertEquals("Dashboard Init Updated", bidder.getFullName());
+
+        field(controller, "avatarUrlField", TextField.class).setText("https://example.test/init-avatar.png");
+        invokeWithClosedDialog(controller, "handleSaveAvatar");
+        assertEquals("https://example.test/init-avatar.png", bidder.getAvatarUrl());
+
+        invokeWithClosedDialog(controller, "handleRequestWalletPinRecovery");
+        field(controller, "recoveryCodeField", TextField.class).clear();
+        field(controller, "newWalletPinField", PasswordField.class).clear();
+        invokeWithClosedDialog(controller, "handleResetWalletPin");
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, String> recoveryCodes = (java.util.Map<String, String>) field(
+                WalletService.getInstance(),
+                "recoveryCodesByUserId"
+        );
+        recoveryCodes.put(bidder.getId(), "999999");
+        field(controller, "recoveryCodeField", TextField.class).setText("999999");
+        field(controller, "newWalletPinField", PasswordField.class).setText("1357");
+        invokeWithClosedDialog(controller, "handleResetWalletPin");
+        assertEquals("", field(controller, "recoveryCodeField", TextField.class).getText());
+
+        AuctionEligibilityEntry entry = auctionEntry("INIT-AUCTION", "Init Camera", "RUNNING", 100.0, 110.0, true, true, 120L);
+        TableView<AuctionEligibilityEntry> table = field(controller, "auctionTable");
+        setField(controller, "suppressAuctionSelectionRefresh", true);
+        table.setItems(FXCollections.observableArrayList(entry));
+        table.getSelectionModel().select(entry);
+        setField(controller, "suppressAuctionSelectionRefresh", false);
+        setField(controller, "selectedAuctionId", entry.getItemId());
+        field(controller, "bidAmountField", TextField.class).setText("110.00");
+
+        invokeOnFx(controller, "handleAddTenToBid");
+        assertEquals("120.00", field(controller, "bidAmountField", TextField.class).getText());
+        invokeOnFx(controller, "handleAddFiftyToBid");
+        assertEquals("170.00", field(controller, "bidAmountField", TextField.class).getText());
+        invokeOnFx(controller, "handleAddHundredToBid");
+        assertEquals("270.00", field(controller, "bidAmountField", TextField.class).getText());
+
+        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+        invokeOnFx(controller, "runBuyerSettlementAction", "No item", "", (Runnable) () -> {
+            throw new AssertionError("Action should not run without an item id.");
+        });
     }
 
     @Test
@@ -268,9 +371,12 @@ class DashboardControllerCoverageExpansionTest {
                 "Payment completed: Funds released"
         );
 
-        CompletableFuture<Boolean> firstDialog = JavaFxTestSupport.closeNextDialogAndTrack(ButtonType.OK);
+        CompletableFuture<Boolean> firstDialog = JavaFxTestSupport.closeNextDialogAndTrack(
+                ButtonType.OK,
+                TimeUnit.SECONDS.toMillis(5)
+        );
         invokeOnFx(controller, "showNotificationPopups", List.of(notification));
-        assertTrue(firstDialog.get(2, TimeUnit.SECONDS));
+        assertTrue(firstDialog.get(6, TimeUnit.SECONDS));
         assertFalse(session.rememberNotificationPopup(key));
 
         CompletableFuture<Boolean> duplicateDialog = JavaFxTestSupport.closeNextDialogAndTrack(ButtonType.OK, 300);
@@ -279,9 +385,12 @@ class DashboardControllerCoverageExpansionTest {
 
         session.logout();
         session.login(bidder);
-        CompletableFuture<Boolean> nextSessionDialog = JavaFxTestSupport.closeNextDialogAndTrack(ButtonType.OK);
+        CompletableFuture<Boolean> nextSessionDialog = JavaFxTestSupport.closeNextDialogAndTrack(
+                ButtonType.OK,
+                TimeUnit.SECONDS.toMillis(5)
+        );
         invokeOnFx(controller, "showNotificationPopups", List.of(notification));
-        assertTrue(nextSessionDialog.get(2, TimeUnit.SECONDS));
+        assertTrue(nextSessionDialog.get(6, TimeUnit.SECONDS));
         assertFalse(session.rememberNotificationPopup(key));
     }
 
@@ -502,6 +611,11 @@ class DashboardControllerCoverageExpansionTest {
         answerWalletPinThenInfo();
         invokeOnFx(bidderController, "handleSetPrimaryWalletAccount");
 
+        trustWallet(bidder);
+        JavaFxTestSupport.closeNextDialogThenCloseAlert(ButtonType.YES);
+        invokeOnFx(bidderController, "handleRemoveWalletAccount");
+        assertTrue(field(bidderController, "walletAccountTable", TableView.class).getItems().isEmpty());
+
         session.logout();
         Seller seller = registeredSeller("dashboard_modal_seller");
         session.login(seller);
@@ -553,6 +667,514 @@ class DashboardControllerCoverageExpansionTest {
         closeInfoDialog();
         invokeOnFx(adminController, "handleApproveItem");
         assertEquals(ApprovalStatus.APPROVED, pendingItem.getApprovalStatus());
+    }
+
+    @Test
+    void successfulDashboardAuctionHandlersExecuteLocalBidAutoBidAndSettlementBranches() throws Exception {
+        registeredAdmin("dashboard_success_admin");
+        Bidder bidder = registeredBidder("dashboard_success_bidder");
+        Seller seller = registeredSeller("dashboard_success_seller");
+        dashboardService.setWalletPin(bidder, PIN);
+        dashboardService.setWalletPin(seller, PIN);
+        Item item = dashboardService.addSellerItem(
+                seller,
+                "electronics",
+                "Dashboard Success Camera",
+                "Dashboard successful flow item",
+                100.0,
+                LocalDateTime.now().minusMinutes(2),
+                LocalDateTime.now().plusMinutes(20),
+                "Brand",
+                12
+        );
+        dashboardService.updateItemApproval(item.getId(), ApprovalStatus.APPROVED);
+        assertTrue(dashboardService.startAuction(seller, item.getId()));
+
+        session.login(bidder);
+        DashboardController bidderController = dashboardController();
+        invoke(bidderController, "configureTables");
+        AuctionEligibilityEntry entry = auctionEntry(item.getId(), item.getItemName(), "RUNNING", 100.0, 110.0, true, false, 120L);
+        TableView<AuctionEligibilityEntry> auctionTable = field(bidderController, "auctionTable");
+        auctionTable.setItems(FXCollections.observableArrayList(entry));
+        auctionTable.getSelectionModel().select(entry);
+        setField(bidderController, "selectedAuctionId", item.getId());
+        trustWallet(bidder);
+
+        closeInfoDialog();
+        invokeOnFx(bidderController, "handleConfirmAuctionEntry");
+        assertTrue(dashboardService.hasConfirmedEntryDeposit(item.getId(), bidder));
+
+        AuctionEligibilityEntry entered = auctionEntry(item.getId(), item.getItemName(), "RUNNING", 100.0, 110.0, true, true, 120L);
+        auctionTable.setItems(FXCollections.observableArrayList(entered));
+        auctionTable.getSelectionModel().select(entered);
+        field(bidderController, "bidAmountField", TextField.class).setText("130.00");
+        invokeOnFx(bidderController, "handlePlaceBidFromDashboard");
+        assertTrue(dashboardService.getBidHistory(item.getId()).stream()
+                .anyMatch(bid -> bid.getBidderId().equals(bidder.getId()) && bid.getAmount() >= 130.0));
+
+        field(bidderController, "autoBidMaxField", TextField.class).setText("220.00");
+        field(bidderController, "autoBidIncrementField", TextField.class).setText("10.00");
+        invokeOnFx(bidderController, "handleRegisterAutoBidFromDashboard");
+        assertEquals("", field(bidderController, "autoBidMaxField", TextField.class).getText());
+
+        invokeOnFx(bidderController, "handleDisableAutoBidFromDashboard");
+        assertTrue(field(bidderController, "bidNotificationList", ListView.class).getItems().stream()
+                .anyMatch(line -> line.toString().contains("Auto-bid disabled")));
+
+        assertTrue(dashboardService.finishAuction(seller, item.getId()));
+        Object admitButtons = invoke(bidderController, "loadBuyerSettlementButtonState", false, null, item.getId(), bidder.getId());
+        assertEquals(false, invoke(admitButtons, "admitDisabled"));
+        assertEquals(true, invoke(admitButtons, "confirmDisabled"));
+        closeInfoDialog();
+        invokeOnFx(bidderController, "handleAdmitDashboardResult");
+        assertEquals(AuctionSettlementStatus.AWAITING_SELLER_CONFIRMATION,
+                dashboardService.getSettlement(item.getId()).orElseThrow().getStatus());
+
+        session.login(seller);
+        DashboardController sellerController = dashboardController();
+        invoke(sellerController, "configureTables");
+        field(sellerController, "sellerItemsTable", TableView.class).setItems(FXCollections.observableArrayList(item));
+        field(sellerController, "sellerItemsTable", TableView.class).getSelectionModel().select(item);
+        trustWallet(seller);
+        closeInfoDialog();
+        invokeOnFx(sellerController, "handleSellerMarkShipped");
+        assertEquals(AuctionSettlementStatus.AWAITING_BUYER_CONFIRMATION,
+                dashboardService.getSettlement(item.getId()).orElseThrow().getStatus());
+        Object confirmButtons = invoke(sellerController, "loadBuyerSettlementButtonState", false, null, item.getId(), bidder.getId());
+        assertEquals(true, invoke(confirmButtons, "admitDisabled"));
+        assertEquals(false, invoke(confirmButtons, "confirmDisabled"));
+
+        session.login(bidder);
+        DashboardController confirmController = dashboardController();
+        invoke(confirmController, "configureTables");
+        setField(confirmController, "selectedAuctionId", item.getId());
+        trustWallet(bidder);
+        closeInfoDialog();
+        invokeOnFx(confirmController, "handleConfirmDashboardReceived");
+        assertEquals(AuctionSettlementStatus.PAYMENT_RELEASED,
+                dashboardService.getSettlement(item.getId()).orElseThrow().getStatus());
+    }
+
+    @Test
+    void asyncDashboardDetailRefreshersApplyBidHistoryForSelectedAuctionAndSellerItem() throws Exception {
+        Bidder bidder = registeredBidder("dashboard_async_bidder");
+        Seller seller = registeredSeller("dashboard_async_seller");
+        dashboardService.setWalletPin(bidder, PIN);
+        dashboardService.setWalletPin(seller, PIN);
+        Item item = dashboardService.addSellerItem(
+                seller,
+                "electronics",
+                "Dashboard Async Camera",
+                "Async detail refresh item",
+                100.0,
+                LocalDateTime.now().minusMinutes(2),
+                LocalDateTime.now().plusMinutes(20),
+                "Brand",
+                12
+        );
+        dashboardService.updateItemApproval(item.getId(), ApprovalStatus.APPROVED);
+        assertTrue(dashboardService.startAuction(seller, item.getId()));
+        assertTrue(dashboardService.confirmAuctionEntry(item.getId(), bidder, PIN).accepted());
+        assertTrue(dashboardService.placeBidWithDeposit(item.getId(), bidder, 130.0, PIN).accepted());
+        assertTrue(dashboardService.finishAuction(seller, item.getId()));
+
+        DashboardController bidderController = null;
+        DashboardController sellerController = null;
+        try {
+            session.login(bidder);
+            bidderController = dashboardController();
+            invoke(bidderController, "configureTables");
+            AuctionEligibilityEntry entry = auctionEntry(
+                    item.getId(),
+                    item.getItemName(),
+                    "RUNNING",
+                    130.0,
+                    140.0,
+                    true,
+                    true,
+                    120L
+            );
+            TableView<AuctionEligibilityEntry> auctionTable = field(bidderController, "auctionTable");
+            auctionTable.setItems(FXCollections.observableArrayList(entry));
+            auctionTable.getSelectionModel().select(entry);
+            setField(bidderController, "selectedAuctionId", item.getId());
+            setField(bidderController, "refreshActive", true);
+
+            invoke(bidderController, "refreshSelectedAuctionDetailAsync", entry);
+
+            DashboardController finalBidderController = bidderController;
+            waitForFxCondition(() -> listViewHasItems(finalBidderController, "bidNotificationList"));
+            assertTrue(field(bidderController, "currentWinnerLabel", Label.class).getText()
+                    .contains(bidder.getFullName()));
+            assertFalse(field(bidderController, "admitDashboardResultButton", Button.class).isDisabled());
+
+            session.login(seller);
+            sellerController = dashboardController();
+            invoke(sellerController, "configureTables");
+            TableView<Item> sellerItemsTable = field(sellerController, "sellerItemsTable");
+            sellerItemsTable.setItems(FXCollections.observableArrayList(item));
+            sellerItemsTable.getSelectionModel().select(item);
+            setField(sellerController, "refreshActive", true);
+
+            invoke(sellerController, "refreshSellerSelectionAsync", item);
+
+            DashboardController finalSellerController = sellerController;
+            waitForFxCondition(() -> listViewHasItems(finalSellerController, "sellerBidHistoryList"));
+            assertTrue(field(sellerController, "sellerBidHistoryList", ListView.class).getItems().getFirst()
+                    .toString()
+                    .contains("$130.00"));
+        } finally {
+            if (bidderController != null) {
+                invoke(bidderController, "stopRefreshLoop");
+            }
+            if (sellerController != null) {
+                invoke(sellerController, "stopRefreshLoop");
+            }
+        }
+    }
+
+    @Test
+    void dashboardRejectedWalletAuctionAndAutoBidActionsUseRealServiceBranches() throws Exception {
+        Bidder bidder = registeredBidder("dashboard_reject_bidder");
+        Seller seller = registeredSeller("dashboard_reject_seller");
+        dashboardService.setWalletPin(bidder, PIN);
+        dashboardService.setWalletPin(seller, PIN);
+        Item item = dashboardService.addSellerItem(
+                seller,
+                "electronics",
+                "Dashboard Rejection Camera",
+                "Rejected dashboard branch item",
+                100.0,
+                LocalDateTime.now().minusMinutes(2),
+                LocalDateTime.now().plusMinutes(20),
+                "Brand",
+                12
+        );
+        dashboardService.updateItemApproval(item.getId(), ApprovalStatus.APPROVED);
+        assertTrue(dashboardService.startAuction(seller, item.getId()));
+
+        session.login(bidder);
+        DashboardController bidderController = dashboardController();
+        invoke(bidderController, "configureTables");
+
+        field(bidderController, "walletAccountNameField", TextField.class).setText(bidder.getFullName());
+        field(bidderController, "walletProviderField", TextField.class).setText("Test Bank");
+        field(bidderController, "walletAccountReferenceField", TextField.class).setText("reject-123");
+        field(bidderController, "walletAccountOpeningBalanceField", TextField.class).setText("-1");
+        closeInfoDialog();
+        invokeOnFx(bidderController, "handleAddWalletAccount");
+
+        field(bidderController, "walletAccountOpeningBalanceField", TextField.class).setText("15");
+        JavaFxTestSupport.answerNextPasswordDialog("", false, ButtonType.CANCEL);
+        invokeOnFx(bidderController, "handleAddWalletAccount");
+        assertTrue(field(bidderController, "walletAccountTable", TableView.class).getItems().isEmpty());
+
+        AuctionEligibilityEntry entry = auctionEntry(
+                item.getId(),
+                item.getItemName(),
+                "RUNNING",
+                100.0,
+                110.0,
+                true,
+                false,
+                120L
+        );
+        TableView<AuctionEligibilityEntry> auctionTable = field(bidderController, "auctionTable");
+        auctionTable.setItems(FXCollections.observableArrayList(entry));
+        auctionTable.getSelectionModel().select(entry);
+        setField(bidderController, "selectedAuctionId", item.getId());
+        trustWallet(bidder);
+
+        field(bidderController, "bidAmountField", TextField.class).setText("130");
+        closeInfoDialog();
+        invokeOnFx(bidderController, "handlePlaceBidFromDashboard");
+        assertTrue(dashboardService.getBidHistory(item.getId()).isEmpty());
+
+        field(bidderController, "autoBidMaxField", TextField.class).setText("220");
+        field(bidderController, "autoBidIncrementField", TextField.class).setText("10");
+        closeInfoDialog();
+        invokeOnFx(bidderController, "handleRegisterAutoBidFromDashboard");
+        assertEquals("220", field(bidderController, "autoBidMaxField", TextField.class).getText());
+
+        session.login(seller);
+        DashboardController sellerController = dashboardController();
+        invoke(sellerController, "configureTables");
+        TableView<AuctionEligibilityEntry> sellerAuctionTable = field(sellerController, "auctionTable");
+        sellerAuctionTable.setItems(FXCollections.observableArrayList(entry));
+        sellerAuctionTable.getSelectionModel().select(entry);
+        trustWallet(seller);
+
+        closeInfoDialog();
+        invokeOnFx(sellerController, "handleConfirmAuctionEntry");
+        assertFalse(dashboardService.hasConfirmedEntryDeposit(item.getId(), seller));
+    }
+
+    @Test
+    void apiDashboardBranchesUseHttpBackedClientForAdminSellerAndDetailLoaders() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api", new AuctionApiHandler(
+                AuthenticationService.getInstance(),
+                AuctionWorkflowService.getInstance(),
+                new ApiSessionService(),
+                new AuctionRealtimeBroker()
+        ));
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            System.setProperty("auction.api.baseUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/api");
+            AuctionApiClient client = newApiClient();
+            String suffix = UUID.randomUUID().toString().substring(0, 8);
+            var adminAuth = client.login("admin", "admin123");
+            var bidderAuth = client.registerManualBidder(
+                    "dash_api_bid_" + suffix,
+                    "secret123",
+                    "dash_api_bid_" + suffix + "@test.local",
+                    "Dashboard API Bidder " + suffix
+            );
+
+            session.login(adminAuth.user(), adminAuth.token());
+            DashboardController controller = dashboardController();
+            setField(controller, "apiClient", client);
+            invoke(controller, "configureTables");
+            invoke(controller, "configureRoleTabs");
+
+            Object context = newNested(
+                    "org.example.controller.DashboardController$DashboardLoadContext",
+                    new Class<?>[]{boolean.class, String.class, User.class},
+                    true,
+                    adminAuth.token(),
+                    adminAuth.user()
+            );
+            Object snapshot = invoke(controller, "loadDashboardSnapshot", context);
+            assertNotNull(snapshot);
+
+            Object adminSection = invoke(controller, "loadAdminSectionSnapshot", context, adminAuth.user());
+            assertEquals(true, invoke(adminSection, "admin"));
+            invoke(controller, "applyAdminSection", adminSection, adminAuth.user());
+            assertFalse(field(controller, "userTable", TableView.class).getItems().isEmpty());
+
+            field(controller, "userTable", TableView.class).setItems(FXCollections.observableArrayList(bidderAuth.user()));
+            field(controller, "userTable", TableView.class).getSelectionModel().select(bidderAuth.user());
+            invokeOnFx(controller, "handleLoadWalletAudit");
+            assertFalse(field(controller, "adminWalletAuditList", ListView.class).getItems().isEmpty());
+
+            field(controller, "roleChoiceBox", ChoiceBox.class).setValue("SELLER");
+            closeInfoDialog();
+            invokeOnFx(controller, "handleUpdateRole");
+            assertEquals("SELLER", client.getCurrentUser(bidderAuth.token()).getRole());
+
+            field(controller, "sellerItemTypeChoiceBox", ChoiceBox.class).setValue("electronics");
+            field(controller, "sellerItemNameField", TextField.class).setText("Dashboard API Camera " + suffix);
+            field(controller, "sellerDescriptionArea", TextArea.class).setText("API-created item");
+            field(controller, "sellerStartingPriceField", TextField.class).setText("120");
+            field(controller, "sellerExtraTextField", TextField.class).setText("Brand");
+            field(controller, "sellerExtraNumberField", TextField.class).setText("12");
+            field(controller, "sellerPrepareMinutesField", TextField.class).setText("0");
+            field(controller, "sellerBiddingMinutesField", TextField.class).setText("60");
+            closeInfoDialog();
+            invokeOnFx(controller, "handleAddSellerItem");
+
+            Item apiItem = client.getSellerItems(adminAuth.token()).stream()
+                    .filter(item -> item.getItemName().equals("Dashboard API Camera " + suffix))
+                    .findFirst()
+                    .orElseThrow();
+            client.updateItemApproval(adminAuth.token(), apiItem.getId(), ApprovalStatus.APPROVED);
+
+            field(controller, "sellerItemsTable", TableView.class).setItems(FXCollections.observableArrayList(apiItem));
+            field(controller, "sellerItemsTable", TableView.class).getSelectionModel().select(apiItem);
+            closeInfoDialog();
+            invokeOnFx(controller, "handleStartSellerAuction");
+            closeInfoDialog();
+            invokeOnFx(controller, "handleFinishSellerAuction");
+
+            Object auctionContext = newNested(
+                    "org.example.controller.DashboardController$AuctionSelectionLoadContext",
+                    new Class<?>[]{long.class, boolean.class, String.class, String.class, String.class},
+                    7L,
+                    true,
+                    adminAuth.token(),
+                    adminAuth.user().getId(),
+                    apiItem.getId()
+            );
+            Object auctionSnapshot = invoke(controller, "loadAuctionDetailSectionSnapshot", auctionContext);
+            assertEquals(apiItem.getId(), invoke(auctionSnapshot, "itemId"));
+
+            Object sellerContext = newNested(
+                    "org.example.controller.DashboardController$SellerSelectionLoadContext",
+                    new Class<?>[]{long.class, boolean.class, String.class, String.class},
+                    8L,
+                    true,
+                    adminAuth.token(),
+                    apiItem.getId()
+            );
+            Object sellerSnapshot = invoke(controller, "loadSellerSelectionDetailSnapshot", sellerContext);
+            assertEquals(apiItem.getId(), invoke(sellerSnapshot, "itemId"));
+            assertNotNull(invoke(controller, "bidHistory", true, adminAuth.token(), apiItem.getId()));
+            Object disabledButtons = invoke(controller, "loadBuyerSettlementButtonState",
+                    true, adminAuth.token(), apiItem.getId(), adminAuth.user().getId());
+            assertEquals(true, invoke(disabledButtons, "admitDisabled"));
+            assertEquals(true, invoke(disabledButtons, "confirmDisabled"));
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void apiDashboardProfileWalletAndRecoveryHandlersUseHttpBackedClientBranches() throws Exception {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/api", new AuctionApiHandler(
+                AuthenticationService.getInstance(),
+                AuctionWorkflowService.getInstance(),
+                new ApiSessionService(),
+                new AuctionRealtimeBroker()
+        ));
+        server.start();
+
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            System.setProperty("auction.api.baseUrl", "http://127.0.0.1:" + server.getAddress().getPort() + "/api");
+            AuctionApiClient client = newApiClient();
+            String suffix = UUID.randomUUID().toString().substring(0, 8);
+            var auth = client.registerManualBidder(
+                    "dash_wallet_" + suffix,
+                    "secret123",
+                    "dash_wallet_" + suffix + "@test.local",
+                    "Dashboard API Wallet"
+            );
+            Bidder apiBidder = (Bidder) auth.user();
+            apiBidder.setBalance(500.0);
+            AuthenticationService.getInstance().updateUser(apiBidder);
+
+            session.login(auth.user(), auth.token());
+            DashboardController controller = dashboardController();
+            setField(controller, "apiClient", client);
+            invoke(controller, "configureTables");
+
+            field(controller, "fullNameField", TextField.class).setText("Dashboard API Wallet Updated");
+            field(controller, "phoneField", TextField.class).setText("555-0300");
+            field(controller, "addressArea", TextArea.class).setText("API Wallet Address");
+            closeInfoDialog();
+            invokeOnFx(controller, "handleSaveProfile");
+            assertEquals("Dashboard API Wallet Updated", session.getCurrentUser().orElseThrow().getFullName());
+
+            field(controller, "avatarUrlField", TextField.class).setText("https://example.test/api-wallet.png");
+            closeInfoDialog();
+            invokeOnFx(controller, "handleSaveAvatar");
+            assertEquals("https://example.test/api-wallet.png", session.getCurrentUser().orElseThrow().getAvatarUrl());
+
+            field(controller, "newWalletPinField", PasswordField.class).setText(PIN);
+            closeInfoDialog();
+            invokeOnFx(controller, "handleSetWalletPin");
+            assertEquals("Set", field(controller, "walletPinStatusLabel", Label.class).getText());
+
+            field(controller, "walletPinField", PasswordField.class).setText(PIN);
+            invokeOnFx(controller, "handleOpenWallet");
+            assertEquals("$500.00", field(controller, "walletBalanceLabel", Label.class).getText());
+
+            closeInfoDialog();
+            invokeOnFx(controller, "handleRequestWalletPinRecovery");
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, String> recoveryCodes = (java.util.Map<String, String>) field(
+                    WalletService.getInstance(),
+                    "recoveryCodesByUserId"
+            );
+            recoveryCodes.put(auth.user().getId(), CredentialHasher.hash("999999"));
+            field(controller, "recoveryCodeField", TextField.class).setText("999999");
+            field(controller, "newWalletPinField", PasswordField.class).setText("1357");
+            closeInfoDialog();
+            invokeOnFx(controller, "handleResetWalletPin");
+
+            var authorization = dashboardService.authorizeWallet(session.getCurrentUser().orElseThrow(), "1357", Duration.ofMinutes(5));
+            session.trustWalletAuthorization(auth.user().getId(), authorization.token(), authorization.expiresAt());
+            field(controller, "walletAccountNameField", TextField.class).setText("Dashboard API Wallet Updated");
+            field(controller, "walletProviderField", TextField.class).setText("API Bank");
+            field(controller, "walletAccountReferenceField", TextField.class).setText("123456789012");
+            field(controller, "walletAccountOpeningBalanceField", TextField.class).setText("25");
+            closeInfoDialog();
+            invokeOnFx(controller, "handleAddWalletAccount");
+            assertEquals(1, field(controller, "walletAccountTable", TableView.class).getItems().size());
+        } finally {
+            if (previousBaseUrl == null) {
+                System.clearProperty("auction.api.baseUrl");
+            } else {
+                System.setProperty("auction.api.baseUrl", previousBaseUrl);
+            }
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void dashboardLocalAdminFilterSellerAndRefreshFailureBranchesUseRealControls() throws Exception {
+        Bidder bidder = registeredBidder("dashboard_filter_bidder");
+        Seller seller = registeredSeller("dashboard_filter_seller");
+        User admin = registeredAdmin("dashboard_filter_admin");
+
+        session.login(admin);
+        DashboardController controller = dashboardController();
+        invoke(controller, "configureTables");
+        invoke(controller, "bindCurrentUserFields");
+
+        field(controller, "userTable", TableView.class).setItems(FXCollections.observableArrayList(admin));
+        field(controller, "userTable", TableView.class).getSelectionModel().select(admin);
+        field(controller, "roleChoiceBox", ChoiceBox.class).setValue("SELLER");
+        closeInfoDialog();
+        invokeOnFx(controller, "handleUpdateRole");
+        assertEquals("SELLER", session.getCurrentUser().orElseThrow().getRole());
+
+        field(controller, "sellerItemTypeChoiceBox", ChoiceBox.class).setValue("electronics");
+        field(controller, "sellerStartingPriceField", TextField.class).setText("50");
+        field(controller, "sellerExtraNumberField", TextField.class).setText("4");
+        field(controller, "sellerPrepareMinutesField", TextField.class).setText("0");
+        field(controller, "sellerBiddingMinutesField", TextField.class).setText("15");
+        closeInfoDialog();
+        invokeOnFx(controller, "handleAddSellerItem");
+
+        field(controller, "sellerItemNameField", TextField.class).setText("Invalid Session Camera");
+        field(controller, "sellerDescriptionArea", TextArea.class).setText("Invalid session data");
+        field(controller, "sellerStartingPriceField", TextField.class).setText("-1");
+        closeInfoDialog();
+        invokeOnFx(controller, "handleAddSellerItem");
+
+        Item preserved = item("DASH-FILTER-ITEM", seller.getId());
+        field(controller, "sellerItemsTable", TableView.class).setItems(FXCollections.observableArrayList(preserved));
+        field(controller, "sellerItemsTable", TableView.class).getSelectionModel().select(preserved);
+        invoke(controller, "applySellerItems", List.of(preserved), session.getCurrentUser().orElseThrow());
+        assertSame(preserved, field(controller, "sellerItemsTable", TableView.class).getSelectionModel().getSelectedItem());
+        invoke(controller, "applySellerItems", List.of(preserved), bidder);
+        assertTrue(field(controller, "sellerItemsTable", TableView.class).getItems().isEmpty());
+
+        AuctionEligibilityEntry running = auctionEntry("FILTER-1", "Filter Camera", "RUNNING", 100.0, 110.0, true, false, 60L);
+        AuctionEligibilityEntry finished = auctionEntry("FILTER-2", "Filter Print", "FINISHED", 90.0, 100.0, false, true, 0L);
+        setField(controller, "selectedAuctionId", "FILTER-MISSING");
+        field(controller, "dashboardAuctionSearchField", TextField.class).setText("filter");
+        field(controller, "dashboardAuctionOpenOnlyCheckBox", CheckBox.class).setSelected(true);
+        invoke(controller, "applyAuctionEntries", List.of(running, finished));
+        assertEquals(List.of("FILTER-1"), field(controller, "auctionTable", TableView.class).getItems().stream()
+                .map(entry -> ((AuctionEligibilityEntry) entry).getItemId())
+                .toList());
+
+        field(controller, "dashboardAuctionSearchField", TextField.class).setText("nothing");
+        field(controller, "dashboardAuctionOpenOnlyCheckBox", CheckBox.class).setSelected(false);
+        invoke(controller, "applyAuctionFilters");
+        assertEquals("Showing 0 of 2 auction sessions", field(controller, "auctionResultsSummaryLabel", Label.class).getText());
+
+        CompletableFuture<Boolean> refreshDialog = JavaFxTestSupport.closeNextDialogAndTrack(
+                ButtonType.OK,
+                TimeUnit.SECONDS.toMillis(5)
+        );
+        invokeOnFx(controller, "handleDashboardRefreshFailure", "initial dashboard failure", true);
+        assertTrue(refreshDialog.get(6, TimeUnit.SECONDS));
+        invoke(controller, "handleDashboardRefreshFailure", "initial dashboard failure", true);
+        invoke(controller, "handleDashboardRefreshFailure", "", false);
+        assertEquals("Dashboard data is temporarily unavailable.", field(controller, "lastDashboardRefreshFailureMessage"));
+
+        invoke(controller, "stopRefreshLoop");
     }
 
     @Test
@@ -840,8 +1462,34 @@ class DashboardControllerCoverageExpansionTest {
         JavaFxTestSupport.answerNextPasswordDialog(PIN, false, ButtonType.OK);
     }
 
+    private void trustWallet(User user) {
+        var authorization = dashboardService.authorizeWallet(user, PIN, Duration.ofMinutes(5));
+        session.trustWalletAuthorization(user.getId(), authorization.token(), authorization.expiresAt());
+    }
+
     private static void closeInfoDialog() {
         JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+    }
+
+    private static void waitForFxCondition(BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (System.nanoTime() < deadline) {
+            java.util.concurrent.atomic.AtomicBoolean satisfied = new java.util.concurrent.atomic.AtomicBoolean(false);
+            JavaFxTestSupport.runAndWait(() -> satisfied.set(condition.getAsBoolean()));
+            if (satisfied.get()) {
+                return;
+            }
+            Thread.sleep(25L);
+        }
+        JavaFxTestSupport.runAndWait(() -> assertTrue(condition.getAsBoolean()));
+    }
+
+    private static boolean listViewHasItems(Object target, String fieldName) {
+        try {
+            return !field(target, fieldName, ListView.class).getItems().isEmpty();
+        } catch (Exception exception) {
+            throw new AssertionError(exception);
+        }
     }
 
     private static AuctionEligibilityEntry auctionEntry(
@@ -1050,5 +1698,11 @@ class DashboardControllerCoverageExpansionTest {
         Method method = type.getDeclaredMethod(name, parameterTypes);
         method.setAccessible(true);
         return method.invoke(null, args);
+    }
+
+    private static AuctionApiClient newApiClient() throws Exception {
+        Constructor<AuctionApiClient> constructor = AuctionApiClient.class.getDeclaredConstructor();
+        constructor.setAccessible(true);
+        return constructor.newInstance();
     }
 }

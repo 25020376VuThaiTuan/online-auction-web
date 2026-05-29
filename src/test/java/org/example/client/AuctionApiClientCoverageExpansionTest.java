@@ -141,6 +141,11 @@ class AuctionApiClientCoverageExpansionTest {
         client.startAuction("token-1", "item 1");
         client.finishAuction("token-1", "item 1");
 
+        assertTrue(client.placeBid("token-1", "item 1", 205.0).accepted());
+        assertTrue(client.confirmAuctionEntry("token-1", "item 1").result().accepted());
+        client.registerAutoBid("token-1", "item 1", 525.0);
+        client.registerAutoBid("token-1", "item 1", 550.0, "2468");
+
         assertEquals("AWAITING_WINNER_ADMISSION", client.getSettlement("token-1", "item 1").status());
         assertEquals("AWAITING_WINNER_ADMISSION", client.admitWinnerResult("token-1", "item 1", "2468").status());
         assertEquals("AWAITING_WINNER_ADMISSION", client.markGoodsShipped("token-1", "item 1", "2468").status());
@@ -148,6 +153,12 @@ class AuctionApiClientCoverageExpansionTest {
         assertEquals("AWAITING_WINNER_ADMISSION", client.reportGoodsNotReceived("token-1", "item 1", "missing", "2468").status());
         assertEquals("AWAITING_WINNER_ADMISSION", client.adminUnfreezePayment("token-1", "item 1", "2468").status());
         assertEquals("AWAITING_WINNER_ADMISSION", client.adminKeepPaymentFrozen("token-1", "item 1", "2468").status());
+        assertEquals("AWAITING_WINNER_ADMISSION", client.admitWinnerResult("token-1", "item 1").status());
+        assertEquals("AWAITING_WINNER_ADMISSION", client.markGoodsShipped("token-1", "item 1").status());
+        assertEquals("AWAITING_WINNER_ADMISSION", client.confirmGoodsReceived("token-1", "item 1").status());
+        assertEquals("AWAITING_WINNER_ADMISSION", client.reportGoodsNotReceived("token-1", "item 1", "missing").status());
+        assertEquals("AWAITING_WINNER_ADMISSION", client.adminUnfreezePayment("token-1", "item 1").status());
+        assertEquals("AWAITING_WINNER_ADMISSION", client.adminKeepPaymentFrozen("token-1", "item 1").status());
         assertEquals(1, client.getSettlements("token-1").size());
 
         List<AuctionApiClient.NotificationDetail> notificationDetails = client.getNotificationDetails("token-1");

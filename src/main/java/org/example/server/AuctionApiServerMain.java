@@ -28,6 +28,7 @@ public final class AuctionApiServerMain {
     private static final int DEFAULT_PORT = 8081;
     private static final int DEFAULT_PORT_FALLBACK_ATTEMPTS = 10;
     private static final int DEFAULT_WORKER_THREADS = 16;
+    private static final String API_PORT_ENV = "AUCTION_API_PORT";
     private static final String DB_URL_ENV = "AUCTION_DB_URL";
     private static final String DB_USER_ENV = "AUCTION_DB_USER";
     private static final String DB_PASSWORD_ENV = "AUCTION_DB_PASSWORD";
@@ -207,6 +208,10 @@ public final class AuctionApiServerMain {
     }
 
     static PortSelection resolvePortSelection(String[] args) {
+        return resolvePortSelection(args, System.getenv());
+    }
+
+    static PortSelection resolvePortSelection(String[] args, Map<String, String> environment) {
         String rawPort = resolvePortArgument(args);
         boolean explicit = rawPort != null && !rawPort.isBlank();
         if (rawPort == null || rawPort.isBlank()) {
@@ -214,7 +219,7 @@ public final class AuctionApiServerMain {
             explicit = rawPort != null && !rawPort.isBlank();
         }
         if (rawPort == null || rawPort.isBlank()) {
-            rawPort = System.getenv("AUCTION_API_PORT");
+            rawPort = resolvePortEnvironment(environment);
             explicit = rawPort != null && !rawPort.isBlank();
         }
         if (rawPort == null || rawPort.isBlank()) {
@@ -282,7 +287,7 @@ public final class AuctionApiServerMain {
                 throw new IOException(
                         "Port " + portSelection.port() + " is already in use. "
                                 + "Stop the process using that port, or choose another one with "
-                                + "AUCTION_API_PORT, -Dauction.api.port, or --port.",
+                                + "AUCTION_API_PORT, PORT, WEBSITES_PORT, -Dauction.api.port, or --port.",
                         exception
                 );
             }
@@ -319,6 +324,19 @@ public final class AuctionApiServerMain {
             }
             if ("--port".equals(arg) && index + 1 < args.length) {
                 return args[index + 1];
+            }
+        }
+        return null;
+    }
+
+    private static String resolvePortEnvironment(Map<String, String> environment) {
+        if (environment == null) {
+            return null;
+        }
+        for (String name : List.of(API_PORT_ENV, "PORT", "WEBSITES_PORT", "CONTAINER_APP_PORT")) {
+            String value = environment.get(name);
+            if (hasText(value)) {
+                return value;
             }
         }
         return null;

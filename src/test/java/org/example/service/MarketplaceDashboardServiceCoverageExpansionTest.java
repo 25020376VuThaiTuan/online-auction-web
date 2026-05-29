@@ -20,6 +20,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class MarketplaceDashboardServiceCoverageExpansionTest {
@@ -105,6 +106,48 @@ class MarketplaceDashboardServiceCoverageExpansionTest {
         assertTrue(dashboardService.findUserById(bidder.getId()).isPresent());
         assertTrue(dashboardService.getWalletAuditTransactions(admin, bidder.getId()).size() >= 1);
         assertTrue(dashboardService.getSellerItems(admin).stream().anyMatch(candidate -> candidate.getId().equals(item.getId())));
+    }
+
+    @Test
+    void convenienceOverloadsDelegateToWalletProtectedWorkflows() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        User bidder = dashboardService.registerManualBidder(
+                "marketfacadebid" + suffix,
+                "secret",
+                "marketfacadebid" + suffix + "@test.local",
+                "Market Facade Bidder " + suffix
+        );
+        User seller = dashboardService.registerManualSeller(
+                "marketfacadesell" + suffix,
+                "secret",
+                "marketfacadesell" + suffix + "@test.local",
+                "Market Facade Seller " + suffix
+        );
+        User admin = admin("marketfacadeadmin" + suffix);
+
+        assertThrows(IllegalStateException.class,
+                () -> dashboardService.confirmAuctionEntry("missing-" + suffix, bidder));
+        assertThrows(IllegalStateException.class,
+                () -> dashboardService.placeBidWithDeposit("missing-" + suffix, bidder, 25.0));
+        assertThrows(IllegalStateException.class,
+                () -> dashboardService.registerAutoBidWithDeposit("missing-" + suffix, bidder, 25.0));
+        assertThrows(IllegalStateException.class,
+                () -> dashboardService.addWalletAccount(bidder, "Holder", "Provider", "REF", true, null));
+        assertThrows(IllegalArgumentException.class,
+                () -> dashboardService.resetWalletPin(bidder, "bad-code", "2468"));
+
+        assertThrows(IllegalStateException.class,
+                () -> dashboardService.admitWinnerResult("missing-" + suffix, bidder));
+        assertThrows(IllegalStateException.class,
+                () -> dashboardService.markGoodsShipped("missing-" + suffix, seller));
+        assertThrows(IllegalStateException.class,
+                () -> dashboardService.confirmGoodsReceived("missing-" + suffix, bidder));
+        assertThrows(IllegalStateException.class,
+                () -> dashboardService.reportGoodsNotReceived("missing-" + suffix, bidder, "lost"));
+        assertThrows(IllegalStateException.class,
+                () -> dashboardService.adminUnfreezeRemainingPayment("missing-" + suffix, admin));
+        assertThrows(IllegalStateException.class,
+                () -> dashboardService.adminKeepRemainingPaymentFrozen("missing-" + suffix, admin));
     }
 
     private Bidder bidder(String username, double balance) {

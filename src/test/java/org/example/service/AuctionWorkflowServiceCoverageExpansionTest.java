@@ -1,10 +1,13 @@
 package org.example.service;
 
 import org.example.auction.AuctionSessionRegistry;
+import org.example.auction.AuctionStatus;
 import org.example.auction.BidValidationResult;
+import org.example.dao.ItemDAO;
 import org.example.model.ApprovalStatus;
 import org.example.model.AuctionStore;
 import org.example.model.AutoBid;
+import org.example.model.Bid;
 import org.example.model.Bidder;
 import org.example.model.DataManager;
 import org.example.model.Item;
@@ -16,7 +19,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -130,7 +135,11 @@ class AuctionWorkflowServiceCoverageExpansionTest {
         assertTrue(AuctionSettlementService.getInstance()
                 .lockEntryDeposit(item, service.getSummary(item.getId()), autoBidder)
                 .accepted());
+        @SuppressWarnings("unchecked")
+        Map<String, List<AutoBid>> autoBidMap = (Map<String, List<AutoBid>>) field(service, "autoBidsByItemId");
+        autoBidMap.remove(item.getId());
         assertTrue(service.registerAutoBid(item.getId(), autoBidder, 180.0, 20.0));
+        assertTrue(service.registerAutoBid(item.getId(), autoBidder, 190.0, 20.0));
 
         BidValidationResult result = service.placeBid(item.getId(), bidder, 120.0);
 
@@ -140,6 +149,97 @@ class AuctionWorkflowServiceCoverageExpansionTest {
         assertFalse(service.registerAutoBid(item.getId(), bidder, 0.0));
 
         assertThrows(IllegalArgumentException.class, () -> service.placeBid("missing", bidder, 120.0));
+    }
+
+    @Test
+    void extensionHelpersAndStaleDemoRefreshCoverLocalMaintenanceBranches() throws Exception {
+        AuctionWorkflowService service = serviceWithItems();
+        LocalDateTime previousEndTime = LocalDateTime.of(2026, 5, 27, 10, 0);
+        BidValidationResult accepted = BidValidationResult.accepted(
+                "Bid accepted.",
+                120.0,
+                120.0,
+                130.0,
+                AuctionStatus.RUNNING,
+                previousEndTime
+        );
+
+        BidValidationResult extended = (BidValidationResult) method(
+                "withFinalEffectiveEndTime",
+                BidValidationResult.class,
+                LocalDateTime.class,
+                AuctionStatus.class
+        ).invoke(service, accepted, previousEndTime.plusMinutes(2), AuctionStatus.FINISHED);
+
+        assertTrue(extended.message().toLowerCase().contains("extended"));
+        assertEquals(AuctionStatus.FINISHED, extended.status());
+        assertEquals(previousEndTime.plusMinutes(2), extended.effectiveEndTime());
+        assertEquals(accepted, method(
+                "withFinalEffectiveEndTime",
+                BidValidationResult.class,
+                LocalDateTime.class,
+                AuctionStatus.class
+        ).invoke(service, accepted, previousEndTime, AuctionStatus.FINISHED));
+        assertTrue((boolean) method("isExtended", LocalDateTime.class, LocalDateTime.class)
+                .invoke(service, previousEndTime, previousEndTime.plusSeconds(1)));
+        assertFalse((boolean) method("isExtended", LocalDateTime.class, LocalDateTime.class)
+                .invoke(service, previousEndTime, previousEndTime));
+        assertFalse((boolean) method("isExtended", LocalDateTime.class, LocalDateTime.class)
+                .invoke(service, null, previousEndTime));
+        method(
+                "recordAuctionExtensionIfNeeded",
+                ItemDAO.class,
+                String.class,
+                String.class,
+                LocalDateTime.class,
+                LocalDateTime.class
+        ).invoke(service, null, "ITEM", "BID", previousEndTime, previousEndTime);
+
+        IllegalStateException failure = (IllegalStateException) method("databaseFailure", String.class, SQLException.class)
+                .invoke(service, "Database failed", new SQLException("broken"));
+        assertTrue(failure.getMessage().contains("Database failed: broken"));
+
+        LocalDateTime now = LocalDateTime.now();
+        Item liveDemo = item("WF-LIVE-DEMO", "Live Demo", "", ApprovalStatus.APPROVED);
+        liveDemo.setStartTime(now.minusMinutes(1));
+        liveDemo.setEndTime(now.plusMinutes(30));
+        assertFalse((boolean) method("refreshStaleLocalDemoAuctions").invoke(serviceWithItems(liveDemo)));
+
+        Item sellerOwnedEnded = item("WF-SELLER-ENDED", "Seller Ended", "SELLER-2", ApprovalStatus.APPROVED);
+        sellerOwnedEnded.setStartTime(now.minusHours(3));
+        sellerOwnedEnded.setEndTime(now.minusHours(1));
+        AuctionWorkflowService sellerOwnedService = serviceWithItems(sellerOwnedEnded);
+        assertFalse((boolean) method("isLocalDemoItem", Item.class).invoke(sellerOwnedService, sellerOwnedEnded));
+        assertFalse((boolean) method("refreshStaleLocalDemoAuctions").invoke(sellerOwnedService));
+
+        Item staleDemo = item("WF-STALE-DEMO", "Stale Demo", "", ApprovalStatus.APPROVED);
+        staleDemo.setStartTime(now.minusHours(3));
+        staleDemo.setEndTime(now.minusHours(1));
+        staleDemo.setCurrentPrice(999.0);
+        AuctionWorkflowService staleDemoService = serviceWithItems(staleDemo);
+
+        assertTrue((boolean) method("isLocalDemoItem", Item.class).invoke(staleDemoService, staleDemo));
+        assertTrue((boolean) method("refreshStaleLocalDemoAuctions").invoke(staleDemoService));
+        assertTrue(staleDemo.getEndTime().isAfter(LocalDateTime.now()));
+        assertEquals(staleDemo.getStartingPrice(), staleDemo.getCurrentPrice(), 0.001);
+
+        Item untrackedBidItem = item("WF-UNTRACKED-BID", "Untracked Bid", "", ApprovalStatus.APPROVED);
+        Bid bid = new Bid("BID-UNTRACKED", "BIDDER", untrackedBidItem.getId(), 150.0, LocalDateTime.now());
+        method("recordLocalBid", Item.class, Bid.class).invoke(serviceWithItems(), untrackedBidItem, bid);
+        assertEquals(150.0, untrackedBidItem.getCurrentPrice(), 0.001);
+
+        Item autoBidItem = item("WF-AUTOBID-MISSING-MAP", "Missing AutoBid Map", "", ApprovalStatus.APPROVED);
+        AuctionWorkflowService autoBidService = serviceWithItems(autoBidItem);
+        @SuppressWarnings("unchecked")
+        Map<String, List<AutoBid>> autoBidsByItemId = (Map<String, List<AutoBid>>) field(autoBidService, "autoBidsByItemId");
+        autoBidsByItemId.remove(autoBidItem.getId());
+        assertFalse(autoBidService.disableAutoBid(autoBidItem.getId(), bidder("wfdisable", 100.0)));
+        assertEquals(0.0, (double) method("autoBidAvailableBalance", String.class, AutoBid.class)
+                .invoke(autoBidService, autoBidItem.getId(), new AutoBid(1, "", autoBidItem.getId(), 200.0, 10.0)), 0.001);
+        assertEquals("BIDDER", method("leadingBidderId", List.class).invoke(
+                autoBidService,
+                List.of(new Bid("BID-LEAD", "BIDDER", autoBidItem.getId(), 150.0, LocalDateTime.now()))
+        ));
     }
 
     private AuctionWorkflowService serviceWithItems(Item... items) throws Exception {
@@ -182,6 +282,12 @@ class AuctionWorkflowServiceCoverageExpansionTest {
         Field field = AuctionWorkflowService.class.getDeclaredField(name);
         field.setAccessible(true);
         field.set(target, value);
+    }
+
+    private static Method method(String name, Class<?>... parameterTypes) throws Exception {
+        Method method = AuctionWorkflowService.class.getDeclaredMethod(name, parameterTypes);
+        method.setAccessible(true);
+        return method;
     }
 
     private Item item(String id, String name, String sellerId, ApprovalStatus approvalStatus) {

@@ -42,6 +42,7 @@ The localhost API setup clears `AUCTION_DB_*` for the launched process, sets `AU
 
 Use this when the API is running on another machine, a LAN/VPN address, a cloud host, or a public URL.
 See [REMOTE_MYSQL_SETUP.md](REMOTE_MYSQL_SETUP.md) for server, schema, firewall, API, and JavaFX client steps.
+For Azure Database for MySQL plus an Azure-hosted API, see [AZURE_CONNECTION.md](AZURE_CONNECTION.md).
 
 For repeatable internet-mode launches, copy the safe template once and put your real values in the ignored local env file.
 
@@ -96,7 +97,31 @@ powershell -ExecutionPolicy Bypass -File .\scripts\Start-RemoteApi.ps1 -EnvFile 
 powershell -ExecutionPolicy Bypass -File .\scripts\Start-RemoteClient.ps1 -EnvFile .\scripts\internet-api.env
 ```
 
-`scripts\local-api.env`, `scripts\internet-api.env`, and `scripts\remote.env` are ignored by Git. Keep real `AUCTION_DB_PASSWORD` values there, not in committed docs or shell history. The same env files are used by both Windows PowerShell and Linux/macOS shell scripts.
+`scripts\local-api.env`, `scripts\internet-api.env`, `scripts\azure-api.env`, and `scripts\remote.env` are ignored by Git. Keep real `AUCTION_DB_PASSWORD` values there, not in committed docs or shell history. The same env files are used by both Windows PowerShell and Linux/macOS shell scripts.
+
+### Azure API
+
+Use this when the API should run against Azure Database for MySQL or when the deployed API is hosted on Azure Container Apps or Azure App Service.
+
+Windows PowerShell:
+
+```powershell
+Copy-Item .\scripts\azure-api.env.example .\scripts\azure-api.env
+notepad .\scripts\azure-api.env
+.\scripts\Start-AzureApi.ps1
+.\scripts\Start-AzureClient.ps1
+```
+
+Linux/macOS:
+
+```sh
+cp scripts/azure-api.env.example scripts/azure-api.env
+${EDITOR:-vi} scripts/azure-api.env
+sh scripts/start-azure-api.sh
+sh scripts/start-azure-client.sh
+```
+
+The Azure template uses `jdbc:mysql://<server>.mysql.database.azure.com:3306/auctiondb?sslMode=REQUIRED&serverTimezone=UTC`, so the existing MySQL-backed persistence path is reused without changing application code.
 
 ## Local run commands
 

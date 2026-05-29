@@ -50,11 +50,29 @@ class AuctionApiServerMainTest {
 
     @Test
     void resolvePortUsesArgsPropertiesAndDefaults() {
+        System.clearProperty("auction.api.port");
+
         assertEquals(9090, AuctionApiServerMain.resolvePort(new String[]{"--port=9090"}));
         assertEquals(9091, AuctionApiServerMain.resolvePort(new String[]{"--port", "9091"}));
         assertEquals(8081, AuctionApiServerMain.resolvePort(new String[]{"--port=-1"}));
         assertEquals(8081, AuctionApiServerMain.resolvePort(new String[]{"--port=bad"}));
-        assertEquals(8081, AuctionApiServerMain.resolvePort(null));
+        assertEquals(8081, AuctionApiServerMain.resolvePortSelection(null, Map.of()).port());
+        assertEquals(8082, AuctionApiServerMain.resolvePortSelection(
+                new String[0],
+                Map.of("AUCTION_API_PORT", "8082")
+        ).port());
+        assertEquals(8083, AuctionApiServerMain.resolvePortSelection(
+                new String[0],
+                Map.of("PORT", "8083")
+        ).port());
+        assertEquals(8084, AuctionApiServerMain.resolvePortSelection(
+                new String[0],
+                Map.of("WEBSITES_PORT", "8084")
+        ).port());
+        assertEquals(8085, AuctionApiServerMain.resolvePortSelection(
+                new String[0],
+                Map.of("CONTAINER_APP_PORT", "8085")
+        ).port());
 
         System.setProperty("auction.api.port", "9092");
         assertEquals(9092, AuctionApiServerMain.resolvePort(new String[0]));

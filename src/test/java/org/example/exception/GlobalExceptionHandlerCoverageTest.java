@@ -44,6 +44,9 @@ class GlobalExceptionHandlerCoverageTest {
     @AfterEach
     void restoreLog() throws Exception {
         runAndWait(GlobalExceptionHandlerCoverageTest::closeShowingDialogs);
+        if (Files.isDirectory(LOG_FILE)) {
+            Files.delete(LOG_FILE);
+        }
         if (logExisted) {
             Files.writeString(LOG_FILE, originalLogContent);
         } else {
@@ -78,6 +81,25 @@ class GlobalExceptionHandlerCoverageTest {
         assertTrue(log.contains("Unknown"));
         assertTrue(log.contains(RuntimeException.class.getName()));
         assertTrue(log.contains("boom"));
+    }
+
+    @Test
+    void uncaughtExceptionDelegatesAndLoggingIOExceptionIsContained() throws Exception {
+        closeNextDialog();
+        runAndWait(() -> new GlobalExceptionHandler()
+                .uncaughtException(Thread.currentThread(), new InsufficientBalanceException("low balance")));
+        assertTrue(waitForLog().contains(InsufficientBalanceException.class.getName()));
+
+        Files.deleteIfExists(LOG_FILE);
+        Files.createDirectory(LOG_FILE);
+
+        closeNextDialog();
+        runAndWait(() -> GlobalExceptionHandler.handleException(
+                Thread.currentThread(),
+                new UserNotFound("missing user")
+        ));
+
+        assertTrue(Files.isDirectory(LOG_FILE));
     }
 
     private static String waitForLog() throws Exception {
