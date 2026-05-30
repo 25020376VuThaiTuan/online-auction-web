@@ -1,6 +1,7 @@
 package org.example.controller;
 
 import javafx.application.Platform;
+import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
@@ -143,7 +144,8 @@ public class AuctionController implements org.example.auction.AuctionObserver {
             return;
         }
 
-        bidderColumn.setCellValueFactory(new PropertyValueFactory<>("bidderId"));
+        bidderColumn.setCellValueFactory(cellData ->
+                new SimpleStringProperty(displayBidderName(cellData.getValue().getBidderId())));
         amountColumn.setCellValueFactory(new PropertyValueFactory<>("amount"));
         timeColumn.setCellValueFactory(new PropertyValueFactory<>("bidTime"));
         ResponsiveViewSupport.configureResponsiveTable(bidTable);

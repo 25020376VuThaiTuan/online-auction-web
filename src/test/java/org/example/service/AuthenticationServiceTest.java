@@ -265,6 +265,30 @@ class AuthenticationServiceTest {
     }
 
     @Test
+    void resetPasswordRequiresMatchingEmailAndStoresHashedCredential() throws Exception {
+        InMemoryUserRepository repository = new InMemoryUserRepository();
+        repository.save(new Bidder(
+                "RESET-USER",
+                "reset_user",
+                CredentialHasher.hash("oldpass"),
+                "reset@test.local",
+                0.0
+        ));
+        AuthenticationService service = new AuthenticationService(List.of(repository));
+
+        service.resetPassword(" reset_user ", " reset@test.local ", "newpass", "newpass");
+
+        assertThrows(InvalidPasswordException.class, () -> service.loginOrThrow("reset_user", "oldpass"));
+        User loggedIn = service.loginOrThrow("reset_user", "newpass");
+        assertTrue(CredentialHasher.verify("newpass", loggedIn.getPasswordHash()));
+        assertTrue(loggedIn.getPasswordHash().startsWith("$2a$"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> service.resetPassword("reset_user", "wrong@test.local", "nextpass", "nextpass")
+        );
+    }
+
+    @Test
     void registrationRejectsDuplicateEmailAddresses() {
         InMemoryUserRepository repository = new InMemoryUserRepository();
         repository.save(new Bidder("U-BID-001", "first_user", "secure123", "shared@test.local", 0.0));

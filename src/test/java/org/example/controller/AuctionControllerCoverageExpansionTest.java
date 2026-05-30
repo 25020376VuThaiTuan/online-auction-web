@@ -173,6 +173,11 @@ class AuctionControllerCoverageExpansionTest {
 
         assertEquals("Signed in as: " + session.getCurrentUserLabel(),
                 field(controller, "userLabel", Label.class).getText());
+        TableColumn<Bid, String> bidderColumn = field(controller, "bidderColumn");
+        field(controller, "bidTable", TableView.class).getColumns().add(bidderColumn);
+        assertEquals(bidder.getFullName(), bidderColumn.getCellObservableValue(
+                new Bid("BID-NAME", bidder.getId(), item.getId(), 130.0, LocalDateTime.now())
+        ).getValue());
         TableColumn<Bid, LocalDateTime> timeColumn = field(controller, "timeColumn");
         TableCell<Bid, LocalDateTime> cell = timeColumn.getCellFactory().call(timeColumn);
         invoke(cell, "updateItem", LocalDateTime.of(2026, 5, 27, 12, 0), false);

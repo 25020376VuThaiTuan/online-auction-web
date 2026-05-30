@@ -2,15 +2,20 @@ package org.example.controller;
 
 import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
 import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
+import javafx.scene.layout.GridPane;
 import org.example.client.AuctionApiClient;
 import org.example.exception.InvalidPasswordException;
 import org.example.exception.UserNotFound;
 import org.example.service.AuthenticationService;
 import org.example.state.ApplicationSession;
 import org.example.util.SceneNavigator;
+
+import java.util.Optional;
 
 public class LoginController {
     private final AuctionApiClient apiClient;
@@ -85,6 +90,59 @@ public class LoginController {
         SceneNavigator.switchScene(usernameField, "/view/Register.fxml", "Create Account");
     }
 
+    @FXML
+    private void handleForgotPassword() {
+        Dialog<PasswordResetInput> dialog = new Dialog<>();
+        dialog.setTitle("Reset password");
+        dialog.setHeaderText(null);
+
+        TextField dialogUsernameField = new TextField(usernameField.getText());
+        dialogUsernameField.setPromptText("Username");
+        TextField emailField = new TextField();
+        emailField.setPromptText("Account email");
+        PasswordField newPasswordField = new PasswordField();
+        newPasswordField.setPromptText("New password");
+        PasswordField confirmPasswordField = new PasswordField();
+        confirmPasswordField.setPromptText("Confirm new password");
+
+        GridPane form = new GridPane();
+        form.setHgap(10.0);
+        form.setVgap(10.0);
+        form.addRow(0, new Label("Username"), dialogUsernameField);
+        form.addRow(1, new Label("Email"), emailField);
+        form.addRow(2, new Label("New password"), newPasswordField);
+        form.addRow(3, new Label("Confirm password"), confirmPasswordField);
+
+        dialog.getDialogPane().setContent(form);
+        dialog.getDialogPane().getButtonTypes().setAll(ButtonType.OK, ButtonType.CANCEL);
+        dialog.setResultConverter(buttonType -> buttonType == ButtonType.OK
+                ? new PasswordResetInput(
+                        dialogUsernameField.getText(),
+                        emailField.getText(),
+                        newPasswordField.getText(),
+                        confirmPasswordField.getText()
+                )
+                : null);
+
+        Optional<PasswordResetInput> result = dialog.showAndWait();
+        result.ifPresent(input -> {
+            try {
+                resetPassword(input.username(), input.email(), input.newPassword(), input.confirmPassword());
+                showAlert(Alert.AlertType.INFORMATION, "Password reset", "Sign in with your new password.");
+            } catch (UserNotFound e) {
+                showAlert(Alert.AlertType.WARNING, "Account not found", e.getMessage());
+            } catch (AuctionApiClient.ApiClientException e) {
+                showAlert(
+                        Alert.AlertType.WARNING,
+                        AuctionApiClient.isConnectivityFailure(e) ? "API unavailable" : "Password reset failed",
+                        e.getMessage()
+                );
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                showAlert(Alert.AlertType.WARNING, "Password reset failed", e.getMessage());
+            }
+        });
+    }
+
     void authenticate(String username, String password) throws UserNotFound, InvalidPasswordException {
         if (!apiClient.isEnabled()) {
             applicationSession.login(authenticationService.loginOrThrow(username, password));
@@ -100,6 +158,14 @@ public class LoginController {
             }
             throw configuredApiUnavailable(e);
         }
+    }
+
+    void resetPassword(String username, String email, String newPassword, String confirmPassword) throws UserNotFound {
+        if (!apiClient.isEnabled()) {
+            authenticationService.resetPassword(username, email, newPassword, confirmPassword);
+            return;
+        }
+        apiClient.resetPassword(username, email, newPassword, confirmPassword);
     }
 
     private AuctionApiClient.ApiClientException configuredApiUnavailable(AuctionApiClient.ApiClientException cause) {
@@ -129,5 +195,13 @@ public class LoginController {
             current = current.getCause();
         }
         return "Dashboard data could not be loaded.";
+    }
+
+    private record PasswordResetInput(
+            String username,
+            String email,
+            String newPassword,
+            String confirmPassword
+    ) {
     }
 }

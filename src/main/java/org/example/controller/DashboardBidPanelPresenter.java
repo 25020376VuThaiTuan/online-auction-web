@@ -43,7 +43,7 @@ final class DashboardBidPanelPresenter {
         }
 
         if (bidHistoryChart != null) {
-            BidChartUtils.applyBidHistory(bidHistoryChart, safeHistory);
+            BidChartUtils.applyBidHistory(bidHistoryChart, safeHistory, bidderNameResolver);
         }
         lastBidHistoryChartSignature = signature;
     }

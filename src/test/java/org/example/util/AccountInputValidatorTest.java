@@ -224,4 +224,32 @@ class AccountInputValidatorTest {
 
         assertEquals("johndoe123", result);
     }
+
+    @Test
+    void validatePasswordRecovery_NormalizesFieldsAndRequiresMatchingConfirmation() {
+
+        AccountPasswordRecovery.RecoveryRequest result =
+                AccountPasswordRecovery.validateResetRequest(
+                        "  John_Doe  ",
+                        " john@example.test ",
+                        "newpass123",
+                        "newpass123"
+                );
+
+        assertEquals("john_doe", result.username());
+        assertEquals("john@example.test", result.email());
+        assertEquals("newpass123", result.newPassword());
+
+        IllegalArgumentException mismatch = assertThrows(
+                IllegalArgumentException.class,
+                () -> AccountPasswordRecovery.validateResetRequest(
+                        "john_doe",
+                        "john@example.test",
+                        "newpass123",
+                        "different123"
+                )
+        );
+
+        assertEquals("Confirm password must match the new password.", mismatch.getMessage());
+    }
 }

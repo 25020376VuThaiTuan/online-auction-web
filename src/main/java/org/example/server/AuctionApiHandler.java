@@ -48,6 +48,7 @@ public final class AuctionApiHandler implements HttpHandler {
     private final ApiSessionService sessionService;
     private final AuctionRealtimeBroker realtimeBroker;
     private final SimpleRateLimiter loginRateLimiter = new SimpleRateLimiter(10, Duration.ofMinutes(1));
+    private final SimpleRateLimiter passwordResetRateLimiter = new SimpleRateLimiter(5, Duration.ofMinutes(15));
     private final SimpleRateLimiter walletRecoveryRateLimiter = new SimpleRateLimiter(5, Duration.ofMinutes(15));
     private final SimpleRateLimiter walletPinResetRateLimiter = new SimpleRateLimiter(5, Duration.ofMinutes(15));
 
@@ -125,6 +126,7 @@ public final class AuctionApiHandler implements HttpHandler {
                             "/api/health",
                             "/api/auth/login",
                             "/api/auth/register",
+                            "/api/auth/password/reset",
                             "/api/auth/me",
                             "/api/auth/logout",
                             "/api/users/me/profile",
@@ -222,6 +224,27 @@ public final class AuctionApiHandler implements HttpHandler {
                 return;
             } catch (IllegalArgumentException e) {
                 throw new ApiHttpException(409, e.getMessage());
+            }
+        }
+
+        if (segments.size() == 3 && "password".equals(segments.get(1)) && "reset".equals(segments.get(2))) {
+            requireMethod(exchange, "POST");
+            Map<String, Object> request = ApiJson.parseObject(readRequestBody(exchange));
+            String username = ApiJson.requireString(request, "username");
+            requireRateLimit(passwordResetRateLimiter, clientKey(exchange, username), "Too many password reset attempts. Try again later.");
+            try {
+                authenticationService.resetPassword(
+                        username,
+                        ApiJson.requireString(request, "email"),
+                        ApiJson.requireString(request, "newPassword"),
+                        ApiJson.requireString(request, "confirmPassword")
+                );
+                sendJson(exchange, 200, jsonObject(
+                        "message", "Password reset. Sign in with the new password."
+                ));
+                return;
+            } catch (UserNotFound e) {
+                throw new ApiHttpException(404, e.getMessage());
             }
         }
 

@@ -10,6 +10,7 @@ import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
+import javafx.scene.input.MouseButton;
 import org.example.model.ApprovalStatus;
 import org.example.model.Item;
 import org.example.model.User;
@@ -130,17 +131,27 @@ final class DashboardTableConfigurator {
         ResponsiveViewSupport.configureCurrencyColumn(config.minimumBidColumn());
         ResponsiveViewSupport.configureCurrencyColumn(config.requiredDepositColumn());
         ResponsiveViewSupport.configureCurrencyColumn(config.availableBalanceColumn());
-        config.table().setRowFactory(table -> new TableRow<>() {
-            @Override
-            protected void updateItem(AuctionEligibilityEntry item, boolean empty) {
-                super.updateItem(item, empty);
-                pseudoClassStateChanged(
-                        ACTIVE_AUCTION_PSEUDO_CLASS,
-                        !empty
-                                && item != null
-                                && item.getItemId().equals(config.selectedAuctionIdSupplier().get())
-                );
-            }
+        config.table().setRowFactory(table -> {
+            TableRow<AuctionEligibilityEntry> row = new TableRow<>() {
+                @Override
+                protected void updateItem(AuctionEligibilityEntry item, boolean empty) {
+                    super.updateItem(item, empty);
+                    pseudoClassStateChanged(
+                            ACTIVE_AUCTION_PSEUDO_CLASS,
+                            !empty
+                                    && item != null
+                                    && item.getItemId().equals(config.selectedAuctionIdSupplier().get())
+                    );
+                }
+            };
+            row.setOnMouseClicked(event -> {
+                if (!row.isEmpty()
+                        && event.getButton() == MouseButton.PRIMARY
+                        && event.getClickCount() == 2) {
+                    config.openBiddingAction().accept(row.getItem());
+                }
+            });
+            return row;
         });
 
         config.table().getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> {
@@ -257,6 +268,7 @@ final class DashboardTableConfigurator {
             Consumer<AuctionEligibilityEntry> refreshSelectedDetail,
             Consumer<String> selectedAuctionIdSetter,
             Supplier<String> selectedAuctionIdSupplier,
+            Consumer<AuctionEligibilityEntry> openBiddingAction,
             Function<String, String> eligibleStyleClass
     ) {
     }

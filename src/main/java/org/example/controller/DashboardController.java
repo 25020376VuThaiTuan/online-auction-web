@@ -1392,6 +1392,7 @@ public class DashboardController {
                 this::refreshSelectedAuctionDetailAsync,
                 itemId -> selectedAuctionId = itemId,
                 () -> selectedAuctionId,
+                this::openAuctionBiddingFromTable,
                 this::eligibleStyleClass
         ));
         DashboardTableConfigurator.configureSellerTable(new DashboardTableConfigurator.SellerTableConfig(
@@ -2117,14 +2118,15 @@ public class DashboardController {
     }
 
     private void showSelectedAuctionSummary(AuctionEligibilityEntry entry, boolean clearHistory) {
+        boolean entryConfirmed = hasConfirmedAuctionEntry(entry);
         selectedAuctionLabel.setText(entry.getItemName() + " [" + entry.getStatus().replace('_', ' ') + "]");
         selectedAuctionDepositLabel.setText("Deposit required: " + AuctionDisplayFormatter.formatCurrency(entry.getRequiredDeposit())
-                + " - " + entry.getEligibleText());
+                + " - " + (entryConfirmed ? "Entered" : entry.getEligibleText()));
         selectedAuctionTimeRemainingLabel.setText("Time left: " + entry.getRemainingTime());
         bidEntryTimeRemainingLabel.setText("Time remaining: " + entry.getRemainingTime());
         selectedAuctionEndTimeLabel.setText("Ends at: " + entry.getEndTimeString());
-        confirmAuctionEntryButton.setDisable(entry.isDepositConfirmed() || !entry.isEligible());
-        boolean canBid = entry.isDepositConfirmed() && "RUNNING".equalsIgnoreCase(entry.getStatus());
+        confirmAuctionEntryButton.setDisable(entryConfirmed || !entry.isEligible());
+        boolean canBid = entryConfirmed && "RUNNING".equalsIgnoreCase(entry.getStatus());
         bidAmountField.setDisable(!canBid);
         bidAmountField.setPromptText("Min " + AuctionDisplayFormatter.formatCurrency(entry.getMinimumBid()));
         if (canBid) {
@@ -2145,6 +2147,30 @@ public class DashboardController {
             applyBuyerSettlementButtons(SettlementButtonState.disabled());
             selectDashboardTab("Bidding");
         }
+    }
+
+    private void openAuctionBiddingFromTable(AuctionEligibilityEntry entry) {
+        if (entry == null) {
+            return;
+        }
+        selectedAuctionId = entry.getItemId();
+        applicationSession.setSelectedAuctionId(selectedAuctionId);
+        showSelectedAuctionSummary(entry, false);
+        if (hasConfirmedAuctionEntry(entry)) {
+            selectDashboardTab("Bidding");
+        }
+    }
+
+    private boolean hasConfirmedAuctionEntry(AuctionEligibilityEntry entry) {
+        if (entry == null) {
+            return false;
+        }
+        if (entry.isDepositConfirmed()) {
+            return true;
+        }
+        User user = currentUser();
+        return user instanceof Bidder bidder
+                && bidder.getLockedDepositsByAuctionId().containsKey(entry.getItemId());
     }
 
     private void clearBidSection() {

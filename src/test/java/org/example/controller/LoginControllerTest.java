@@ -249,6 +249,33 @@ class LoginControllerTest {
     }
 
     @Test
+    void resetPasswordUpdatesLocalLoginCredential()
+            throws Exception {
+
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String username = "login_reset_" + suffix;
+        AuthenticationService.getInstance().registerManualBidder(
+                username,
+                "oldpass",
+                username + "@test.local",
+                "Login Reset " + suffix
+        );
+
+        controller.resetPassword(username, username + "@test.local", "newpass", "newpass");
+
+        controller.authenticate(username, "newpass");
+        assertEquals(
+                username,
+                ApplicationSession.getInstance().getCurrentUser().orElseThrow().getUsername()
+        );
+        ApplicationSession.getInstance().logout();
+        assertThrows(
+                InvalidPasswordException.class,
+                () -> controller.authenticate(username, "oldpass")
+        );
+    }
+
+    @Test
     void configuredApiUnavailableMessageExplainsLocalFallbackBoundary()
             throws Exception {
 

@@ -138,6 +138,22 @@ class AuctionApiHandlerCoverageTest {
         handler().handle(duplicateRegister);
         assertEquals(409, duplicateRegister.statusCode);
 
+        FakeExchange resetPassword = exchange("POST", "/api/auth/password/reset", ApiJson.stringify(Map.of(
+                "username", duplicateUsername,
+                "email", duplicateUsername + "@test.local",
+                "newPassword", "updated123",
+                "confirmPassword", "updated123"
+        )));
+        handler().handle(resetPassword);
+        assertEquals(200, resetPassword.statusCode);
+
+        FakeExchange updatedLogin = exchange("POST", "/api/auth/login", ApiJson.stringify(Map.of(
+                "username", duplicateUsername,
+                "password", "updated123"
+        )));
+        handler().handle(updatedLogin);
+        assertEquals(200, updatedLogin.statusCode);
+
         FakeExchange largeBody = exchange("POST", "/api/auth/login", "x".repeat(64 * 1024 + 2));
         handler().handle(largeBody);
         assertEquals(413, largeBody.statusCode);

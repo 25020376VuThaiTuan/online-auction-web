@@ -117,6 +117,16 @@ public final class AuctionApiClient {
         return authResult(response);
     }
 
+    public String resetPassword(String username, String email, String newPassword, String confirmPassword) {
+        Map<String, Object> response = request("POST", "/auth/password/reset", null, jsonObject(
+                "username", username,
+                "email", email,
+                "newPassword", newPassword,
+                "confirmPassword", confirmPassword
+        ));
+        return stringValue(response.get("message"));
+    }
+
     public void logout(String token) {
         request("POST", "/auth/logout", token, Map.of());
     }

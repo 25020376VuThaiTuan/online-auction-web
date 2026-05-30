@@ -357,6 +357,30 @@ class DashboardControllerCoverageExpansionTest {
     }
 
     @Test
+    void confirmedAuctionTableOpenUsesLockedDepositBeforeRefreshRebuildsEntry() throws Exception {
+        Bidder bidder = bidder();
+        bidder.lockDeposit("A-10", 25.0);
+        session.login(bidder);
+        DashboardController controller = dashboardController();
+        Tab auctionListTab = new Tab("Auction List");
+        Tab biddingTab = new Tab("Bidding");
+        setField(controller, "dashboardTabPane", new TabPane(auctionListTab, biddingTab));
+        AuctionEligibilityEntry staleEntry = auctionEntry("A-10", "Confirmed Camera", "RUNNING", 100.0, 110.0, true, false, 90L);
+
+        field(controller, "auctionTable", TableView.class).setItems(FXCollections.observableArrayList(staleEntry));
+        field(controller, "auctionTable", TableView.class).getSelectionModel().select(staleEntry);
+
+        invoke(controller, "openAuctionBiddingFromTable", staleEntry);
+
+        assertEquals("A-10", field(controller, "selectedAuctionId"));
+        assertEquals("A-10", session.getSelectedAuctionId().orElseThrow());
+        assertSame(biddingTab, field(controller, "dashboardTabPane", TabPane.class).getSelectionModel().getSelectedItem());
+        assertTrue(field(controller, "confirmAuctionEntryButton", Button.class).isDisabled());
+        assertFalse(field(controller, "placeDashboardBidButton", Button.class).isDisabled());
+        assertTrue(field(controller, "selectedAuctionDepositLabel", Label.class).getText().contains("Entered"));
+    }
+
+    @Test
     void dashboardNotificationPopupsDeduplicateOnlyWithinActiveSession() throws Exception {
         Bidder bidder = bidder();
         session.login(bidder);

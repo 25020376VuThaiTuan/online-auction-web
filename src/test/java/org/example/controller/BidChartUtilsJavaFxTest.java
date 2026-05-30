@@ -39,6 +39,9 @@ class BidChartUtilsJavaFxTest {
 
             assertTrue(chart.getCreateSymbols());
             assertFalse(chart.isLegendVisible());
+            assertFalse(chart.getXAxis().isTickLabelsVisible());
+            assertFalse(chart.getXAxis().isTickMarkVisible());
+            assertEquals("Bid sequence", chart.getXAxis().getLabel());
             assertEquals(1, chart.getStyleClass().stream().filter("live-bid-chart"::equals).count());
 
             LocalDateTime firstTime = LocalDateTime.of(2026, 5, 27, 10, 15, 30);
@@ -55,6 +58,11 @@ class BidChartUtilsJavaFxTest {
             assertEquals(100.0, series.getData().get(0).getYValue().doubleValue(), 0.001);
             assertEquals("Bid #02\r\nUnknown bidder\r\n$125.01\r\n27/05 10:20:45".replace("\r\n", System.lineSeparator()),
                     String.valueOf(series.getData().get(1).getExtraValue()));
+
+            BidChartUtils.applyBidHistory(chart, List.of(
+                    new Bid("BID-1", "BIDDER-1", "ITEM-1", 100.004, firstTime)
+            ), bidderId -> "BIDDER-1".equals(bidderId) ? "Alice Bidder" : bidderId);
+            assertTrue(String.valueOf(series.getData().getFirst().getExtraValue()).contains("Alice Bidder"));
 
             BidChartUtils.applyBidHistory(chart, List.of(new Bid("BID-3", "BIDDER-3", "ITEM-1", 140.0, null)));
 

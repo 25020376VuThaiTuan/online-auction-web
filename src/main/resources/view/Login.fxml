@@ -54,6 +54,7 @@
                         <FlowPane alignment="CENTER" hgap="10.0" prefWrapLength="320.0" vgap="8.0">
                             <Label text="Need a new account?"/>
                             <Button onAction="#handleOpenRegistration" text="Create Account"/>
+                            <Button onAction="#handleForgotPassword" text="Forgot Password?"/>
                         </FlowPane>
 
                         <Label fx:id="hintLabel"

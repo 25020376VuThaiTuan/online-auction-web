@@ -10,6 +10,7 @@ import org.example.model.Bid;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Function;
 
 public final class BidChartUtils {
     private static final DateTimeFormatter CHART_TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
@@ -27,16 +28,30 @@ public final class BidChartUtils {
         chart.setAnimated(true);
         chart.setCreateSymbols(true);
         chart.setLegendVisible(false);
+        if (chart.getXAxis() != null) {
+            chart.getXAxis().setTickLabelsVisible(false);
+            chart.getXAxis().setTickMarkVisible(false);
+            chart.getXAxis().setLabel("Bid sequence");
+        }
         if (!chart.getStyleClass().contains("live-bid-chart")) {
             chart.getStyleClass().add("live-bid-chart");
         }
     }
 
     public static void applyBidHistory(LineChart<String, Number> chart, List<Bid> bidHistory) {
+        applyBidHistory(chart, bidHistory, Function.identity());
+    }
+
+    public static void applyBidHistory(
+            LineChart<String, Number> chart,
+            List<Bid> bidHistory,
+            Function<String, String> bidderNameResolver
+    ) {
         if (chart == null) {
             return;
         }
         List<Bid> safeHistory = bidHistory == null ? List.of() : bidHistory;
+        Function<String, String> safeBidderNameResolver = bidderNameResolver == null ? Function.identity() : bidderNameResolver;
         XYChart.Series<String, Number> series = getOrCreateSeries(chart);
 
         while (series.getData().size() > safeHistory.size()) {
@@ -46,7 +61,7 @@ public final class BidChartUtils {
         for (int index = 0; index < safeHistory.size(); index++) {
             Bid bid = safeHistory.get(index);
             String label = chartLabel(index, bid);
-            String tooltip = tooltipText(index, bid);
+            String tooltip = tooltipText(index, bid, safeBidderNameResolver);
             if (index < series.getData().size()) {
                 XYChart.Data<String, Number> data = series.getData().get(index);
                 data.setXValue(label);
@@ -91,8 +106,11 @@ public final class BidChartUtils {
         return String.format(Locale.US, "#%02d %s", index + 1, timeLabel);
     }
 
-    private static String tooltipText(int index, Bid bid) {
-        String bidder = value(bid.getBidderId()).isBlank() ? "Unknown bidder" : bid.getBidderId();
+    private static String tooltipText(int index, Bid bid, Function<String, String> bidderNameResolver) {
+        String bidder = value(bid.getBidderId()).isBlank() ? "Unknown bidder" : value(bidderNameResolver.apply(bid.getBidderId()));
+        if (bidder.isBlank()) {
+            bidder = "Unknown bidder";
+        }
         String time = bid.getBidTime() == null ? "N/A" : bid.getBidTime().format(DateTimeFormatter.ofPattern("dd/MM HH:mm:ss"));
         return String.format(
                 Locale.US,

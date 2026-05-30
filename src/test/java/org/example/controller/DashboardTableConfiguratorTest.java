@@ -8,6 +8,8 @@ import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import org.example.model.ApprovalStatus;
 import org.example.model.Bidder;
 import org.example.model.Item;
@@ -152,6 +154,7 @@ class DashboardTableConfiguratorTest {
         AtomicReference<AuctionEligibilityEntry> summaryEntry = new AtomicReference<>();
         AtomicReference<Boolean> summarySelectionChanged = new AtomicReference<>();
         AtomicReference<AuctionEligibilityEntry> refreshedEntry = new AtomicReference<>();
+        AtomicReference<AuctionEligibilityEntry> openedBiddingEntry = new AtomicReference<>();
         AtomicInteger clearCount = new AtomicInteger();
 
         DashboardTableConfigurator.configureAuctionTable(new DashboardTableConfigurator.AuctionTableConfig(
@@ -177,6 +180,7 @@ class DashboardTableConfiguratorTest {
                 refreshedEntry::set,
                 selectedId::set,
                 selectedId::get,
+                openedBiddingEntry::set,
                 value -> "style-" + value.toLowerCase().replace(' ', '-')
         ));
 
@@ -232,6 +236,27 @@ class DashboardTableConfiguratorTest {
 
         TableRow<AuctionEligibilityEntry> row = table.getRowFactory().call(table);
         invokeUpdateItem(row, entry, false);
+        row.getOnMouseClicked().handle(new MouseEvent(
+                MouseEvent.MOUSE_CLICKED,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                MouseButton.PRIMARY,
+                2,
+                false,
+                false,
+                false,
+                false,
+                true,
+                false,
+                false,
+                false,
+                false,
+                false,
+                null
+        ));
+        assertSame(entry, openedBiddingEntry.get());
         invokeUpdateItem(row, null, true);
 
         table.getSelectionModel().clearSelection();

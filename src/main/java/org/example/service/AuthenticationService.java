@@ -9,6 +9,7 @@ import org.example.model.User;
 import org.example.repository.DemoUserRepository;
 import org.example.repository.JdbcUserRepository;
 import org.example.repository.UserRepository;
+import org.example.util.AccountPasswordRecovery;
 import org.example.util.AccountInputValidator;
 import org.example.util.CredentialHasher;
 
@@ -97,6 +98,37 @@ public final class AuthenticationService {
         }
     }
 
+    public synchronized User resetPassword(
+            String username,
+            String email,
+            String newPassword,
+            String confirmPassword
+    ) throws UserNotFound {
+        AccountPasswordRecovery.RecoveryRequest request =
+                AccountPasswordRecovery.validateResetRequest(username, email, newPassword, confirmPassword);
+        User user = findByUsername(request.username())
+                .orElseThrow(() -> new UserNotFound("No account exists for username: " + request.username()));
+        if (!normalizeEmail(user.getEmail()).equals(normalizeEmail(request.email()))) {
+            throw new IllegalArgumentException("Email does not match the selected account.");
+        }
+
+        User updatedUser = copyWithCredential(user, CredentialHasher.hash(request.newPassword()));
+        boolean updated = false;
+        for (UserRepository repository : repositories) {
+            if (repository.findByUsername(request.username()).isPresent()) {
+                boolean repositoryUpdated = repository.update(updatedUser);
+                if (!repositoryUpdated) {
+                    repositoryUpdated = repository.save(updatedUser).isPresent();
+                }
+                updated = repositoryUpdated || updated;
+            }
+        }
+        if (!updated) {
+            throw new IllegalStateException("User password could not be reset.");
+        }
+        return updatedUser;
+    }
+
     public synchronized User registerManualBidder(String username, String password, String email, String fullName) {
         AccountInputValidator.RegistrationInput registration = AccountInputValidator.validateRegistration(
                 username,
@@ -180,7 +212,7 @@ public final class AuthenticationService {
     }
 
     public synchronized Optional<User> findByEmail(String email) {
-        String normalizedEmail = email == null ? "" : email.trim().toLowerCase();
+        String normalizedEmail = normalizeEmail(email);
         if (normalizedEmail.isEmpty()) {
             return Optional.empty();
         }
@@ -385,6 +417,10 @@ public final class AuthenticationService {
 
     private static String safeRole(String role) {
         return role == null || role.isBlank() ? "BIDDER" : role.trim().toUpperCase();
+    }
+
+    private static String normalizeEmail(String email) {
+        return email == null ? "" : email.trim().toLowerCase();
     }
 
     private static boolean resolveDemoAccountsEnabled() {
