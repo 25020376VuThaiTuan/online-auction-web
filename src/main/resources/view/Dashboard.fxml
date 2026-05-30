@@ -17,372 +17,534 @@
 <?import javafx.scene.control.TableView?>
 <?import javafx.scene.control.TextArea?>
 <?import javafx.scene.control.TextField?>
+<?import javafx.scene.control.ToggleButton?>
+<?import javafx.scene.image.ImageView?>
 <?import javafx.scene.layout.BorderPane?>
 <?import javafx.scene.layout.GridPane?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.Pane?>
+<?import javafx.scene.layout.StackPane?>
 <?import javafx.scene.layout.VBox?>
 
 <BorderPane prefHeight="860.0"
             prefWidth="1280.0"
             id="dashboardRoot"
+            styleClass="dashboard-shell"
             stylesheets="@marketplace.css"
             xmlns="http://javafx.com/javafx/21"
             xmlns:fx="http://javafx.com/fxml/1"
             fx:controller="org.example.controller.DashboardController">
     <top>
-        <HBox alignment="CENTER_LEFT" spacing="12.0" styleClass="page-header">
+        <HBox alignment="CENTER_LEFT" minHeight="60.0" prefHeight="60.0" spacing="16.0" styleClass="app-header">
             <padding>
-                <Insets top="16.0" right="16.0" bottom="16.0" left="16.0"/>
+                <Insets top="10.0" right="20.0" bottom="10.0" left="20.0"/>
             </padding>
-            <Label styleClass="page-title" text="Auction Dashboard"/>
+            <HBox alignment="CENTER_LEFT" prefWidth="250.0" spacing="10.0">
+                <Label styleClass="brand-mark" text="A"/>
+                <Label styleClass="app-logo" text="Online Auction Enterprise"/>
+            </HBox>
+            <Button fx:id="testConnectionButton"
+                    onAction="#handleTestConnection"
+                    styleClass="socket-status"
+                    text="REALTIME BROKER: CHECK"/>
             <Pane HBox.hgrow="ALWAYS"/>
-            <Label fx:id="signedInUserLabel" wrapText="true"/>
-            <Button fx:id="testConnectionButton" onAction="#handleTestConnection" text="Test Connection"/>
-            <Button onAction="#handleLogout" text="Logout"/>
+            <VBox alignment="CENTER_RIGHT" spacing="2.0">
+                <Label fx:id="signedInUserLabel" styleClass="user-name" text="Loading user..."/>
+                <Label fx:id="headerBalanceLabel" styleClass="user-balance" text="Available balance: $0.00"/>
+            </VBox>
+            <Button fx:id="headerAvatarButton"
+                    minHeight="35.0"
+                    minWidth="35.0"
+                    onAction="#handleShowProfile"
+                    styleClass="avatar-button"
+                    text="">
+                <graphic>
+                    <StackPane maxHeight="35.0" maxWidth="35.0" minHeight="35.0" minWidth="35.0">
+                        <Label fx:id="headerAvatarInitialLabel" styleClass="avatar-initial" text="?"/>
+                        <ImageView fx:id="headerAvatarImageView"
+                                   fitHeight="35.0"
+                                   fitWidth="35.0"
+                                   managed="false"
+                                   preserveRatio="false"
+                                   smooth="true"
+                                   visible="false"/>
+                    </StackPane>
+                </graphic>
+            </Button>
+            <Button onAction="#handleLogout" styleClass="logout-button" text="Logout"/>
         </HBox>
     </top>
+
+    <left>
+        <VBox prefWidth="250.0" spacing="4.0" styleClass="sidebar">
+            <padding>
+                <Insets top="20.0" right="0.0" bottom="20.0" left="0.0"/>
+            </padding>
+            <ToggleButton fx:id="overviewNavButton"
+                          maxWidth="1.7976931348623157E308"
+                          onAction="#handleShowOverview"
+                          selected="true"
+                          styleClass="nav-item"
+                          text="DASHBOARD"/>
+            <ToggleButton fx:id="walletNavButton"
+                          maxWidth="1.7976931348623157E308"
+                          onAction="#handleShowWallet"
+                          styleClass="nav-item"
+                          text="MY WALLET"/>
+            <ToggleButton fx:id="profileNavButton"
+                          maxWidth="1.7976931348623157E308"
+                          onAction="#handleShowProfile"
+                          styleClass="nav-item"
+                          text="PROFILE SETTINGS"/>
+            <ToggleButton fx:id="auctionListNavButton"
+                          maxWidth="1.7976931348623157E308"
+                          onAction="#handleShowAuctionList"
+                          styleClass="nav-item"
+                          text="AUCTION LIST"/>
+            <ToggleButton fx:id="biddingNavButton"
+                          maxWidth="1.7976931348623157E308"
+                          onAction="#handleShowBidding"
+                          styleClass="nav-item"
+                          text="BIDDING"/>
+            <ToggleButton fx:id="sellerNavButton"
+                          maxWidth="1.7976931348623157E308"
+                          onAction="#handleShowSeller"
+                          styleClass="nav-item"
+                          text="SELLER"/>
+            <ToggleButton fx:id="adminNavButton"
+                          maxWidth="1.7976931348623157E308"
+                          onAction="#handleShowAdmin"
+                          styleClass="nav-item"
+                          text="ADMIN"/>
+        </VBox>
+    </left>
+
     <center>
-        <TabPane fx:id="dashboardTabPane" prefHeight="820.0" prefWidth="1280.0" tabClosingPolicy="UNAVAILABLE">
+        <TabPane fx:id="dashboardTabPane"
+                 prefHeight="820.0"
+                 prefWidth="1030.0"
+                 styleClass="content-tab-pane"
+                 tabClosingPolicy="UNAVAILABLE">
             <tabs>
                 <Tab text="Overview">
-                    <ScrollPane fitToWidth="true">
+                    <ScrollPane fitToWidth="true" styleClass="content-scroll">
                         <content>
-                            <VBox spacing="14.0">
+                            <VBox spacing="18.0" styleClass="content-page">
                                 <padding>
-                                    <Insets top="18.0" right="18.0" bottom="18.0" left="18.0"/>
+                                    <Insets top="30.0" right="30.0" bottom="30.0" left="30.0"/>
                                 </padding>
-                                <HBox styleClass="summary-strip">
-                                    <VBox styleClass="summary-card">
+                                <Label styleClass="section-title-large" text="Auction Dashboard"/>
+
+                                <HBox spacing="20.0" styleClass="summary-strip">
+                                    <VBox spacing="8.0" styleClass="summary-card" HBox.hgrow="ALWAYS">
                                         <Label styleClass="summary-label" text="Marketplace Inventory"/>
                                         <Label fx:id="overviewAuctionCountLabel" styleClass="summary-value" text="0"/>
                                     </VBox>
-                                    <VBox styleClass="summary-card">
+                                    <VBox spacing="8.0" styleClass="summary-card" HBox.hgrow="ALWAYS">
                                         <Label styleClass="summary-label" text="Live Sessions"/>
                                         <Label fx:id="overviewRunningCountLabel" styleClass="summary-value" text="0"/>
                                     </VBox>
-                                    <VBox styleClass="summary-card">
+                                    <VBox spacing="8.0" styleClass="summary-card" HBox.hgrow="ALWAYS">
                                         <Label styleClass="summary-label" text="Entered Auctions"/>
                                         <Label fx:id="overviewEnteredCountLabel" styleClass="summary-value" text="0"/>
                                     </VBox>
-                                    <VBox styleClass="summary-card">
+                                    <VBox spacing="8.0" styleClass="summary-card" HBox.hgrow="ALWAYS">
                                         <Label styleClass="summary-label" text="Ready To Bid"/>
                                         <Label fx:id="overviewEligibleCountLabel" styleClass="summary-value" text="0"/>
                                     </VBox>
                                 </HBox>
-                                <VBox styleClass="panel" spacing="12.0">
-                                    <Label styleClass="section-title" text="Account Summary"/>
-                                    <GridPane hgap="14.0" vgap="10.0">
-                                        <Label style="-fx-font-weight: bold;" text="Role"/>
-                                        <Label fx:id="roleLabel" GridPane.columnIndex="1"/>
-                                        <Label style="-fx-font-weight: bold;" text="Email" GridPane.rowIndex="1"/>
-                                        <Label fx:id="emailLabel" GridPane.columnIndex="1" GridPane.rowIndex="1"/>
-                                        <Label style="-fx-font-weight: bold;" text="Avatar" GridPane.rowIndex="2"/>
-                                        <Label fx:id="avatarPreviewLabel" maxWidth="640.0" wrapText="true" GridPane.columnIndex="1" GridPane.rowIndex="2"/>
-                                        <Label style="-fx-font-weight: bold;" text="Balance" GridPane.rowIndex="3"/>
-                                        <Label fx:id="balanceLabel" GridPane.columnIndex="1" GridPane.rowIndex="3"/>
-                                        <Label style="-fx-font-weight: bold;" text="Locked deposit" GridPane.rowIndex="4"/>
-                                        <Label fx:id="lockedBalanceLabel" GridPane.columnIndex="1" GridPane.rowIndex="4"/>
-                                        <Label style="-fx-font-weight: bold;" text="Available balance" GridPane.rowIndex="5"/>
-                                        <Label fx:id="availableBalanceLabel" GridPane.columnIndex="1" GridPane.rowIndex="5"/>
-                                    </GridPane>
-                                </VBox>
-                                <VBox styleClass="panel" spacing="12.0">
-                                    <Label styleClass="section-title" text="Notifications"/>
-                                    <ListView fx:id="notificationList" prefHeight="160.0"/>
-                                </VBox>
+
+                                <HBox spacing="20.0">
+                                    <VBox spacing="14.0" styleClass="panel" HBox.hgrow="ALWAYS">
+                                        <Label styleClass="section-title" text="Account Summary"/>
+                                        <GridPane hgap="16.0" vgap="10.0">
+                                            <Label styleClass="field-label" text="Role"/>
+                                            <Label fx:id="roleLabel" styleClass="field-value" GridPane.columnIndex="1"/>
+                                            <Label styleClass="field-label" text="Email" GridPane.rowIndex="1"/>
+                                            <Label fx:id="emailLabel" styleClass="field-value" GridPane.columnIndex="1" GridPane.rowIndex="1"/>
+                                            <Label styleClass="field-label" text="Avatar" GridPane.rowIndex="2"/>
+                                            <Label fx:id="avatarPreviewLabel" maxWidth="640.0" styleClass="field-value" wrapText="true" GridPane.columnIndex="1" GridPane.rowIndex="2"/>
+                                            <Label styleClass="field-label" text="Balance" GridPane.rowIndex="3"/>
+                                            <Label fx:id="balanceLabel" styleClass="money-value" GridPane.columnIndex="1" GridPane.rowIndex="3"/>
+                                            <Label styleClass="field-label" text="Locked deposit" GridPane.rowIndex="4"/>
+                                            <Label fx:id="lockedBalanceLabel" styleClass="money-value-blue" GridPane.columnIndex="1" GridPane.rowIndex="4"/>
+                                            <Label styleClass="field-label" text="Available balance" GridPane.rowIndex="5"/>
+                                            <Label fx:id="availableBalanceLabel" styleClass="money-value" GridPane.columnIndex="1" GridPane.rowIndex="5"/>
+                                        </GridPane>
+                                        <HBox alignment="CENTER_RIGHT" spacing="10.0">
+                                            <Button onAction="#handleShowProfile" text="Edit Profile"/>
+                                            <Button onAction="#handleShowWallet" text="Open Wallet"/>
+                                            <Button onAction="#handleShowAuctionList" styleClass="primary-action" text="Browse Auctions"/>
+                                        </HBox>
+                                    </VBox>
+
+                                    <VBox prefWidth="360.0" spacing="14.0" styleClass="panel">
+                                        <Label styleClass="section-title" text="Notifications"/>
+                                        <ListView fx:id="notificationList" prefHeight="220.0" VBox.vgrow="ALWAYS"/>
+                                    </VBox>
+                                </HBox>
                             </VBox>
                         </content>
                     </ScrollPane>
                 </Tab>
 
                 <Tab text="Profile">
-                    <ScrollPane fitToWidth="true">
+                    <ScrollPane fitToWidth="true" styleClass="content-scroll">
                         <content>
-                            <VBox spacing="14.0">
+                            <VBox spacing="18.0" styleClass="content-page">
                                 <padding>
-                                    <Insets top="18.0" right="18.0" bottom="18.0" left="18.0"/>
+                                    <Insets top="30.0" right="30.0" bottom="30.0" left="30.0"/>
                                 </padding>
-                                <Label text="Edit personal information. Email stays read-only in the overview tab." wrapText="true"/>
-                                <TextField fx:id="fullNameField" promptText="Full name"/>
-                                <TextField fx:id="phoneField" promptText="Phone number"/>
-                                <TextArea fx:id="addressArea" prefRowCount="4" promptText="Address"/>
-                                <HBox alignment="CENTER_RIGHT">
-                                    <Button onAction="#handleSaveProfile" text="Save Profile"/>
+                                <Label styleClass="section-title-large" text="Profile Settings"/>
+                                <HBox spacing="20.0">
+                                    <VBox spacing="14.0" styleClass="panel" HBox.hgrow="ALWAYS">
+                                        <Label styleClass="section-title" text="Personal Information"/>
+                                        <HBox alignment="CENTER_LEFT" spacing="16.0">
+                                            <StackPane maxHeight="72.0" maxWidth="72.0" minHeight="72.0" minWidth="72.0" styleClass="avatar-preview">
+                                                <Label fx:id="profileAvatarInitialLabel" styleClass="avatar-initial-large" text="?"/>
+                                                <ImageView fx:id="profileAvatarImageView"
+                                                           fitHeight="72.0"
+                                                           fitWidth="72.0"
+                                                           managed="false"
+                                                           preserveRatio="false"
+                                                           smooth="true"
+                                                           visible="false"/>
+                                            </StackPane>
+                                            <VBox spacing="8.0" HBox.hgrow="ALWAYS">
+                                                <Label styleClass="field-label" text="Avatar URL or local image"/>
+                                                <TextField fx:id="avatarUrlField" promptText="https://... or choose a local image"/>
+                                                <HBox alignment="CENTER_LEFT" spacing="10.0">
+                                                    <Button onAction="#handleChooseAvatarFile" text="Choose Image"/>
+                                                    <Button onAction="#handleSaveAvatar" text="Save Avatar"/>
+                                                </HBox>
+                                            </VBox>
+                                        </HBox>
+                                        <TextField fx:id="fullNameField" promptText="Full name"/>
+                                        <TextField fx:id="phoneField" promptText="Phone number"/>
+                                        <TextArea fx:id="addressArea" prefRowCount="5" promptText="Address"/>
+                                        <HBox alignment="CENTER_RIGHT" spacing="10.0">
+                                            <Button onAction="#handleSaveProfile" styleClass="primary-action" text="Save Profile and Avatar"/>
+                                        </HBox>
+                                    </VBox>
+                                    <VBox prefWidth="380.0" spacing="14.0" styleClass="panel">
+                                        <Label styleClass="section-title" text="Account Identity"/>
+                                        <GridPane hgap="14.0" vgap="10.0">
+                                            <Label styleClass="field-label" text="Role"/>
+                                            <Label styleClass="field-muted" text="Managed from dashboard" GridPane.columnIndex="1"/>
+                                            <Label styleClass="field-label" text="Email" GridPane.rowIndex="1"/>
+                                            <Label styleClass="field-muted" text="Read-only" GridPane.columnIndex="1" GridPane.rowIndex="1"/>
+                                        </GridPane>
+                                        <Label styleClass="support-copy" text="Email and role changes are handled by the account and admin workflows." wrapText="true"/>
+                                    </VBox>
                                 </HBox>
                             </VBox>
                         </content>
                     </ScrollPane>
                 </Tab>
 
-                <Tab text="Avatar">
-                    <VBox spacing="14.0">
-                        <padding>
-                            <Insets top="18.0" right="18.0" bottom="18.0" left="18.0"/>
-                        </padding>
-                        <Label text="Store an avatar URL or avatar identifier for the account." wrapText="true"/>
-                        <TextField fx:id="avatarUrlField" promptText="Avatar URL or token"/>
-                        <HBox alignment="CENTER_RIGHT">
-                            <Button onAction="#handleSaveAvatar" text="Save Avatar"/>
-                        </HBox>
-                    </VBox>
-                </Tab>
-
                 <Tab text="Wallet">
-                    <TabPane tabClosingPolicy="UNAVAILABLE">
+                    <TabPane styleClass="wallet-inner-tabs" tabClosingPolicy="UNAVAILABLE">
                         <tabs>
                             <Tab text="Wallet">
-                                <VBox spacing="14.0">
-                                    <padding>
-                                        <Insets top="18.0" right="18.0" bottom="18.0" left="18.0"/>
-                                    </padding>
-                                    <GridPane hgap="14.0" vgap="10.0">
-                                        <Label style="-fx-font-weight: bold;" text="Wallet balance"/>
-                                        <Label fx:id="walletBalanceLabel" GridPane.columnIndex="1"/>
-                                        <Label style="-fx-font-weight: bold;" text="Locked" GridPane.rowIndex="1"/>
-                                        <Label fx:id="walletLockedLabel" GridPane.columnIndex="1" GridPane.rowIndex="1"/>
-                                        <Label style="-fx-font-weight: bold;" text="Available" GridPane.rowIndex="2"/>
-                                        <Label fx:id="walletAvailableLabel" GridPane.columnIndex="1" GridPane.rowIndex="2"/>
-                                        <Label style="-fx-font-weight: bold;" text="PIN" GridPane.rowIndex="3"/>
-                                        <Label fx:id="walletPinStatusLabel" GridPane.columnIndex="1" GridPane.rowIndex="3"/>
-                                    </GridPane>
-                                    <HBox alignment="CENTER_LEFT" spacing="10.0">
-                                        <PasswordField fx:id="walletPinField" prefWidth="180.0" promptText="Wallet PIN"/>
-                                        <Button onAction="#handleOpenWallet" text="Open Wallet"/>
-                                        <CheckBox fx:id="rememberWalletPinCheckBox" text="Do not ask PIN for 120 minutes"/>
-                                        <Pane HBox.hgrow="ALWAYS"/>
-                                        <PasswordField fx:id="newWalletPinField" prefWidth="180.0" promptText="New PIN"/>
-                                        <Button fx:id="setWalletPinButton" onAction="#handleSetWalletPin" text="Set PIN"/>
-                                    </HBox>
-                                    <HBox alignment="CENTER_LEFT" spacing="10.0">
-                                        <TextField fx:id="recoveryCodeField" prefWidth="180.0" promptText="Recovery code"/>
-                                        <Button onAction="#handleRequestWalletPinRecovery" text="Email Recovery Code"/>
-                                        <Button onAction="#handleResetWalletPin" text="Reset PIN"/>
-                                    </HBox>
-                                    <HBox alignment="CENTER_LEFT" spacing="10.0">
-                                        <TextField fx:id="walletTransferAmountField" prefWidth="160.0" promptText="Amount"/>
-                                        <Button onAction="#handleReceiveWalletMoney" text="Top Up Wallet"/>
-                                        <Button onAction="#handleSendWalletMoney" text="Withdraw to Bank"/>
-                                    </HBox>
-                                    <TableView fx:id="walletTransactionTable" prefHeight="300.0" VBox.vgrow="ALWAYS">
-                                        <columns>
-                                            <TableColumn fx:id="walletTransactionTimeColumn" prefWidth="150.0" text="Time"/>
-                                            <TableColumn fx:id="walletTransactionTypeColumn" prefWidth="130.0" text="Type"/>
-                                            <TableColumn fx:id="walletTransactionAmountColumn" prefWidth="120.0" text="Amount"/>
-                                            <TableColumn fx:id="walletTransactionBalanceColumn" prefWidth="120.0" text="Balance"/>
-                                            <TableColumn fx:id="walletTransactionNoteColumn" prefWidth="360.0" text="Note"/>
-                                        </columns>
-                                    </TableView>
-                                </VBox>
+                                <ScrollPane fitToWidth="true" styleClass="content-scroll">
+                                    <content>
+                                        <VBox spacing="18.0" styleClass="content-page">
+                                            <padding>
+                                                <Insets top="30.0" right="30.0" bottom="30.0" left="30.0"/>
+                                            </padding>
+                                            <Label styleClass="section-title-large" text="My Wallet"/>
+                                            <HBox spacing="20.0">
+                                                <VBox spacing="12.0" styleClass="wallet-card" HBox.hgrow="ALWAYS">
+                                                    <Label styleClass="summary-label" text="Wallet balance"/>
+                                                    <Label fx:id="walletBalanceLabel" styleClass="wallet-value" text="\$0.00"/>
+                                                    <HBox spacing="10.0">
+                                                        <TextField fx:id="walletTransferAmountField" prefWidth="180.0" promptText="Amount"/>
+                                                        <Button onAction="#handleReceiveWalletMoney" styleClass="primary-action" text="Top Up Wallet"/>
+                                                        <Button onAction="#handleSendWalletMoney" styleClass="outline-action" text="Withdraw to Bank"/>
+                                                    </HBox>
+                                                </VBox>
+                                                <VBox spacing="12.0" styleClass="wallet-card" HBox.hgrow="ALWAYS">
+                                                    <Label styleClass="summary-label" text="Locked Deposit"/>
+                                                    <Label fx:id="walletLockedLabel" styleClass="wallet-value-blue" text="\$0.00"/>
+                                                    <Label fx:id="walletAvailableLabel" styleClass="field-muted" text="\$0.00 available" wrapText="true"/>
+                                                </VBox>
+                                            </HBox>
+
+                                            <VBox spacing="14.0" styleClass="panel">
+                                                <Label styleClass="section-title" text="Wallet Access"/>
+                                                <GridPane hgap="10.0" vgap="10.0">
+                                                    <Label styleClass="field-label" text="PIN status"/>
+                                                    <Label fx:id="walletPinStatusLabel" styleClass="field-value" GridPane.columnIndex="1"/>
+                                                    <PasswordField fx:id="walletPinField" prefWidth="180.0" promptText="Wallet PIN" GridPane.rowIndex="1"/>
+                                                    <Button onAction="#handleOpenWallet" text="Open Wallet" GridPane.columnIndex="1" GridPane.rowIndex="1"/>
+                                                    <CheckBox fx:id="rememberWalletPinCheckBox" text="Do not ask PIN for 120 minutes" GridPane.columnIndex="2" GridPane.rowIndex="1"/>
+                                                    <PasswordField fx:id="newWalletPinField" prefWidth="180.0" promptText="New PIN" GridPane.rowIndex="2"/>
+                                                    <Button fx:id="setWalletPinButton" onAction="#handleSetWalletPin" text="Set PIN" GridPane.columnIndex="1" GridPane.rowIndex="2"/>
+                                                    <TextField fx:id="recoveryCodeField" prefWidth="180.0" promptText="Recovery code" GridPane.rowIndex="3"/>
+                                                    <Button onAction="#handleRequestWalletPinRecovery" text="Email Recovery Code" GridPane.columnIndex="1" GridPane.rowIndex="3"/>
+                                                    <Button onAction="#handleResetWalletPin" text="Reset PIN" GridPane.columnIndex="2" GridPane.rowIndex="3"/>
+                                                </GridPane>
+                                            </VBox>
+
+                                            <VBox spacing="14.0" styleClass="panel" VBox.vgrow="ALWAYS">
+                                                <Label styleClass="section-title" text="Wallet Transactions"/>
+                                                <TableView fx:id="walletTransactionTable" prefHeight="300.0" VBox.vgrow="ALWAYS">
+                                                    <columns>
+                                                        <TableColumn fx:id="walletTransactionTimeColumn" prefWidth="150.0" text="Time"/>
+                                                        <TableColumn fx:id="walletTransactionTypeColumn" prefWidth="130.0" text="Type"/>
+                                                        <TableColumn fx:id="walletTransactionAmountColumn" prefWidth="120.0" text="Amount"/>
+                                                        <TableColumn fx:id="walletTransactionBalanceColumn" prefWidth="120.0" text="Balance"/>
+                                                        <TableColumn fx:id="walletTransactionNoteColumn" prefWidth="360.0" text="Note"/>
+                                                    </columns>
+                                                </TableView>
+                                            </VBox>
+                                        </VBox>
+                                    </content>
+                                </ScrollPane>
                             </Tab>
                             <Tab text="Accounts">
-                                <VBox spacing="14.0">
-                                    <padding>
-                                        <Insets top="18.0" right="18.0" bottom="18.0" left="18.0"/>
-                                    </padding>
-                                    <TableView fx:id="walletAccountTable" prefHeight="300.0" VBox.vgrow="ALWAYS">
-                                        <columns>
-                                            <TableColumn fx:id="walletAccountPrimaryColumn" prefWidth="90.0" text="Primary"/>
-                                            <TableColumn fx:id="walletAccountProviderColumn" prefWidth="180.0" text="Provider"/>
-                                            <TableColumn fx:id="walletAccountNameColumn" prefWidth="220.0" text="Account"/>
-                                            <TableColumn fx:id="walletAccountReferenceColumn" prefWidth="160.0" text="Reference"/>
-                                            <TableColumn fx:id="walletAccountBalanceColumn" prefWidth="130.0" text="Balance"/>
-                                        </columns>
-                                    </TableView>
-                                    <TextField fx:id="walletAccountNameField" promptText="Account holder name"/>
-                                    <TextField fx:id="walletProviderField" promptText="Provider"/>
-                                    <TextField fx:id="walletAccountReferenceField" promptText="Account reference"/>
-                                    <TextField fx:id="walletAccountOpeningBalanceField" promptText="Opening balance"/>
-                                    <HBox alignment="CENTER_RIGHT" spacing="10.0">
-                                        <Button onAction="#handleAddWalletAccount" text="Add Account"/>
-                                        <Button onAction="#handleSetPrimaryWalletAccount" text="Set Primary"/>
-                                        <Button onAction="#handleRemoveWalletAccount" text="Remove Account"/>
-                                    </HBox>
-                                    <HBox alignment="CENTER_RIGHT" spacing="10.0">
-                                        <TextField fx:id="walletAccountTopUpAmountField" prefWidth="180.0" promptText="Top-up amount"/>
-                                        <Button onAction="#handleTopUpWalletAccount" text="Top Up Bank Account"/>
-                                    </HBox>
-                                </VBox>
+                                <ScrollPane fitToWidth="true" styleClass="content-scroll">
+                                    <content>
+                                        <VBox spacing="18.0" styleClass="content-page">
+                                            <padding>
+                                                <Insets top="30.0" right="30.0" bottom="30.0" left="30.0"/>
+                                            </padding>
+                                            <Label styleClass="section-title-large" text="Linked Accounts"/>
+                                            <VBox spacing="14.0" styleClass="panel">
+                                                <TableView fx:id="walletAccountTable" prefHeight="300.0" VBox.vgrow="ALWAYS">
+                                                    <columns>
+                                                        <TableColumn fx:id="walletAccountPrimaryColumn" prefWidth="90.0" text="Primary"/>
+                                                        <TableColumn fx:id="walletAccountProviderColumn" prefWidth="180.0" text="Provider"/>
+                                                        <TableColumn fx:id="walletAccountNameColumn" prefWidth="220.0" text="Account"/>
+                                                        <TableColumn fx:id="walletAccountReferenceColumn" prefWidth="160.0" text="Reference"/>
+                                                        <TableColumn fx:id="walletAccountBalanceColumn" prefWidth="130.0" text="Balance"/>
+                                                    </columns>
+                                                </TableView>
+                                                <TextField fx:id="walletAccountNameField" promptText="Account holder name"/>
+                                                <TextField fx:id="walletProviderField" promptText="Provider"/>
+                                                <TextField fx:id="walletAccountReferenceField" promptText="Account reference"/>
+                                                <TextField fx:id="walletAccountOpeningBalanceField" promptText="Opening balance"/>
+                                                <HBox alignment="CENTER_RIGHT" spacing="10.0">
+                                                    <Button onAction="#handleAddWalletAccount" styleClass="primary-action" text="Add Account"/>
+                                                    <Button onAction="#handleSetPrimaryWalletAccount" text="Set Primary"/>
+                                                    <Button onAction="#handleRemoveWalletAccount" text="Remove Account"/>
+                                                </HBox>
+                                                <HBox alignment="CENTER_RIGHT" spacing="10.0">
+                                                    <TextField fx:id="walletAccountTopUpAmountField" prefWidth="180.0" promptText="Top-up amount"/>
+                                                    <Button onAction="#handleTopUpWalletAccount" text="Top Up Bank Account"/>
+                                                </HBox>
+                                            </VBox>
+                                        </VBox>
+                                    </content>
+                                </ScrollPane>
                             </Tab>
                         </tabs>
                     </TabPane>
                 </Tab>
 
                 <Tab text="Auction List">
-                    <VBox spacing="14.0">
-                        <padding>
-                            <Insets top="18.0" right="18.0" bottom="18.0" left="18.0"/>
-                        </padding>
-                        <Label styleClass="support-copy" text="Search, filter, and rank auction sessions before committing deposit balance." wrapText="true"/>
-                        <HBox alignment="CENTER_LEFT" spacing="10.0" styleClass="filter-bar">
-                            <TextField fx:id="dashboardAuctionSearchField" promptText="Search by item name" HBox.hgrow="ALWAYS"/>
-                            <ChoiceBox fx:id="dashboardAuctionStatusFilterChoiceBox" prefWidth="150.0"/>
-                            <ChoiceBox fx:id="dashboardAuctionSortChoiceBox" prefWidth="170.0"/>
-                            <CheckBox fx:id="dashboardAuctionOpenOnlyCheckBox" text="Open only"/>
-                            <CheckBox fx:id="dashboardWatchedOnlyCheckBox" text="Watched only"/>
-                            <CheckBox fx:id="dashboardEligibleOnlyCheckBox" text="Actionable only"/>
-                            <Button onAction="#handleClearAuctionFilters" text="Clear Filters"/>
-                        </HBox>
-                        <Label fx:id="auctionResultsSummaryLabel" styleClass="result-summary" text="Loading marketplace view..."/>
-                        <TableView fx:id="auctionTable" prefHeight="520.0" VBox.vgrow="ALWAYS">
-                            <columns>
-                                <TableColumn fx:id="auctionWatchColumn" prefWidth="90.0" text="Watch"/>
-                                <TableColumn fx:id="auctionNameColumn" prefWidth="220.0" text="Item"/>
-                                <TableColumn fx:id="auctionStatusColumn" prefWidth="120.0" text="Status"/>
-                                <TableColumn fx:id="auctionCurrentPriceColumn" prefWidth="120.0" text="Current Price"/>
-                                <TableColumn fx:id="auctionMinimumBidColumn" prefWidth="140.0" text="Next Min Bid"/>
-                                <TableColumn fx:id="auctionRequiredDepositColumn" prefWidth="140.0" text="Required Deposit"/>
-                                <TableColumn fx:id="auctionAvailableBalanceColumn" prefWidth="140.0" text="Available Balance"/>
-                                <TableColumn fx:id="auctionTimeRemainingColumn" prefWidth="130.0" text="Time Left"/>
-                                <TableColumn fx:id="auctionEndTimeColumn" prefWidth="170.0" text="Ends At"/>
-                                <TableColumn fx:id="auctionEligibleColumn" prefWidth="110.0" text="Eligible"/>
-                            </columns>
-                        </TableView>
-                        <HBox alignment="CENTER_RIGHT" spacing="10.0">
-                            <Button fx:id="watchSelectedAuctionButton" onAction="#handleToggleSelectedAuctionWatch" text="Watch"/>
-                            <Button onAction="#handleWatchVisibleAuctions" text="Watch Visible"/>
-                            <Button onAction="#handleClearWatchedAuctions" text="Clear Watched"/>
-                            <Button fx:id="confirmAuctionEntryButton" onAction="#handleConfirmAuctionEntry" text="Confirm Entry Deposit"/>
-                            <Button onAction="#handleOpenAuctionDetail" text="Open Bidding Detail"/>
-                        </HBox>
-                    </VBox>
-                </Tab>
-
-                <Tab text="Bidding">
-                    <HBox spacing="14.0">
-                        <padding>
-                            <Insets top="18.0" right="18.0" bottom="18.0" left="18.0"/>
-                        </padding>
-                        <VBox spacing="14.0" HBox.hgrow="ALWAYS">
-                            <Label fx:id="selectedAuctionLabel" style="-fx-font-size: 18px; -fx-font-weight: bold;" text="Select an auction from Auction List"/>
-                            <Label fx:id="selectedAuctionDepositLabel" text="Deposit required: N/A"/>
-                            <HBox alignment="CENTER_LEFT" spacing="18.0">
-                                <Label fx:id="selectedAuctionTimeRemainingLabel" text="Time left: N/A"/>
-                                <Label fx:id="selectedAuctionEndTimeLabel" text="Ends at: N/A"/>
-                            </HBox>
-                            <LineChart fx:id="bidHistoryChart" animated="true" createSymbols="true" prefHeight="360.0" VBox.vgrow="ALWAYS">
-                                <xAxis>
-                                    <CategoryAxis label="Bid Time"/>
-                                </xAxis>
-                                <yAxis>
-                                    <NumberAxis label="Bid Amount"/>
-                                </yAxis>
-                            </LineChart>
-                            <HBox alignment="CENTER_LEFT" spacing="10.0">
-                                <Pane HBox.hgrow="ALWAYS"/>
-                                <Label fx:id="bidEntryTimeRemainingLabel" text="Time remaining: N/A"/>
-                            </HBox>
-                            <HBox alignment="CENTER_LEFT" spacing="10.0">
-                                <TextField fx:id="bidAmountField" prefWidth="220.0" promptText="Enter bid amount"/>
-                                <Button fx:id="bidPlusTenButton" onAction="#handleAddTenToBid" text="+$10"/>
-                                <Button fx:id="bidPlusFiftyButton" onAction="#handleAddFiftyToBid" text="+$50"/>
-                                <Button fx:id="bidPlusHundredButton" onAction="#handleAddHundredToBid" text="+$100"/>
-                                <Button fx:id="placeDashboardBidButton" onAction="#handlePlaceBidFromDashboard" text="Place Bid"/>
-                            </HBox>
-                            <HBox alignment="CENTER_LEFT" spacing="10.0">
-                                <TextField fx:id="autoBidMaxField" prefWidth="220.0" promptText="Auto-bid max limit"/>
-                                <TextField fx:id="autoBidIncrementField" prefWidth="180.0" promptText="Increment optional"/>
-                                <Button fx:id="registerAutoBidButton" onAction="#handleRegisterAutoBidFromDashboard" text="Enable Auto-bid"/>
-                                <Button fx:id="disableAutoBidButton" onAction="#handleDisableAutoBidFromDashboard" text="Disable Auto-bid"/>
-                            </HBox>
-                            <HBox alignment="CENTER_LEFT" spacing="10.0">
-                                <Button fx:id="admitDashboardResultButton" onAction="#handleAdmitDashboardResult" text="Admit Result"/>
-                                <Button fx:id="confirmDashboardReceivedButton" onAction="#handleConfirmDashboardReceived" text="Confirm Received"/>
-                            </HBox>
-                        </VBox>
-                        <VBox prefWidth="320.0" spacing="10.0" styleClass="bid-side-panel">
-                            <Label styleClass="section-title" text="Current Winner"/>
-                            <Label fx:id="currentWinnerLabel" styleClass="winner-value" text="Current winner: N/A" wrapText="true"/>
-                            <Label styleClass="section-title" text="Bid Notifications"/>
-                            <ListView fx:id="bidNotificationList" prefHeight="420.0" styleClass="bid-notification-list" VBox.vgrow="ALWAYS"/>
-                        </VBox>
-                    </HBox>
-                </Tab>
-
-                <Tab fx:id="sellerTab" text="Seller">
-                    <ScrollPane fitToWidth="true">
+                    <ScrollPane fitToWidth="true" styleClass="content-scroll">
                         <content>
-                            <VBox spacing="14.0">
+                            <VBox spacing="18.0" styleClass="content-page">
                                 <padding>
-                                    <Insets top="18.0" right="18.0" bottom="18.0" left="18.0"/>
+                                    <Insets top="30.0" right="30.0" bottom="30.0" left="30.0"/>
                                 </padding>
-                                <Label style="-fx-font-size: 18px; -fx-font-weight: bold;" text="Create Auction Session"/>
-                                <ChoiceBox fx:id="sellerItemTypeChoiceBox"/>
-                                <TextField fx:id="sellerItemNameField" promptText="Item to auction"/>
-                                <TextArea fx:id="sellerDescriptionArea" prefRowCount="3" promptText="Description"/>
-                                <TextField fx:id="sellerStartingPriceField" promptText="Starting price"/>
-                                <TextField fx:id="sellerExtraTextField" promptText="Type-specific text (brand / artist / model)"/>
-                                <TextField fx:id="sellerExtraNumberField" promptText="Type-specific number"/>
-                                <TextField fx:id="sellerPrepareMinutesField" promptText="Prepare time in minutes before bidding"/>
-                                <TextField fx:id="sellerBiddingMinutesField" promptText="Bidding session time in minutes"/>
-                                <HBox alignment="CENTER_RIGHT">
-                                    <Button onAction="#handleAddSellerItem" text="Create Auction Session"/>
-                                </HBox>
-
-                                <Label style="-fx-font-size: 18px; -fx-font-weight: bold;" text="Seller Items"/>
-                                <TableView fx:id="sellerItemsTable" prefHeight="260.0" VBox.vgrow="ALWAYS">
+                                <Label styleClass="section-title-large" text="Auction List"/>
+                                <VBox spacing="12.0" styleClass="panel">
+                                    <Label styleClass="support-copy" text="Search, filter, and rank auction sessions before committing deposit balance." wrapText="true"/>
+                                    <HBox alignment="CENTER_LEFT" spacing="10.0" styleClass="filter-bar">
+                                        <TextField fx:id="dashboardAuctionSearchField" promptText="Search by item name" HBox.hgrow="ALWAYS"/>
+                                        <ChoiceBox fx:id="dashboardAuctionStatusFilterChoiceBox" prefWidth="150.0"/>
+                                        <ChoiceBox fx:id="dashboardAuctionSortChoiceBox" prefWidth="170.0"/>
+                                        <CheckBox fx:id="dashboardAuctionOpenOnlyCheckBox" text="Open only"/>
+                                        <CheckBox fx:id="dashboardWatchedOnlyCheckBox" text="Watched only"/>
+                                        <CheckBox fx:id="dashboardEligibleOnlyCheckBox" text="Actionable only"/>
+                                        <Button onAction="#handleClearAuctionFilters" text="Clear Filters"/>
+                                    </HBox>
+                                    <Label fx:id="auctionResultsSummaryLabel" styleClass="result-summary" text="Loading marketplace view..."/>
+                                </VBox>
+                                <TableView fx:id="auctionTable" prefHeight="520.0" VBox.vgrow="ALWAYS">
                                     <columns>
-                                        <TableColumn fx:id="sellerItemNameColumn" prefWidth="250.0" text="Item"/>
-                                        <TableColumn fx:id="sellerItemStatusColumn" prefWidth="150.0" text="Approval"/>
-                                        <TableColumn fx:id="sellerItemCurrentPriceColumn" prefWidth="150.0" text="Current Price"/>
-                                        <TableColumn fx:id="sellerAuctionStartColumn" prefWidth="170.0" text="Starts At"/>
-                                        <TableColumn fx:id="sellerAuctionEndColumn" prefWidth="170.0" text="Ends At"/>
+                                        <TableColumn fx:id="auctionWatchColumn" prefWidth="90.0" text="Watch"/>
+                                        <TableColumn fx:id="auctionNameColumn" prefWidth="220.0" text="Item"/>
+                                        <TableColumn fx:id="auctionStatusColumn" prefWidth="120.0" text="Status"/>
+                                        <TableColumn fx:id="auctionCurrentPriceColumn" prefWidth="120.0" text="Current Price"/>
+                                        <TableColumn fx:id="auctionMinimumBidColumn" prefWidth="140.0" text="Next Min Bid"/>
+                                        <TableColumn fx:id="auctionRequiredDepositColumn" prefWidth="140.0" text="Required Deposit"/>
+                                        <TableColumn fx:id="auctionAvailableBalanceColumn" prefWidth="140.0" text="Available Balance"/>
+                                        <TableColumn fx:id="auctionTimeRemainingColumn" prefWidth="130.0" text="Time Left"/>
+                                        <TableColumn fx:id="auctionEndTimeColumn" prefWidth="170.0" text="Ends At"/>
+                                        <TableColumn fx:id="auctionEligibleColumn" prefWidth="110.0" text="Eligible"/>
                                     </columns>
                                 </TableView>
                                 <HBox alignment="CENTER_RIGHT" spacing="10.0">
-                                    <Button fx:id="sellerStartAuctionButton" onAction="#handleStartSellerAuction" text="Start Auction"/>
-                                    <Button fx:id="sellerFinishAuctionButton" onAction="#handleFinishSellerAuction" text="End Auction"/>
-                                    <Button fx:id="sellerMarkShippedButton" onAction="#handleSellerMarkShipped" text="Confirm Sent"/>
+                                    <Button fx:id="watchSelectedAuctionButton" onAction="#handleToggleSelectedAuctionWatch" text="Watch"/>
+                                    <Button onAction="#handleWatchVisibleAuctions" text="Watch Visible"/>
+                                    <Button onAction="#handleClearWatchedAuctions" text="Clear Watched"/>
+                                    <Button fx:id="confirmAuctionEntryButton" onAction="#handleConfirmAuctionEntry" styleClass="primary-action" text="Confirm Entry Deposit"/>
+                                    <Button onAction="#handleOpenAuctionDetail" text="Open Bidding Detail"/>
                                 </HBox>
+                            </VBox>
+                        </content>
+                    </ScrollPane>
+                </Tab>
 
-                                <Label style="-fx-font-size: 16px; -fx-font-weight: bold;" text="Bid Management"/>
-                                <ListView fx:id="sellerBidHistoryList" prefHeight="220.0"/>
+                <Tab text="Bidding">
+                    <ScrollPane fitToWidth="true" styleClass="content-scroll">
+                        <content>
+                            <HBox spacing="18.0" styleClass="content-page">
+                                <padding>
+                                    <Insets top="30.0" right="30.0" bottom="30.0" left="30.0"/>
+                                </padding>
+                                <VBox spacing="14.0" HBox.hgrow="ALWAYS">
+                                    <Label styleClass="section-title-large" text="Bidding"/>
+                                    <VBox spacing="10.0" styleClass="panel">
+                                        <Label fx:id="selectedAuctionLabel" styleClass="section-title" text="Select an auction from Auction List"/>
+                                        <Label fx:id="selectedAuctionDepositLabel" text="Deposit required: N/A"/>
+                                        <HBox alignment="CENTER_LEFT" spacing="18.0">
+                                            <Label fx:id="selectedAuctionTimeRemainingLabel" text="Time left: N/A"/>
+                                            <Label fx:id="selectedAuctionEndTimeLabel" text="Ends at: N/A"/>
+                                        </HBox>
+                                    </VBox>
+                                    <LineChart fx:id="bidHistoryChart" animated="true" createSymbols="true" prefHeight="360.0" VBox.vgrow="ALWAYS">
+                                        <xAxis>
+                                            <CategoryAxis label="Bid Time"/>
+                                        </xAxis>
+                                        <yAxis>
+                                            <NumberAxis label="Bid Amount"/>
+                                        </yAxis>
+                                    </LineChart>
+                                    <HBox alignment="CENTER_LEFT" spacing="10.0">
+                                        <Pane HBox.hgrow="ALWAYS"/>
+                                        <Label fx:id="bidEntryTimeRemainingLabel" text="Time remaining: N/A"/>
+                                    </HBox>
+                                    <HBox alignment="CENTER_LEFT" spacing="10.0">
+                                        <TextField fx:id="bidAmountField" prefWidth="220.0" promptText="Enter bid amount"/>
+                                        <Button fx:id="bidPlusTenButton" onAction="#handleAddTenToBid" text="+$10"/>
+                                        <Button fx:id="bidPlusFiftyButton" onAction="#handleAddFiftyToBid" text="+$50"/>
+                                        <Button fx:id="bidPlusHundredButton" onAction="#handleAddHundredToBid" text="+$100"/>
+                                        <Button fx:id="placeDashboardBidButton" onAction="#handlePlaceBidFromDashboard" styleClass="primary-action" text="Place Bid"/>
+                                    </HBox>
+                                    <HBox alignment="CENTER_LEFT" spacing="10.0">
+                                        <TextField fx:id="autoBidMaxField" prefWidth="220.0" promptText="Auto-bid max limit"/>
+                                        <TextField fx:id="autoBidIncrementField" prefWidth="180.0" promptText="Increment optional"/>
+                                        <Button fx:id="registerAutoBidButton" onAction="#handleRegisterAutoBidFromDashboard" text="Enable Auto-bid"/>
+                                        <Button fx:id="disableAutoBidButton" onAction="#handleDisableAutoBidFromDashboard" text="Disable Auto-bid"/>
+                                    </HBox>
+                                    <HBox alignment="CENTER_LEFT" spacing="10.0">
+                                        <Button fx:id="admitDashboardResultButton" onAction="#handleAdmitDashboardResult" text="Admit Result"/>
+                                        <Button fx:id="confirmDashboardReceivedButton" onAction="#handleConfirmDashboardReceived" text="Confirm Received"/>
+                                    </HBox>
+                                </VBox>
+                                <VBox prefWidth="320.0" spacing="10.0" styleClass="bid-side-panel">
+                                    <Label styleClass="section-title" text="Current Winner"/>
+                                    <Label fx:id="currentWinnerLabel" styleClass="winner-value" text="Current winner: N/A" wrapText="true"/>
+                                    <Label styleClass="section-title" text="Bid Notifications"/>
+                                    <ListView fx:id="bidNotificationList" prefHeight="420.0" styleClass="bid-notification-list" VBox.vgrow="ALWAYS"/>
+                                </VBox>
+                            </HBox>
+                        </content>
+                    </ScrollPane>
+                </Tab>
+
+                <Tab fx:id="sellerTab" text="Seller">
+                    <ScrollPane fitToWidth="true" styleClass="content-scroll">
+                        <content>
+                            <VBox spacing="18.0" styleClass="content-page">
+                                <padding>
+                                    <Insets top="30.0" right="30.0" bottom="30.0" left="30.0"/>
+                                </padding>
+                                <Label styleClass="section-title-large" text="Seller"/>
+                                <VBox spacing="14.0" styleClass="panel">
+                                    <Label styleClass="section-title" text="Create Auction Session"/>
+                                    <ChoiceBox fx:id="sellerItemTypeChoiceBox"/>
+                                    <TextField fx:id="sellerItemNameField" promptText="Item to auction"/>
+                                    <TextArea fx:id="sellerDescriptionArea" prefRowCount="3" promptText="Description"/>
+                                    <TextField fx:id="sellerStartingPriceField" promptText="Starting price"/>
+                                    <TextField fx:id="sellerExtraTextField" promptText="Type-specific text (brand / artist / model)"/>
+                                    <TextField fx:id="sellerExtraNumberField" promptText="Type-specific number"/>
+                                    <TextField fx:id="sellerPrepareMinutesField" promptText="Prepare time in minutes before bidding"/>
+                                    <TextField fx:id="sellerBiddingMinutesField" promptText="Bidding session time in minutes"/>
+                                    <HBox alignment="CENTER_RIGHT">
+                                        <Button onAction="#handleAddSellerItem" styleClass="primary-action" text="Create Auction Session"/>
+                                    </HBox>
+                                </VBox>
+
+                                <VBox spacing="14.0" styleClass="panel">
+                                    <Label styleClass="section-title" text="Seller Items"/>
+                                    <TableView fx:id="sellerItemsTable" prefHeight="260.0" VBox.vgrow="ALWAYS">
+                                        <columns>
+                                            <TableColumn fx:id="sellerItemNameColumn" prefWidth="250.0" text="Item"/>
+                                            <TableColumn fx:id="sellerItemStatusColumn" prefWidth="150.0" text="Approval"/>
+                                            <TableColumn fx:id="sellerItemCurrentPriceColumn" prefWidth="150.0" text="Current Price"/>
+                                            <TableColumn fx:id="sellerAuctionStartColumn" prefWidth="170.0" text="Starts At"/>
+                                            <TableColumn fx:id="sellerAuctionEndColumn" prefWidth="170.0" text="Ends At"/>
+                                        </columns>
+                                    </TableView>
+                                    <HBox alignment="CENTER_RIGHT" spacing="10.0">
+                                        <Button fx:id="sellerStartAuctionButton" onAction="#handleStartSellerAuction" text="Start Auction"/>
+                                        <Button fx:id="sellerFinishAuctionButton" onAction="#handleFinishSellerAuction" text="End Auction"/>
+                                        <Button fx:id="sellerMarkShippedButton" onAction="#handleSellerMarkShipped" text="Confirm Sent"/>
+                                    </HBox>
+                                </VBox>
+
+                                <VBox spacing="14.0" styleClass="panel">
+                                    <Label styleClass="section-title" text="Bid Management"/>
+                                    <ListView fx:id="sellerBidHistoryList" prefHeight="220.0"/>
+                                </VBox>
                             </VBox>
                         </content>
                     </ScrollPane>
                 </Tab>
 
                 <Tab fx:id="adminTab" text="Admin">
-                    <ScrollPane fitToWidth="true">
+                    <ScrollPane fitToWidth="true" styleClass="content-scroll">
                         <content>
-                            <VBox spacing="14.0">
+                            <VBox spacing="18.0" styleClass="content-page">
                                 <padding>
-                                    <Insets top="18.0" right="18.0" bottom="18.0" left="18.0"/>
+                                    <Insets top="30.0" right="30.0" bottom="30.0" left="30.0"/>
                                 </padding>
-                                <Label style="-fx-font-size: 18px; -fx-font-weight: bold;" text="Role Management"/>
-                                <TableView fx:id="userTable" prefHeight="260.0" VBox.vgrow="ALWAYS">
-                                    <columns>
-                                        <TableColumn fx:id="adminUsernameColumn" prefWidth="160.0" text="Username"/>
-                                        <TableColumn fx:id="adminFullNameColumn" prefWidth="180.0" text="Full Name"/>
-                                        <TableColumn fx:id="adminEmailColumn" prefWidth="220.0" text="Email"/>
-                                        <TableColumn fx:id="adminRoleColumn" prefWidth="120.0" text="Role"/>
-                                    </columns>
-                                </TableView>
-                                <HBox alignment="CENTER_LEFT" spacing="10.0">
-                                    <ChoiceBox fx:id="roleChoiceBox"/>
-                                    <Button onAction="#handleUpdateRole" text="Update Role"/>
-                                </HBox>
+                                <Label styleClass="section-title-large" text="Admin"/>
+                                <VBox spacing="14.0" styleClass="panel">
+                                    <Label styleClass="section-title" text="Role Management"/>
+                                    <TableView fx:id="userTable" prefHeight="260.0" VBox.vgrow="ALWAYS">
+                                        <columns>
+                                            <TableColumn fx:id="adminUsernameColumn" prefWidth="160.0" text="Username"/>
+                                            <TableColumn fx:id="adminFullNameColumn" prefWidth="180.0" text="Full Name"/>
+                                            <TableColumn fx:id="adminEmailColumn" prefWidth="220.0" text="Email"/>
+                                            <TableColumn fx:id="adminRoleColumn" prefWidth="120.0" text="Role"/>
+                                        </columns>
+                                    </TableView>
+                                    <HBox alignment="CENTER_LEFT" spacing="10.0">
+                                        <ChoiceBox fx:id="roleChoiceBox"/>
+                                        <Button onAction="#handleUpdateRole" styleClass="primary-action" text="Update Role"/>
+                                    </HBox>
+                                </VBox>
 
-                                <Label style="-fx-font-size: 18px; -fx-font-weight: bold;" text="Bid Approval Utilities"/>
-                                <TableView fx:id="pendingItemsTable" prefHeight="260.0" VBox.vgrow="ALWAYS">
-                                    <columns>
-                                        <TableColumn fx:id="pendingItemNameColumn" prefWidth="220.0" text="Item"/>
-                                        <TableColumn fx:id="pendingSellerColumn" prefWidth="180.0" text="Seller Id"/>
-                                        <TableColumn fx:id="pendingStatusColumn" prefWidth="140.0" text="Status"/>
-                                    </columns>
-                                </TableView>
-                                <HBox alignment="CENTER_RIGHT" spacing="10.0">
-                                    <Button onAction="#handleRejectItem" text="Reject"/>
-                                    <Button onAction="#handleApproveItem" text="Approve"/>
-                                </HBox>
+                                <VBox spacing="14.0" styleClass="panel">
+                                    <Label styleClass="section-title" text="Bid Approval Utilities"/>
+                                    <TableView fx:id="pendingItemsTable" prefHeight="260.0" VBox.vgrow="ALWAYS">
+                                        <columns>
+                                            <TableColumn fx:id="pendingItemNameColumn" prefWidth="220.0" text="Item"/>
+                                            <TableColumn fx:id="pendingSellerColumn" prefWidth="180.0" text="Seller Id"/>
+                                            <TableColumn fx:id="pendingStatusColumn" prefWidth="140.0" text="Status"/>
+                                        </columns>
+                                    </TableView>
+                                    <HBox alignment="CENTER_RIGHT" spacing="10.0">
+                                        <Button onAction="#handleRejectItem" text="Reject"/>
+                                        <Button onAction="#handleApproveItem" styleClass="primary-action" text="Approve"/>
+                                    </HBox>
+                                </VBox>
 
-                                <Label style="-fx-font-size: 18px; -fx-font-weight: bold;" text="Settlement Decisions"/>
-                                <ListView fx:id="adminSettlementList" prefHeight="220.0"/>
-                                <Label style="-fx-font-size: 18px; -fx-font-weight: bold;" text="Wallet Audit"/>
-                                <ListView fx:id="adminWalletAuditList" prefHeight="220.0"/>
-                                <HBox alignment="CENTER_RIGHT">
-                                    <Button onAction="#handleLoadWalletAudit" text="Load Selected User Wallet Audit"/>
-                                </HBox>
+                                <VBox spacing="14.0" styleClass="panel">
+                                    <Label styleClass="section-title" text="Settlement Decisions"/>
+                                    <ListView fx:id="adminSettlementList" prefHeight="220.0"/>
+                                    <Label styleClass="section-title" text="Wallet Audit"/>
+                                    <ListView fx:id="adminWalletAuditList" prefHeight="220.0"/>
+                                    <HBox alignment="CENTER_RIGHT">
+                                        <Button onAction="#handleLoadWalletAudit" text="Load Selected User Wallet Audit"/>
+                                    </HBox>
+                                </VBox>
                             </VBox>
                         </content>
                     </ScrollPane>

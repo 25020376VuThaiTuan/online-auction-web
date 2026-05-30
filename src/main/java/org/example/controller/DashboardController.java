@@ -24,7 +24,13 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
+import javafx.scene.control.ToggleButton;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.VBox;
+import javafx.scene.shape.Circle;
+import javafx.stage.FileChooser;
+import javafx.stage.Window;
 import javafx.util.Duration;
 import org.example.auction.AuctionDepositResult;
 import org.example.auction.AuctionRules;
@@ -55,6 +61,11 @@ import org.example.util.ResponsiveViewSupport;
 import org.example.util.SceneNavigator;
 import org.example.viewmodel.AuctionEligibilityEntry;
 
+import java.io.File;
+import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -135,6 +146,48 @@ public class DashboardController {
 
     @FXML
     private Button testConnectionButton;
+
+    @FXML
+    private Label headerBalanceLabel;
+
+    @FXML
+    private Button headerAvatarButton;
+
+    @FXML
+    private ImageView headerAvatarImageView;
+
+    @FXML
+    private Label headerAvatarInitialLabel;
+
+    @FXML
+    private ImageView profileAvatarImageView;
+
+    @FXML
+    private Label profileAvatarInitialLabel;
+
+    @FXML
+    private ToggleButton overviewNavButton;
+
+    @FXML
+    private ToggleButton walletNavButton;
+
+    @FXML
+    private ToggleButton profileNavButton;
+
+    @FXML
+    private ToggleButton avatarNavButton;
+
+    @FXML
+    private ToggleButton auctionListNavButton;
+
+    @FXML
+    private ToggleButton biddingNavButton;
+
+    @FXML
+    private ToggleButton sellerNavButton;
+
+    @FXML
+    private ToggleButton adminNavButton;
 
     @FXML
     private Label roleLabel;
@@ -479,6 +532,8 @@ public class DashboardController {
         configureTables();
         BidChartUtils.configureLiveBidChart(bidHistoryChart);
         configureRoleTabs();
+        configureNavigation();
+        configureAvatarViews();
         bindCurrentUserFields();
         refreshActive = true;
         refreshViewAsync(true);
@@ -521,12 +576,15 @@ public class DashboardController {
             if (useApi()) {
                 user = apiClient.updateProfile(apiToken(), fullNameField.getText(), phoneField.getText(), addressArea.getText());
                 applicationSession.replaceCurrentUser(user);
+                user = apiClient.updateAvatar(apiToken(), avatarUrlField.getText());
+                applicationSession.replaceCurrentUser(user);
             } else {
                 dashboardService.updateProfile(user, fullNameField.getText(), phoneField.getText(), addressArea.getText());
+                dashboardService.updateAvatar(user, avatarUrlField.getText());
             }
             refreshAccountSummary(user);
-            showAlert(Alert.AlertType.INFORMATION, "Profile updated", "Personal information was saved.");
-        } catch (AuctionApiClient.ApiClientException e) {
+            showAlert(Alert.AlertType.INFORMATION, "Profile updated", "Personal information and avatar were saved.");
+        } catch (AuctionApiClient.ApiClientException | IllegalArgumentException e) {
             showAlert(Alert.AlertType.WARNING, "Profile update failed", e.getMessage());
         }
     }
@@ -543,9 +601,28 @@ public class DashboardController {
             }
             refreshAccountSummary(user);
             showAlert(Alert.AlertType.INFORMATION, "Avatar updated", "Avatar information was saved.");
-        } catch (AuctionApiClient.ApiClientException e) {
+        } catch (AuctionApiClient.ApiClientException | IllegalArgumentException e) {
             showAlert(Alert.AlertType.WARNING, "Avatar update failed", e.getMessage());
         }
+    }
+
+    @FXML
+    private void handleChooseAvatarFile() {
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("Choose avatar image");
+        chooser.getExtensionFilters().setAll(
+                new FileChooser.ExtensionFilter("Image files", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp"),
+                new FileChooser.ExtensionFilter("All files", "*.*")
+        );
+        Window owner = avatarUrlField == null || avatarUrlField.getScene() == null
+                ? null
+                : avatarUrlField.getScene().getWindow();
+        File selectedFile = chooser.showOpenDialog(owner);
+        if (selectedFile == null) {
+            return;
+        }
+        avatarUrlField.setText(selectedFile.toURI().toString());
+        refreshAvatarDisplays(currentUser(), avatarUrlField.getText());
     }
 
     @FXML
@@ -1345,10 +1422,93 @@ public class DashboardController {
         configureAuctionFilters();
     }
 
+    private void configureNavigation() {
+        if (dashboardTabPane == null) {
+            return;
+        }
+        dashboardTabPane.getSelectionModel().selectedItemProperty().addListener((ignored, previous, current) -> syncNavigationState());
+        syncNavigationState();
+    }
+
+    private void configureAvatarViews() {
+        clipAvatarImage(headerAvatarImageView, 17.5);
+        clipAvatarImage(profileAvatarImageView, 36.0);
+    }
+
+    private void clipAvatarImage(ImageView imageView, double radius) {
+        if (imageView != null) {
+            imageView.setClip(new Circle(radius, radius, radius));
+        }
+    }
+
+    private void selectDashboardTab(String tabText) {
+        if (dashboardTabPane == null || tabText == null) {
+            return;
+        }
+        dashboardTabPane.getTabs().stream()
+                .filter(tab -> tabText.equals(tab.getText()))
+                .findFirst()
+                .ifPresent(this::selectDashboardTab);
+    }
+
+    private void selectDashboardTab(Tab tab) {
+        if (dashboardTabPane == null || tab == null || tab.isDisabled()) {
+            syncNavigationState();
+            return;
+        }
+        dashboardTabPane.getSelectionModel().select(tab);
+        syncNavigationState();
+    }
+
+    private void syncNavigationState() {
+        if (dashboardTabPane == null) {
+            return;
+        }
+        Tab selected = dashboardTabPane.getSelectionModel().getSelectedItem();
+        String selectedText = selected == null ? "" : selected.getText();
+        setNavSelected(overviewNavButton, "Overview".equals(selectedText));
+        setNavSelected(walletNavButton, "Wallet".equals(selectedText));
+        setNavSelected(profileNavButton, "Profile".equals(selectedText));
+        setNavSelected(avatarNavButton, "Profile".equals(selectedText));
+        setNavSelected(auctionListNavButton, "Auction List".equals(selectedText));
+        setNavSelected(biddingNavButton, "Bidding".equals(selectedText));
+        setNavSelected(sellerNavButton, sellerTab != null && sellerTab == selected);
+        setNavSelected(adminNavButton, adminTab != null && adminTab == selected);
+    }
+
+    private void setNavSelected(ToggleButton button, boolean selected) {
+        if (button != null) {
+            button.setSelected(selected);
+        }
+    }
+
+    private void setNavDisabled(ToggleButton button, boolean disabled) {
+        if (button != null) {
+            button.setDisable(disabled);
+            button.setManaged(!disabled);
+            button.setVisible(!disabled);
+        }
+    }
+
     private void configureRoleTabs() {
         User user = currentUser();
-        sellerTab.setDisable(!isSeller(user) && !isAdmin(user));
-        adminTab.setDisable(!isAdmin(user));
+        boolean sellerDisabled = !isSeller(user) && !isAdmin(user);
+        boolean adminDisabled = !isAdmin(user);
+        if (sellerTab != null) {
+            sellerTab.setDisable(sellerDisabled);
+        }
+        if (adminTab != null) {
+            adminTab.setDisable(adminDisabled);
+        }
+        setNavDisabled(sellerNavButton, sellerDisabled);
+        setNavDisabled(adminNavButton, adminDisabled);
+        if (dashboardTabPane != null) {
+            Tab selected = dashboardTabPane.getSelectionModel().getSelectedItem();
+            if (selected != null && selected.isDisabled()) {
+                selectDashboardTab("Overview");
+            }
+        }
+        syncNavigationState();
     }
 
     private void configureAuctionFilters() {
@@ -1372,6 +1532,7 @@ public class DashboardController {
         phoneField.setText(user.getPhoneNumber());
         addressArea.setText(user.getAddress());
         avatarUrlField.setText(user.getAvatarUrl());
+        refreshAvatarDisplays(user);
     }
 
     private void refreshViewAsync(boolean initialLoad) {
@@ -1407,6 +1568,49 @@ public class DashboardController {
                 }));
     }
 
+    @FXML
+    private void handleShowOverview() {
+        selectDashboardTab("Overview");
+    }
+
+    @FXML
+    private void handleShowWallet() {
+        selectDashboardTab("Wallet");
+    }
+
+    @FXML
+    private void handleShowProfile() {
+        selectDashboardTab("Profile");
+    }
+
+    @FXML
+    private void handleShowAvatar() {
+        selectDashboardTab("Profile");
+        if (avatarUrlField != null) {
+            Platform.runLater(avatarUrlField::requestFocus);
+        }
+    }
+
+    @FXML
+    private void handleShowAuctionList() {
+        selectDashboardTab("Auction List");
+    }
+
+    @FXML
+    private void handleShowBidding() {
+        selectDashboardTab("Bidding");
+    }
+
+    @FXML
+    private void handleShowSeller() {
+        selectDashboardTab(sellerTab);
+    }
+
+    @FXML
+    private void handleShowAdmin() {
+        selectDashboardTab(adminTab);
+    }
+
     private void refreshAccountSummary(User user) {
         refreshAccountSummary(user, localWalletSnapshot(user));
     }
@@ -1416,6 +1620,7 @@ public class DashboardController {
         roleLabel.setText(user.getRole());
         emailLabel.setText(user.getEmail());
         avatarPreviewLabel.setText(user.getAvatarUrl().isBlank() ? "No avatar selected" : user.getAvatarUrl());
+        refreshAvatarDisplays(user);
         WalletSummary wallet = dashboardWallet(user, walletSnapshot);
 
         if (wallet != null) {
@@ -1431,6 +1636,7 @@ public class DashboardController {
             lockedBalanceLabel.setText(AuctionDisplayFormatter.formatCurrency(0.0));
             availableBalanceLabel.setText(AuctionDisplayFormatter.formatCurrency(0.0));
         }
+        updateHeaderBalance();
     }
 
     private void refreshWalletSnapshot(User user) {
@@ -1700,6 +1906,115 @@ public class DashboardController {
         if (user instanceof Bidder bidder) {
             bidder.setBalance(wallet.balance());
         }
+        updateHeaderBalance();
+    }
+
+    private void updateHeaderBalance() {
+        if (headerBalanceLabel == null || availableBalanceLabel == null) {
+            return;
+        }
+        String availableBalance = availableBalanceLabel.getText();
+        if (availableBalance == null || availableBalance.isBlank()) {
+            availableBalance = AuctionDisplayFormatter.formatCurrency(0.0);
+        }
+        headerBalanceLabel.setText("Available balance: " + availableBalance);
+    }
+
+    private void refreshAvatarDisplays(User user) {
+        refreshAvatarDisplays(user, user == null ? "" : user.getAvatarUrl());
+    }
+
+    private void refreshAvatarDisplays(User user, String avatarReference) {
+        String initials = avatarInitials(user);
+        if (headerAvatarInitialLabel != null) {
+            headerAvatarInitialLabel.setText(initials);
+        }
+        if (profileAvatarInitialLabel != null) {
+            profileAvatarInitialLabel.setText(initials);
+        }
+
+        String imageSource = resolveAvatarImageSource(avatarReference);
+        if (imageSource == null) {
+            setAvatarImage(null);
+            return;
+        }
+
+        try {
+            Image image = new Image(imageSource, 96.0, 96.0, false, true, true);
+            if (image.isError()) {
+                setAvatarImage(null);
+                return;
+            }
+            setAvatarImage(image);
+            image.errorProperty().addListener((ignored, previous, hasError) -> {
+                if (hasError) {
+                    setAvatarImage(null);
+                }
+            });
+        } catch (IllegalArgumentException exception) {
+            setAvatarImage(null);
+        }
+    }
+
+    private void setAvatarImage(Image image) {
+        setAvatarImage(headerAvatarImageView, image);
+        setAvatarImage(profileAvatarImageView, image);
+    }
+
+    private void setAvatarImage(ImageView imageView, Image image) {
+        if (imageView == null) {
+            return;
+        }
+        imageView.setImage(image);
+        boolean hasImage = image != null;
+        imageView.setVisible(hasImage);
+        imageView.setManaged(hasImage);
+    }
+
+    private String resolveAvatarImageSource(String avatarReference) {
+        String trimmed = value(avatarReference);
+        if (trimmed.isBlank()) {
+            return null;
+        }
+
+        try {
+            URI uri = URI.create(trimmed);
+            if (uri.getScheme() != null && !uri.getScheme().isBlank()) {
+                return trimmed;
+            }
+        } catch (IllegalArgumentException ignored) {
+        }
+
+        try {
+            Path path = Paths.get(trimmed);
+            if (Files.exists(path)) {
+                return path.toUri().toString();
+            }
+        } catch (RuntimeException ignored) {
+        }
+
+        return null;
+    }
+
+    private String avatarInitials(User user) {
+        String displayName = user == null ? "" : value(user.getFullName());
+        if (displayName.isBlank() && user != null) {
+            displayName = value(user.getUsername());
+        }
+        if (displayName.isBlank()) {
+            return "?";
+        }
+        String[] parts = displayName.split("\\s+");
+        StringBuilder initials = new StringBuilder();
+        for (String part : parts) {
+            if (!part.isBlank()) {
+                initials.append(Character.toUpperCase(part.charAt(0)));
+            }
+            if (initials.length() == 2) {
+                break;
+            }
+        }
+        return initials.isEmpty() ? "?" : initials.toString();
     }
 
     private void applyMarketplaceSummary(List<AuctionEligibilityEntry> entries) {
@@ -1828,6 +2143,7 @@ public class DashboardController {
             bidPanel().clearChart();
             clearBidStatusViews();
             applyBuyerSettlementButtons(SettlementButtonState.disabled());
+            selectDashboardTab("Bidding");
         }
     }
 

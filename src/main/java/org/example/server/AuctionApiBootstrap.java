@@ -8,8 +8,11 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public final class AuctionApiBootstrap {
+    private static final Logger LOGGER = Logger.getLogger(AuctionApiBootstrap.class.getName());
     private static final String BASE_URL_PROPERTY = "auction.api.baseUrl";
     private static final String BASE_URL_ENV = "AUCTION_API_BASE_URL";
     private static final Duration HEALTH_TIMEOUT = Duration.ofMillis(750);
@@ -32,7 +35,7 @@ public final class AuctionApiBootstrap {
         try {
             AuctionApiServerMain.main(new String[]{"--port=" + baseUri.getPort()});
         } catch (IOException e) {
-            System.out.println("Embedded API server startup failed: " + e.getMessage());
+            LOGGER.log(Level.WARNING, "Embedded API server startup failed.", e);
         }
     }
 

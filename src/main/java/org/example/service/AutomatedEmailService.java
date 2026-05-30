@@ -9,8 +9,11 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public final class AutomatedEmailService {
+    private static final Logger LOGGER = Logger.getLogger(AutomatedEmailService.class.getName());
     private static final AutomatedEmailService INSTANCE = new AutomatedEmailService();
     private static final String SMTP_HOST_ENV = "AUCTION_EMAIL_SMTP_HOST";
     private static final String SMTP_PORT_ENV = "AUCTION_EMAIL_SMTP_PORT";
@@ -30,14 +33,14 @@ public final class AutomatedEmailService {
         String body = "Your wallet PIN recovery code is " + recoveryCode
                 + ". It expires in 15 minutes. Requested at " + LocalDateTime.now() + ".";
         if (!hasSmtpConfig()) {
-            System.out.println("Automated wallet PIN recovery email prepared for " + email + ".");
+            LOGGER.fine(() -> "Automated wallet PIN recovery email prepared for " + email + ".");
             return;
         }
 
         try {
             sendSmtp(email, subject, body);
         } catch (IOException e) {
-            System.err.println("Wallet PIN recovery email delivery failed.");
+            LOGGER.log(Level.WARNING, "Wallet PIN recovery email delivery failed.", e);
         }
     }
 

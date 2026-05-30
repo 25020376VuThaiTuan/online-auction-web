@@ -33,8 +33,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public final class AuctionApiHandler implements HttpHandler {
+    private static final Logger LOGGER = Logger.getLogger(AuctionApiHandler.class.getName());
     private static final DateTimeFormatter ISO_DATE_TIME = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
     private static final int MAX_REQUEST_BYTES = 64 * 1024;
 
@@ -99,7 +102,7 @@ public final class AuctionApiHandler implements HttpHandler {
             ));
         } catch (Exception e) {
             String errorId = UUID.randomUUID().toString();
-            System.err.println("API error " + errorId + ": " + e.getMessage());
+            LOGGER.log(Level.SEVERE, "API error " + errorId, e);
             sendJson(exchange, 500, jsonObject(
                     "error", "Internal server error.",
                     "errorId", errorId,

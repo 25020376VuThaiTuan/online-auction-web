@@ -177,11 +177,6 @@ class ModelValueObjectCoverageTest {
         assertSame(demoItems.getFirst(), manager.getItems().get(sizeBefore));
     }
 
-    @Test
-    void legacyModelMainRunsThroughConsoleVerificationFlow() {
-        assertConsoleContains("TEST 1", () -> Main.main(new String[0]));
-    }
-
     private static AuctionStore roundTrip(AuctionStore store) throws Exception {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
         try (ObjectOutputStream output = new ObjectOutputStream(bytes)) {

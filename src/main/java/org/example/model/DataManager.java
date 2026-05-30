@@ -19,8 +19,11 @@ import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class DataManager {
+    private static final Logger LOGGER = Logger.getLogger(DataManager.class.getName());
     private static DataManager instance;
     private static final Path DEFAULT_FILE_PATH = Path.of("data.dat");
     private static final String DATA_FILE_PROPERTY = "auction.data.file";
@@ -89,7 +92,7 @@ public class DataManager {
 
     private StoreSnapshot readSnapshotFromDisk() {
         if (!Files.exists(filePath)) {
-            System.out.println("No data file yet. Starting with an empty catalog.");
+            LOGGER.fine("No data file yet. Starting with an empty catalog.");
             return new StoreSnapshot(AuctionStore.empty(), 0L);
         }
 
@@ -107,9 +110,9 @@ public class DataManager {
             Object loadedObject = ois.readObject();
             return new StoreSnapshot(deserializeStore(loadedObject), version);
         } catch (FileNotFoundException e) {
-            System.out.println("No data file yet. Starting with an empty catalog.");
+            LOGGER.fine("No data file yet. Starting with an empty catalog.");
         } catch (IOException | ClassNotFoundException e) {
-            System.err.println("Failed to read file: " + e.getMessage());
+            LOGGER.log(Level.WARNING, "Failed to read data file: {0}", e.getMessage());
         }
         return new StoreSnapshot(AuctionStore.empty(), 0L);
     }
@@ -159,7 +162,7 @@ public class DataManager {
                 Files.createDirectories(parent);
             }
         } catch (IOException e) {
-            System.err.println("Failed to prepare data directory: " + e.getMessage());
+            LOGGER.log(Level.WARNING, "Failed to prepare data directory: {0}", e.getMessage());
             return Optional.empty();
         }
 
@@ -178,10 +181,10 @@ public class DataManager {
             oos.flush();
             channel.force(true);
             long version = resolveVersion(channel);
-            System.out.println("Saved data to " + filePath);
+            LOGGER.fine(() -> "Saved data to " + filePath);
             return Optional.of(new StoreSnapshot(safeStore, version));
         } catch (IOException e) {
-            System.err.println("Failed to save file: " + e.getMessage());
+            LOGGER.log(Level.WARNING, "Failed to save data file: {0}", e.getMessage());
             return Optional.empty();
         }
     }
@@ -196,7 +199,7 @@ public class DataManager {
             long size = Files.size(filePath);
             return Math.max(0L, modifiedTime * 31L + size);
         } catch (IOException e) {
-            System.err.println("Failed to inspect file version: " + e.getMessage());
+            LOGGER.log(Level.WARNING, "Failed to inspect data file version: {0}", e.getMessage());
             return 0L;
         }
     }
@@ -209,7 +212,7 @@ public class DataManager {
             long size = channel.size();
             return Math.max(0L, modifiedTime * 31L + size);
         } catch (IOException e) {
-            System.err.println("Failed to inspect file version: " + e.getMessage());
+            LOGGER.log(Level.WARNING, "Failed to inspect data file version: {0}", e.getMessage());
             return 0L;
         }
     }

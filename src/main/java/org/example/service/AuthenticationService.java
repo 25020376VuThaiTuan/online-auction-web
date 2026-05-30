@@ -18,8 +18,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public final class AuthenticationService {
+    private static final Logger LOGGER = Logger.getLogger(AuthenticationService.class.getName());
     private static final String DEMO_ACCOUNTS_PROPERTY = "auction.demoAccounts.enabled";
     private static final String DEMO_ACCOUNTS_ENV = "AUCTION_DEMO_ACCOUNTS_ENABLED";
     private static final AuthenticationService INSTANCE = new AuthenticationService();
@@ -265,7 +268,7 @@ public final class AuthenticationService {
             ensureDefaultUserPresent(persistentRepository, defaultSeller());
             ensureAccessibleAdminAccount(persistentRepository);
         } catch (RuntimeException e) {
-            System.out.println("Default account bootstrap skipped: " + e.getMessage());
+            LOGGER.log(Level.WARNING, "Default account bootstrap skipped.", e);
         }
     }
 

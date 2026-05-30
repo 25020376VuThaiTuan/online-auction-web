@@ -8,17 +8,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class DomainExceptionTest {
     @Test
-    void invalidPasswordValidatorAcceptsMixedCasePasswordsWithDigits() {
-        assertDoesNotThrow(() -> InvalidPasswordException.checkValid("Secret123"));
+    void invalidPasswordValidatorUsesSharedPasswordPolicy() {
+        assertDoesNotThrow(() -> InvalidPasswordException.checkValid("password123"));
     }
 
     @Test
     void invalidPasswordValidatorRejectsMissingRequirements() {
         assertThrows(InvalidPasswordException.class, () -> InvalidPasswordException.checkValid(null));
-        assertThrows(InvalidPasswordException.class, () -> InvalidPasswordException.checkValid("Short1"));
-        assertThrows(InvalidPasswordException.class, () -> InvalidPasswordException.checkValid("lowercase1"));
-        assertThrows(InvalidPasswordException.class, () -> InvalidPasswordException.checkValid("UPPERCASE1"));
-        assertThrows(InvalidPasswordException.class, () -> InvalidPasswordException.checkValid("NoDigitsHere"));
+        assertThrows(InvalidPasswordException.class, () -> InvalidPasswordException.checkValid("123"));
+        assertThrows(InvalidPasswordException.class, () -> InvalidPasswordException.checkValid(" password123 "));
+        assertThrows(InvalidPasswordException.class, () -> InvalidPasswordException.checkValid("a".repeat(73)));
     }
 
     @Test

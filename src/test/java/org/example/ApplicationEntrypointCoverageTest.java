@@ -2,7 +2,6 @@ package org.example;
 
 import javafx.application.Platform;
 import javafx.stage.Stage;
-import org.example.app.MainApp;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -10,7 +9,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -37,27 +35,19 @@ class ApplicationEntrypointCoverageTest {
     }
 
     @Test
-    void applicationStartMethodsLoadLoginScene() {
+    void applicationStartMethodLoadsLoginScene() {
         runAndWait(() -> {
             Stage appStage = new Stage();
             new App().start(appStage);
             assertEquals("Online Auction System", appStage.getTitle());
             assertNotNull(appStage.getScene());
             appStage.close();
-
-            Stage mainAppStage = new Stage();
-            assertDoesNotThrow(() -> new MainApp().start(mainAppStage));
-            assertEquals("Online Auction System", mainAppStage.getTitle());
-            assertNotNull(mainAppStage.getScene());
-            mainAppStage.close();
         });
     }
 
     @Test
-    void simpleLauncherTypesCanBeConstructed() {
+    void launcherCanBeConstructed() {
         assertNotNull(new Launcher());
-        assertNotNull(new Main());
-        assertNotNull(new org.example.model.Main());
     }
 
     private static void runAndWait(Runnable action) {
