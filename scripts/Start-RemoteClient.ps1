@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$EnvFile = (Join-Path $PSScriptRoot "remote.env")
+    [string]$EnvFile = (Join-Path $PSScriptRoot "internet-api.env")
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,11 +22,11 @@ if (Test-Path -LiteralPath $EnvFile) {
 } elseif ($PSBoundParameters.ContainsKey("EnvFile")) {
     throw "Env file '$EnvFile' was not found."
 } else {
-    Write-Host "No remote client env file found at $EnvFile; using http://100.89.207.4:8081/api."
+    Write-Host "No remote client env file found at $EnvFile; using the current AUCTION_API_BASE_URL value if one is already set."
 }
 
 if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("AUCTION_API_BASE_URL", "Process"))) {
-    [Environment]::SetEnvironmentVariable("AUCTION_API_BASE_URL", "http://100.89.207.4:8081/api", "Process")
+    throw "AUCTION_API_BASE_URL is not set. Pass -EnvFile scripts\internet-api.env or define AUCTION_API_BASE_URL before launching the client."
 }
 
 Write-AuctionRemoteEnvSummary -Names ($apiNames + $optionalNames)
