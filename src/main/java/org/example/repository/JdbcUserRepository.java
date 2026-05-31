@@ -5,6 +5,7 @@ import org.example.dao.UserDAO;
 import org.example.model.User;
 
 import java.sql.SQLException;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -117,6 +118,19 @@ public class JdbcUserRepository implements UserRepository {
     }
 
     @Override
+    public boolean updateAccountBanned(String userId, boolean banned) {
+        if (!isEnabled()) {
+            return false;
+        }
+
+        try (UserDAO userDAO = UserDAO.fromEnvironment()) {
+            return userDAO.updateAccountBanned(userId, banned);
+        } catch (SQLException e) {
+            throw databaseFailure("Database account status update failed", e);
+        }
+    }
+
+    @Override
     public boolean recordLogin(String userId) {
         if (!isEnabled()) {
             return false;
@@ -127,6 +141,34 @@ public class JdbcUserRepository implements UserRepository {
             return true;
         } catch (SQLException e) {
             throw databaseFailure("Database login timestamp update failed", e);
+        }
+    }
+
+    @Override
+    public boolean savePasswordRecoveryCode(String userId, String recoveryCodeHash, LocalDateTime expiresAt) {
+        if (!isEnabled()) {
+            return false;
+        }
+
+        try (UserDAO userDAO = UserDAO.fromEnvironment()) {
+            userDAO.ensurePasswordRecoveryColumns();
+            return userDAO.savePasswordRecoveryCode(userId, recoveryCodeHash, expiresAt);
+        } catch (SQLException e) {
+            throw databaseFailure("Database password recovery save failed", e);
+        }
+    }
+
+    @Override
+    public boolean consumePasswordRecoveryCode(String userId, String recoveryCode) {
+        if (!isEnabled()) {
+            return false;
+        }
+
+        try (UserDAO userDAO = UserDAO.fromEnvironment()) {
+            userDAO.ensurePasswordRecoveryColumns();
+            return userDAO.consumePasswordRecoveryCode(userId, recoveryCode);
+        } catch (SQLException e) {
+            throw databaseFailure("Database password recovery verification failed", e);
         }
     }
 

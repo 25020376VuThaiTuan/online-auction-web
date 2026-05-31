@@ -7,10 +7,12 @@ import org.example.auction.AuctionDepositResult;
 import org.example.auction.AuctionSettlement;
 import org.example.auction.AuctionSummary;
 import org.example.auction.BidValidationResult;
+import org.example.exception.AccountBannedException;
 import org.example.exception.InvalidPasswordException;
 import org.example.exception.UserNotFound;
 import org.example.model.ApprovalStatus;
 import org.example.model.Item;
+import org.example.model.PasswordRecoveryResult;
 import org.example.model.User;
 import org.example.service.AuthenticationService;
 import org.example.service.AuctionWorkflowService;
@@ -126,6 +128,7 @@ public final class AuctionApiHandler implements HttpHandler {
                             "/api/health",
                             "/api/auth/login",
                             "/api/auth/register",
+                            "/api/auth/password/recovery",
                             "/api/auth/password/reset",
                             "/api/auth/me",
                             "/api/auth/logout",
@@ -201,6 +204,8 @@ public final class AuctionApiHandler implements HttpHandler {
                         "user", payloads.user(user)
                 ));
                 return;
+            } catch (AccountBannedException e) {
+                throw new ApiHttpException(403, e.getMessage());
             } catch (UserNotFound | InvalidPasswordException e) {
                 throw new ApiHttpException(401, "Invalid username or password.");
             }
@@ -236,11 +241,31 @@ public final class AuctionApiHandler implements HttpHandler {
                 authenticationService.resetPassword(
                         username,
                         ApiJson.requireString(request, "email"),
+                        ApiJson.requireString(request, "recoveryCode"),
                         ApiJson.requireString(request, "newPassword"),
                         ApiJson.requireString(request, "confirmPassword")
                 );
                 sendJson(exchange, 200, jsonObject(
                         "message", "Password reset. Sign in with the new password."
+                ));
+                return;
+            } catch (UserNotFound e) {
+                throw new ApiHttpException(404, e.getMessage());
+            }
+        }
+
+        if (segments.size() == 3 && "password".equals(segments.get(1)) && "recovery".equals(segments.get(2))) {
+            requireMethod(exchange, "POST");
+            Map<String, Object> request = ApiJson.parseObject(readRequestBody(exchange));
+            String username = ApiJson.requireString(request, "username");
+            requireRateLimit(passwordResetRateLimiter, clientKey(exchange, username), "Too many password recovery attempts. Try again later.");
+            try {
+                sendJson(exchange, 202, jsonObject(
+                        "recovery",
+                        passwordRecovery(authenticationService.requestPasswordRecovery(
+                                username,
+                                ApiJson.requireString(request, "email")
+                        ))
                 ));
                 return;
             } catch (UserNotFound e) {
@@ -501,6 +526,26 @@ public final class AuctionApiHandler implements HttpHandler {
             sessionService.replaceUser(updatedUser);
             sendJson(exchange, 200, jsonObject(
                     "message", "Role saved.",
+                    "user", updatedUser == null ? null : payloads.user(updatedUser)
+            ));
+            return;
+        }
+
+        if (segments.size() == 3 && "ban".equals(segments.get(2))) {
+            requireWriteMethod(exchange);
+            requireAdmin(currentUser);
+            String userId = segments.get(1);
+            Map<String, Object> request = ApiJson.parseObject(readRequestBody(exchange));
+            boolean banned = optionalBoolean(request, "banned");
+            if (currentUser.getId().equals(userId) && banned) {
+                throw new ApiHttpException(409, "You cannot ban your own active admin account.");
+            }
+            if (!dashboardService.updateAccountBanned(userId, banned)) {
+                throw new ApiHttpException(404, "User not found: " + userId);
+            }
+            User updatedUser = dashboardService.findUserById(userId).orElse(null);
+            sendJson(exchange, 200, jsonObject(
+                    "message", banned ? "Account banned." : "Account unbanned.",
                     "user", updatedUser == null ? null : payloads.user(updatedUser)
             ));
             return;
@@ -1086,6 +1131,14 @@ public final class AuctionApiHandler implements HttpHandler {
             return optionalDouble(source, "initialBalance");
         }
         return optionalDouble(source, "balance");
+    }
+
+    private Map<String, Object> passwordRecovery(PasswordRecoveryResult recovery) {
+        return jsonObject(
+                "accepted", recovery.accepted(),
+                "message", recovery.message(),
+                "email", recovery.email()
+        );
     }
 
     private Map<String, Object> jsonObject(Object... fields) {

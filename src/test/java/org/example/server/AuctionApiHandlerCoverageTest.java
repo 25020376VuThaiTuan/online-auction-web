@@ -13,6 +13,7 @@ import org.example.service.MarketplaceDashboardService;
 import org.example.service.WalletService;
 import org.example.util.CredentialHasher;
 import org.example.model.User;
+import org.example.repository.DemoUserRepository;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
@@ -29,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -121,37 +123,55 @@ class AuctionApiHandlerCoverageTest {
         assertEquals("Field 'password' is required.", ApiJson.parseObject(malformedLogin.responseBody()).get("error"));
 
         String duplicateUsername = "duplicate_api_" + UUID.randomUUID().toString().substring(0, 8);
+        AtomicReference<String> deliveredPasswordCode = new AtomicReference<>();
+        AuctionApiHandler authHandler = new AuctionApiHandler(
+                new AuthenticationService(
+                        List.of(DemoUserRepository.getInstance()),
+                        (email, recoveryCode) -> deliveredPasswordCode.set(recoveryCode)
+                ),
+                AuctionWorkflowService.getInstance(),
+                new ApiSessionService(),
+                new AuctionRealtimeBroker()
+        );
         FakeExchange firstRegister = exchange("POST", "/api/auth/register", ApiJson.stringify(Map.of(
                 "username", duplicateUsername,
                 "password", "secret123",
                 "email", duplicateUsername + "@test.local",
                 "fullName", "Duplicate API"
         )));
-        handler().handle(firstRegister);
-        assertEquals(201, firstRegister.statusCode);
+        authHandler.handle(firstRegister);
+        assertEquals(201, firstRegister.statusCode, firstRegister.responseBody());
         FakeExchange duplicateRegister = exchange("POST", "/api/auth/register", ApiJson.stringify(Map.of(
                 "username", duplicateUsername,
                 "password", "secret123",
                 "email", duplicateUsername + "@test.local",
                 "fullName", "Duplicate API"
         )));
-        handler().handle(duplicateRegister);
+        authHandler.handle(duplicateRegister);
         assertEquals(409, duplicateRegister.statusCode);
+
+        FakeExchange requestRecovery = exchange("POST", "/api/auth/password/recovery", ApiJson.stringify(Map.of(
+                "username", duplicateUsername,
+                "email", duplicateUsername + "@test.local"
+        )));
+        authHandler.handle(requestRecovery);
+        assertEquals(202, requestRecovery.statusCode);
 
         FakeExchange resetPassword = exchange("POST", "/api/auth/password/reset", ApiJson.stringify(Map.of(
                 "username", duplicateUsername,
                 "email", duplicateUsername + "@test.local",
+                "recoveryCode", deliveredPasswordCode.get(),
                 "newPassword", "updated123",
                 "confirmPassword", "updated123"
         )));
-        handler().handle(resetPassword);
+        authHandler.handle(resetPassword);
         assertEquals(200, resetPassword.statusCode);
 
         FakeExchange updatedLogin = exchange("POST", "/api/auth/login", ApiJson.stringify(Map.of(
                 "username", duplicateUsername,
                 "password", "updated123"
         )));
-        handler().handle(updatedLogin);
+        authHandler.handle(updatedLogin);
         assertEquals(200, updatedLogin.statusCode);
 
         FakeExchange largeBody = exchange("POST", "/api/auth/login", "x".repeat(64 * 1024 + 2));

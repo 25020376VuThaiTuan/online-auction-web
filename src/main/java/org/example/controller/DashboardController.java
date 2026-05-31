@@ -502,6 +502,9 @@ public class DashboardController {
     private TableColumn<User, String> adminRoleColumn;
 
     @FXML
+    private TableColumn<User, String> adminAccountStatusColumn;
+
+    @FXML
     private ChoiceBox<String> roleChoiceBox;
 
     @FXML
@@ -1293,6 +1296,58 @@ public class DashboardController {
     }
 
     @FXML
+    private void handleBanAccount() {
+        updateSelectedAccountStatus(true);
+    }
+
+    @FXML
+    private void handleUnbanAccount() {
+        updateSelectedAccountStatus(false);
+    }
+
+    private void updateSelectedAccountStatus(boolean banned) {
+        User selectedUser = userTable.getSelectionModel().getSelectedItem();
+        if (selectedUser == null) {
+            showAlert(Alert.AlertType.WARNING, "Selection required", "Choose a user account.");
+            return;
+        }
+        if (banned && currentUser().getId().equals(selectedUser.getId())) {
+            showAlert(Alert.AlertType.WARNING, "Account not banned", "You cannot ban your own active admin account.");
+            return;
+        }
+
+        try {
+            User updatedUser = null;
+            if (useApi()) {
+                updatedUser = apiClient.updateAccountBanned(apiToken(), selectedUser.getId(), banned);
+                if (updatedUser == null) {
+                    showAlert(Alert.AlertType.WARNING, "Account update failed", "The selected user could not be updated.");
+                    return;
+                }
+            } else if (!dashboardService.updateAccountBanned(selectedUser.getId(), banned)) {
+                showAlert(Alert.AlertType.WARNING, "Account update failed", "The selected user could not be updated.");
+                return;
+            } else {
+                updatedUser = dashboardService.findUserById(selectedUser.getId()).orElse(null);
+            }
+            if (updatedUser != null && currentUser().getId().equals(updatedUser.getId())) {
+                applicationSession.replaceCurrentUser(updatedUser);
+                bindCurrentUserFields();
+                configureRoleTabs();
+            }
+        } catch (AuctionApiClient.ApiClientException e) {
+            showAlert(Alert.AlertType.WARNING, "Account update failed", e.getMessage());
+            return;
+        }
+        refreshViewAsync(false);
+        showAlert(
+                Alert.AlertType.INFORMATION,
+                banned ? "Account banned" : "Account unbanned",
+                banned ? "The selected account can no longer sign in." : "The selected account can sign in again."
+        );
+    }
+
+    @FXML
     private void handleApproveItem() {
         updateSelectedPendingItem(ApprovalStatus.APPROVED, "Item approved");
     }
@@ -1413,6 +1468,7 @@ public class DashboardController {
                 adminFullNameColumn,
                 adminEmailColumn,
                 adminRoleColumn,
+                adminAccountStatusColumn,
                 roleChoiceBox,
                 pendingItemsTable,
                 pendingItemNameColumn,

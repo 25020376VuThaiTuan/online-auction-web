@@ -232,12 +232,14 @@ class AccountInputValidatorTest {
                 AccountPasswordRecovery.validateResetRequest(
                         "  John_Doe  ",
                         " john@example.test ",
+                        "123456",
                         "newpass123",
                         "newpass123"
                 );
 
         assertEquals("john_doe", result.username());
         assertEquals("john@example.test", result.email());
+        assertEquals("123456", result.recoveryCode());
         assertEquals("newpass123", result.newPassword());
 
         IllegalArgumentException mismatch = assertThrows(
@@ -245,11 +247,25 @@ class AccountInputValidatorTest {
                 () -> AccountPasswordRecovery.validateResetRequest(
                         "john_doe",
                         "john@example.test",
+                        "123456",
                         "newpass123",
                         "different123"
                 )
         );
 
         assertEquals("Confirm password must match the new password.", mismatch.getMessage());
+
+        IllegalArgumentException invalidCode = assertThrows(
+                IllegalArgumentException.class,
+                () -> AccountPasswordRecovery.validateResetRequest(
+                        "john_doe",
+                        "john@example.test",
+                        "12A456",
+                        "newpass123",
+                        "newpass123"
+                )
+        );
+
+        assertEquals("Password recovery code must be 6 digits.", invalidCode.getMessage());
     }
 }

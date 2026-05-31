@@ -6,6 +6,7 @@ import org.example.model.Seller;
 import org.example.model.User;
 import org.example.util.CredentialHasher;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -16,6 +17,7 @@ public class DemoUserRepository implements UserRepository {
     private static final DemoUserRepository INSTANCE = new DemoUserRepository(true);
 
     private final Map<String, User> usersByUsername = new LinkedHashMap<>();
+    private final Map<String, PasswordRecoveryState> passwordRecoveryByUserId = new LinkedHashMap<>();
 
     private DemoUserRepository(boolean seedDefaults) {
         if (!seedDefaults) {
@@ -97,8 +99,47 @@ public class DemoUserRepository implements UserRepository {
     }
 
     @Override
+    public synchronized boolean updateAccountBanned(String userId, boolean banned) {
+        Optional<User> existing = findById(userId);
+        if (existing.isEmpty()) {
+            return false;
+        }
+        existing.get().setAccountBanned(banned);
+        return true;
+    }
+
+    @Override
     public synchronized boolean recordLogin(String userId) {
         return findById(userId).isPresent();
+    }
+
+    @Override
+    public synchronized boolean savePasswordRecoveryCode(String userId, String recoveryCodeHash, LocalDateTime expiresAt) {
+        if (userId == null || userId.isBlank() || !CredentialHasher.isHashed(recoveryCodeHash) || expiresAt == null) {
+            return false;
+        }
+        if (findById(userId).isEmpty()) {
+            return false;
+        }
+        passwordRecoveryByUserId.put(userId, new PasswordRecoveryState(recoveryCodeHash, expiresAt));
+        return true;
+    }
+
+    @Override
+    public synchronized boolean consumePasswordRecoveryCode(String userId, String recoveryCode) {
+        PasswordRecoveryState state = passwordRecoveryByUserId.get(userId);
+        if (state == null) {
+            return false;
+        }
+        if (state.expiresAt().isBefore(LocalDateTime.now())) {
+            passwordRecoveryByUserId.remove(userId);
+            return false;
+        }
+        if (!recoveryCodeAccepted(recoveryCode, state.recoveryCodeHash())) {
+            return false;
+        }
+        passwordRecoveryByUserId.remove(userId);
+        return true;
     }
 
     private void seedUser(User user) {
@@ -154,5 +195,17 @@ public class DemoUserRepository implements UserRepository {
 
     private static String normalizeEmail(String email) {
         return email == null ? "" : email.trim().toLowerCase();
+    }
+
+    private boolean recoveryCodeAccepted(String recoveryCode, String storedHash) {
+        if (recoveryCode == null || recoveryCode.isBlank() || storedHash == null || storedHash.isBlank()) {
+            return false;
+        }
+        return CredentialHasher.isHashed(storedHash)
+                ? CredentialHasher.verify(recoveryCode, storedHash)
+                : recoveryCode.equals(storedHash);
+    }
+
+    private record PasswordRecoveryState(String recoveryCodeHash, LocalDateTime expiresAt) {
     }
 }

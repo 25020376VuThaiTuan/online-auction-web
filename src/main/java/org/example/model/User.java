@@ -8,6 +8,7 @@ public abstract class User extends Entity {
     private String phoneNumber;
     private String address;
     private String avatarUrl;
+    private boolean accountBanned;
     protected String role;
 
     public User(String id, String username, String passwordHash, String email) {
@@ -74,6 +75,14 @@ public abstract class User extends Entity {
         this.avatarUrl = avatarUrl == null ? null : avatarUrl.trim();
     }
 
+    public boolean isAccountBanned() {
+        return accountBanned;
+    }
+
+    public void setAccountBanned(boolean accountBanned) {
+        this.accountBanned = accountBanned;
+    }
+
     public void copyProfileFrom(User source) {
         if (source == null) {
             return;
@@ -83,6 +92,7 @@ public abstract class User extends Entity {
         setPhoneNumber(source.getPhoneNumber());
         setAddress(source.getAddress());
         setAvatarUrl(source.getAvatarUrl());
+        setAccountBanned(source.isAccountBanned());
     }
 
     public abstract void displayRole();

@@ -13,6 +13,8 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLIntegrityConstraintViolationException;
 import java.sql.Statement;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -28,6 +30,7 @@ public class UserDAO implements AutoCloseable {
                    u.full_name,
                    u.phone,
                    u.avatar_url,
+                   u.account_banned,
                    bp.wallet_balance,
                    ua.line_1 AS profile_address
             FROM users u
@@ -59,10 +62,12 @@ public class UserDAO implements AutoCloseable {
     }
 
     public void addUser(User user) throws SQLException {
+        ensureAccountBanColumn();
         upsertUser(user);
     }
 
     public Optional<User> findByUsername(String username) throws SQLException {
+        ensureAccountBanColumn();
         String sql = USER_SELECT + " WHERE LOWER(u.username) = LOWER(?)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, username);
@@ -75,6 +80,7 @@ public class UserDAO implements AutoCloseable {
     }
 
     public Optional<User> findByEmail(String email) throws SQLException {
+        ensureAccountBanColumn();
         String sql = USER_SELECT + " WHERE LOWER(u.email) = LOWER(?)";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, email);
@@ -87,6 +93,7 @@ public class UserDAO implements AutoCloseable {
     }
 
     public User getUserById(String id) throws SQLException {
+        ensureAccountBanColumn();
         String sql = USER_SELECT + " WHERE u.id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, id);
@@ -99,6 +106,7 @@ public class UserDAO implements AutoCloseable {
     }
 
     public List<User> getAllUsers() throws SQLException {
+        ensureAccountBanColumn();
         List<User> list = new ArrayList<>();
         String sql = USER_SELECT + " ORDER BY u.created_at DESC, u.username ASC";
         try (Statement st = conn.createStatement();
@@ -111,7 +119,22 @@ public class UserDAO implements AutoCloseable {
     }
 
     public void updateUser(User user) throws SQLException {
+        ensureAccountBanColumn();
         upsertUser(user);
+    }
+
+    public boolean updateAccountBanned(String userId, boolean banned) throws SQLException {
+        ensureAccountBanColumn();
+        if (isBlank(userId)) {
+            return false;
+        }
+
+        String sql = "UPDATE users SET account_banned = ? WHERE id = ?";
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setBoolean(1, banned);
+            ps.setString(2, userId);
+            return ps.executeUpdate() > 0;
+        }
     }
 
     public void recordLogin(String userId) throws SQLException {
@@ -124,6 +147,81 @@ public class UserDAO implements AutoCloseable {
             ps.setString(1, userId);
             ps.executeUpdate();
         }
+    }
+
+    public void ensurePasswordRecoveryColumns() throws SQLException {
+        if (!hasColumn("users", "password_recovery_code")) {
+            execute("ALTER TABLE users ADD COLUMN password_recovery_code VARCHAR(255) NULL");
+        }
+        if (!hasColumn("users", "password_recovery_expires_at")) {
+            execute("ALTER TABLE users ADD COLUMN password_recovery_expires_at DATETIME NULL");
+        }
+    }
+
+    public void ensureAccountBanColumn() throws SQLException {
+        if (!hasColumn("users", "account_banned")) {
+            execute("ALTER TABLE users ADD COLUMN account_banned BOOLEAN NOT NULL DEFAULT FALSE");
+        }
+    }
+
+    public boolean savePasswordRecoveryCode(String userId, String recoveryCodeHash, LocalDateTime expiresAt) throws SQLException {
+        if (isBlank(userId)) {
+            return false;
+        }
+        if (!CredentialHasher.isHashed(recoveryCodeHash)) {
+            throw new IllegalArgumentException("Password recovery codes must be stored as hashes.");
+        }
+        String sql = """
+                UPDATE users
+                SET password_recovery_code = ?,
+                    password_recovery_expires_at = ?
+                WHERE id = ?
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, recoveryCodeHash);
+            ps.setTimestamp(2, Timestamp.valueOf(expiresAt));
+            ps.setString(3, userId);
+            return ps.executeUpdate() > 0;
+        }
+    }
+
+    public boolean consumePasswordRecoveryCode(String userId, String recoveryCode) throws SQLException {
+        if (isBlank(userId)) {
+            return false;
+        }
+
+        String sql = """
+                SELECT password_recovery_code, password_recovery_expires_at
+                FROM users
+                WHERE id = ?
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, userId);
+            ResultSet rs = ps.executeQuery();
+            if (!rs.next()) {
+                return false;
+            }
+            String storedCode = rs.getString("password_recovery_code");
+            Timestamp expiresAt = rs.getTimestamp("password_recovery_expires_at");
+            if (storedCode == null || expiresAt == null || !recoveryCodeAccepted(recoveryCode, storedCode)) {
+                return false;
+            }
+            if (expiresAt.toLocalDateTime().isBefore(LocalDateTime.now())) {
+                return false;
+            }
+        }
+
+        String clearSql = """
+                UPDATE users
+                SET password_recovery_code = NULL,
+                    password_recovery_expires_at = NULL
+                WHERE id = ?
+                """;
+        try (PreparedStatement ps = conn.prepareStatement(clearSql)) {
+            ps.setString(1, userId);
+            ps.executeUpdate();
+        }
+        return true;
     }
 
     public void deleteUser(String id) throws SQLException {
@@ -177,8 +275,9 @@ public class UserDAO implements AutoCloseable {
                     role,
                     full_name,
                     phone,
-                    avatar_url
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    avatar_url,
+                    account_banned
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
 
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -190,6 +289,7 @@ public class UserDAO implements AutoCloseable {
             ps.setString(6, emptyToNull(user.getFullName()));
             ps.setString(7, emptyToNull(user.getPhoneNumber()));
             ps.setString(8, emptyToNull(user.getAvatarUrl()));
+            ps.setBoolean(9, user.isAccountBanned());
             ps.executeUpdate();
         }
     }
@@ -203,7 +303,8 @@ public class UserDAO implements AutoCloseable {
                     role = ?,
                     full_name = ?,
                     phone = ?,
-                    avatar_url = ?
+                    avatar_url = ?,
+                    account_banned = ?
                 WHERE id = ?
                 """;
 
@@ -215,7 +316,8 @@ public class UserDAO implements AutoCloseable {
             ps.setString(5, emptyToNull(user.getFullName()));
             ps.setString(6, emptyToNull(user.getPhoneNumber()));
             ps.setString(7, emptyToNull(user.getAvatarUrl()));
-            ps.setString(8, userId);
+            ps.setBoolean(8, user.isAccountBanned());
+            ps.setString(9, userId);
             ps.executeUpdate();
         }
     }
@@ -253,6 +355,18 @@ public class UserDAO implements AutoCloseable {
             }
         }
         return Optional.empty();
+    }
+
+    private boolean hasColumn(String tableName, String columnName) throws SQLException {
+        try (ResultSet rs = conn.getMetaData().getColumns(conn.getCatalog(), null, tableName, columnName)) {
+            return rs.next();
+        }
+    }
+
+    private void execute(String sql) throws SQLException {
+        try (Statement statement = conn.createStatement()) {
+            statement.execute(sql);
+        }
     }
 
     private void saveRoleProfile(User user, String userId) throws SQLException {
@@ -340,6 +454,7 @@ public class UserDAO implements AutoCloseable {
         user.setPhoneNumber(rs.getString("phone"));
         user.setAvatarUrl(rs.getString("avatar_url"));
         user.setAddress(rs.getString("profile_address"));
+        user.setAccountBanned(rs.getBoolean("account_banned"));
         return user;
     }
 
@@ -375,6 +490,15 @@ public class UserDAO implements AutoCloseable {
 
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
+    }
+
+    private boolean recoveryCodeAccepted(String recoveryCode, String storedHash) {
+        if (recoveryCode == null || recoveryCode.isBlank() || storedHash == null || storedHash.isBlank()) {
+            return false;
+        }
+        return CredentialHasher.isHashed(storedHash)
+                ? CredentialHasher.verify(recoveryCode, storedHash)
+                : recoveryCode.equals(storedHash);
     }
 
     private SQLIntegrityConstraintViolationException duplicateValue(String message) {

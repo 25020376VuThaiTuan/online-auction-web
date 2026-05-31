@@ -12,6 +12,7 @@ import java.sql.DriverManager;
 import java.sql.ResultSet;
 import java.sql.SQLIntegrityConstraintViolationException;
 import java.sql.Statement;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -57,6 +58,7 @@ class UserDAOTest {
                         full_name VARCHAR(255),
                         phone VARCHAR(20),
                         avatar_url VARCHAR(255),
+                        account_banned BOOLEAN NOT NULL DEFAULT FALSE,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         last_login_at TIMESTAMP NULL
                     )
@@ -235,6 +237,44 @@ class UserDAOTest {
         User result = userDAO.getUserById("s1");
 
         assertNotNull(result);
+    }
+
+    @Test
+    void passwordRecoveryCodeShouldBeHashedExpiringAndSingleUse()
+            throws Exception {
+
+        Seller seller = new Seller(
+                "recovery-user",
+                "recoveryuser",
+                "123456",
+                "recovery@test.local"
+        );
+        seller.setRole("SELLER");
+        userDAO.addUser(seller);
+        userDAO.ensurePasswordRecoveryColumns();
+
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> userDAO.savePasswordRecoveryCode("recovery-user", "plain-code", LocalDateTime.now().plusMinutes(5))
+        );
+        assertFalse(userDAO.consumePasswordRecoveryCode("recovery-user", "123456"));
+
+        userDAO.savePasswordRecoveryCode(
+                "recovery-user",
+                CredentialHasher.hash("123456"),
+                LocalDateTime.now().plusMinutes(5)
+        );
+
+        assertFalse(userDAO.consumePasswordRecoveryCode("recovery-user", "000000"));
+        assertTrue(userDAO.consumePasswordRecoveryCode("recovery-user", "123456"));
+        assertFalse(userDAO.consumePasswordRecoveryCode("recovery-user", "123456"));
+
+        userDAO.savePasswordRecoveryCode(
+                "recovery-user",
+                CredentialHasher.hash("654321"),
+                LocalDateTime.now().minusMinutes(1)
+        );
+        assertFalse(userDAO.consumePasswordRecoveryCode("recovery-user", "654321"));
     }
 
     @Test

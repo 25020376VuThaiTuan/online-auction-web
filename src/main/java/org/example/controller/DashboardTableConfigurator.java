@@ -213,6 +213,8 @@ final class DashboardTableConfigurator {
                 new SimpleStringProperty(cellData.getValue().getEmail()));
         config.roleColumn().setCellValueFactory(cellData ->
                 new SimpleStringProperty(cellData.getValue().getRole()));
+        config.accountStatusColumn().setCellValueFactory(cellData ->
+                new SimpleStringProperty(cellData.getValue().isAccountBanned() ? "Banned" : "Active"));
         ResponsiveViewSupport.configureResponsiveTable(config.userTable());
         config.roleChoiceBox().setItems(FXCollections.observableArrayList("BIDDER", "SELLER", "ADMIN"));
 
@@ -293,6 +295,7 @@ final class DashboardTableConfigurator {
             TableColumn<User, String> fullNameColumn,
             TableColumn<User, String> emailColumn,
             TableColumn<User, String> roleColumn,
+            TableColumn<User, String> accountStatusColumn,
             ChoiceBox<String> roleChoiceBox,
             TableView<Item> pendingItemsTable,
             TableColumn<Item, String> pendingItemNameColumn,

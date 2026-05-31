@@ -1,9 +1,11 @@
 package org.example.service;
 
+import org.example.exception.AccountBannedException;
 import org.example.exception.InvalidPasswordException;
 import org.example.exception.UserNotFound;
 import org.example.model.Admin;
 import org.example.model.Bidder;
+import org.example.model.PasswordRecoveryResult;
 import org.example.model.Seller;
 import org.example.model.User;
 import org.example.repository.DemoUserRepository;
@@ -13,12 +15,15 @@ import org.example.util.AccountPasswordRecovery;
 import org.example.util.AccountInputValidator;
 import org.example.util.CredentialHasher;
 
+import java.security.SecureRandom;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -27,16 +32,29 @@ public final class AuthenticationService {
     private static final String DEMO_ACCOUNTS_PROPERTY = "auction.demoAccounts.enabled";
     private static final String DEMO_ACCOUNTS_ENV = "AUCTION_DEMO_ACCOUNTS_ENABLED";
     private static final AuthenticationService INSTANCE = new AuthenticationService();
+    private static final int RECOVERY_CODE_LENGTH = 6;
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final List<UserRepository> repositories = new ArrayList<>();
+    private final PasswordRecoveryCodeSender passwordRecoveryCodeSender;
+    private final Map<String, PasswordRecoveryState> fallbackPasswordRecoveryByUserId = new ConcurrentHashMap<>();
     private final boolean demoAccountsEnabled;
 
     private AuthenticationService() {
-        this(defaultRepositories(resolveDemoAccountsEnabled()), resolveDemoAccountsEnabled(), resolveDemoAccountsEnabled());
+        this(
+                defaultRepositories(resolveDemoAccountsEnabled()),
+                resolveDemoAccountsEnabled(),
+                resolveDemoAccountsEnabled(),
+                AutomatedEmailService.getInstance()::sendAccountPasswordRecovery
+        );
     }
 
     AuthenticationService(List<UserRepository> repositories) {
         this(repositories, false, containsSeededDemoRepository(repositories));
+    }
+
+    public AuthenticationService(List<UserRepository> repositories, PasswordRecoveryCodeSender passwordRecoveryCodeSender) {
+        this(repositories, false, containsSeededDemoRepository(repositories), passwordRecoveryCodeSender);
     }
 
     AuthenticationService(List<UserRepository> repositories, boolean bootstrapDefaultAccounts) {
@@ -44,9 +62,26 @@ public final class AuthenticationService {
     }
 
     AuthenticationService(List<UserRepository> repositories, boolean bootstrapDefaultAccounts, boolean demoAccountsEnabled) {
+        this(
+                repositories,
+                bootstrapDefaultAccounts,
+                demoAccountsEnabled,
+                AutomatedEmailService.getInstance()::sendAccountPasswordRecovery
+        );
+    }
+
+    AuthenticationService(
+            List<UserRepository> repositories,
+            boolean bootstrapDefaultAccounts,
+            boolean demoAccountsEnabled,
+            PasswordRecoveryCodeSender passwordRecoveryCodeSender
+    ) {
         if (repositories != null) {
             this.repositories.addAll(repositories);
         }
+        this.passwordRecoveryCodeSender = passwordRecoveryCodeSender == null
+                ? (email, recoveryCode) -> { }
+                : passwordRecoveryCodeSender;
         this.demoAccountsEnabled = demoAccountsEnabled;
         if (bootstrapDefaultAccounts) {
             bootstrapPersistentAccounts();
@@ -75,6 +110,9 @@ public final class AuthenticationService {
             }
 
             User candidateUser = candidate.get();
+            if (candidateUser.isAccountBanned()) {
+                throw new AccountBannedException("This account has been banned by an administrator.");
+            }
             if (credentialMatches(safePassword, candidateUser.getPasswordHash())) {
                 User userForAuthentication = ensureHashedCredential(candidateUser, safePassword, repository);
                 User authenticatedUser = synchronizeWithPrimaryRepository(userForAuthentication, repository);
@@ -101,15 +139,15 @@ public final class AuthenticationService {
     public synchronized User resetPassword(
             String username,
             String email,
+            String recoveryCode,
             String newPassword,
             String confirmPassword
     ) throws UserNotFound {
         AccountPasswordRecovery.RecoveryRequest request =
-                AccountPasswordRecovery.validateResetRequest(username, email, newPassword, confirmPassword);
-        User user = findByUsername(request.username())
-                .orElseThrow(() -> new UserNotFound("No account exists for username: " + request.username()));
-        if (!normalizeEmail(user.getEmail()).equals(normalizeEmail(request.email()))) {
-            throw new IllegalArgumentException("Email does not match the selected account.");
+                AccountPasswordRecovery.validateResetRequest(username, email, recoveryCode, newPassword, confirmPassword);
+        User user = requireRecoveryUser(request.username(), request.email());
+        if (!consumePasswordRecoveryCode(user, request.recoveryCode())) {
+            throw new IllegalArgumentException("Password recovery code is invalid or expired.");
         }
 
         User updatedUser = copyWithCredential(user, CredentialHasher.hash(request.newPassword()));
@@ -127,6 +165,30 @@ public final class AuthenticationService {
             throw new IllegalStateException("User password could not be reset.");
         }
         return updatedUser;
+    }
+
+    public synchronized PasswordRecoveryResult requestPasswordRecovery(String username, String email) throws UserNotFound {
+        AccountPasswordRecovery.RecoveryIdentity request =
+                AccountPasswordRecovery.validateRecoveryRequest(username, email);
+        User user = requireRecoveryUser(request.username(), request.email());
+        String recoveryCode = recoveryCode();
+        String recoveryHash = CredentialHasher.hash(recoveryCode);
+        LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(15);
+        boolean saved = false;
+        for (UserRepository repository : repositories) {
+            if (repository.findByUsername(request.username()).isPresent()) {
+                saved = repository.savePasswordRecoveryCode(user.getId(), recoveryHash, expiresAt) || saved;
+            }
+        }
+        if (!saved) {
+            fallbackPasswordRecoveryByUserId.put(user.getId(), new PasswordRecoveryState(recoveryHash, expiresAt));
+        }
+        passwordRecoveryCodeSender.sendAccountPasswordRecovery(user.getEmail(), recoveryCode);
+        return new PasswordRecoveryResult(
+                true,
+                "A password recovery code was sent to the account email.",
+                user.getEmail()
+        );
     }
 
     public synchronized User registerManualBidder(String username, String password, String email, String fullName) {
@@ -240,6 +302,14 @@ public final class AuthenticationService {
         boolean updated = false;
         for (UserRepository repository : repositories) {
             updated = repository.updateRole(userId, role) || updated;
+        }
+        return updated;
+    }
+
+    public synchronized boolean updateAccountBanned(String userId, boolean banned) {
+        boolean updated = false;
+        for (UserRepository repository : repositories) {
+            updated = repository.updateAccountBanned(userId, banned) || updated;
         }
         return updated;
     }
@@ -379,6 +449,42 @@ public final class AuthenticationService {
         return copy;
     }
 
+    private User requireRecoveryUser(String username, String email) throws UserNotFound {
+        User user = findByUsername(username)
+                .orElseThrow(() -> new UserNotFound("No account exists for username: " + username));
+        if (!normalizeEmail(user.getEmail()).equals(normalizeEmail(email))) {
+            throw new IllegalArgumentException("Email does not match the selected account.");
+        }
+        return user;
+    }
+
+    private boolean consumePasswordRecoveryCode(User user, String recoveryCode) {
+        boolean consumed = false;
+        for (UserRepository repository : repositories) {
+            if (repository.findByUsername(user.getUsername()).isPresent()) {
+                consumed = repository.consumePasswordRecoveryCode(user.getId(), recoveryCode) || consumed;
+            }
+        }
+        if (consumed) {
+            fallbackPasswordRecoveryByUserId.remove(user.getId());
+            return true;
+        }
+
+        PasswordRecoveryState state = fallbackPasswordRecoveryByUserId.get(user.getId());
+        if (state == null) {
+            return false;
+        }
+        if (state.expiresAt().isBefore(LocalDateTime.now())) {
+            fallbackPasswordRecoveryByUserId.remove(user.getId());
+            return false;
+        }
+        if (!recoveryCodeAccepted(recoveryCode, state.recoveryCodeHash())) {
+            return false;
+        }
+        fallbackPasswordRecoveryByUserId.remove(user.getId());
+        return true;
+    }
+
     private UserRepository primaryPersistentRepository() {
         if (repositories.isEmpty()) {
             return null;
@@ -421,6 +527,27 @@ public final class AuthenticationService {
 
     private static String normalizeEmail(String email) {
         return email == null ? "" : email.trim().toLowerCase();
+    }
+
+    private String recoveryCode() {
+        return String.format("%0" + RECOVERY_CODE_LENGTH + "d", SECURE_RANDOM.nextInt(1_000_000));
+    }
+
+    private boolean recoveryCodeAccepted(String recoveryCode, String storedHash) {
+        if (recoveryCode == null || recoveryCode.isBlank() || storedHash == null || storedHash.isBlank()) {
+            return false;
+        }
+        return CredentialHasher.isHashed(storedHash)
+                ? CredentialHasher.verify(recoveryCode, storedHash)
+                : recoveryCode.equals(storedHash);
+    }
+
+    @FunctionalInterface
+    public interface PasswordRecoveryCodeSender {
+        void sendAccountPasswordRecovery(String email, String recoveryCode);
+    }
+
+    private record PasswordRecoveryState(String recoveryCodeHash, LocalDateTime expiresAt) {
     }
 
     private static boolean resolveDemoAccountsEnabled() {

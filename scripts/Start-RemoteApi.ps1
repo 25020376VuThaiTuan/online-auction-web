@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "Load-RemoteEnv.ps1")
 
-$requiredNames = @(
+$dbNames = @(
     "AUCTION_DB_URL",
     "AUCTION_DB_USER",
     "AUCTION_DB_PASSWORD"
@@ -25,11 +25,30 @@ $optionalNames = @(
     "CONTAINER_APP_PORT"
 )
 
-Import-AuctionRemoteEnv -Path $EnvFile -RequiredNames $requiredNames -OptionalNames $optionalNames | Out-Null
+if (Test-Path -LiteralPath $EnvFile) {
+    Import-AuctionRemoteEnv -Path $EnvFile -RequiredNames @() -OptionalNames ($dbNames + $optionalNames) | Out-Null
+    $resolvedEnvFile = (Resolve-Path -LiteralPath $EnvFile).Path
+    Write-Host "Loaded API environment from $resolvedEnvFile"
+} elseif ($PSBoundParameters.ContainsKey("EnvFile")) {
+    throw "Env file '$EnvFile' was not found."
+} else {
+    Write-Host "No remote API env file found at $EnvFile; using default remote API database settings."
+}
 
-$resolvedEnvFile = (Resolve-Path -LiteralPath $EnvFile).Path
-Write-Host "Loaded API environment from $resolvedEnvFile"
-Write-AuctionRemoteEnvSummary -Names ($requiredNames + $optionalNames)
+if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("AUCTION_DB_URL", "Process"))) {
+    [Environment]::SetEnvironmentVariable("AUCTION_DB_URL", "jdbc:mysql://localhost:3306/auctiondb?sslMode=DISABLED&allowPublicKeyRetrieval=true&serverTimezone=UTC", "Process")
+}
+if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("AUCTION_DB_USER", "Process"))) {
+    [Environment]::SetEnvironmentVariable("AUCTION_DB_USER", "auction_user", "Process")
+}
+if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("AUCTION_DB_PASSWORD", "Process"))) {
+    [Environment]::SetEnvironmentVariable("AUCTION_DB_PASSWORD", "Auction123", "Process")
+}
+if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("AUCTION_API_PORT", "Process"))) {
+    [Environment]::SetEnvironmentVariable("AUCTION_API_PORT", "8081", "Process")
+}
+
+Write-AuctionRemoteEnvSummary -Names ($dbNames + $optionalNames)
 
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 Write-Host "Starting standalone auction API server..."

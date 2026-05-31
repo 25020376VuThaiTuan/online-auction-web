@@ -303,6 +303,10 @@ public final class MarketplaceDashboardService {
         return authenticationService.updateUserRole(userId, role);
     }
 
+    public boolean updateAccountBanned(String userId, boolean banned) {
+        return authenticationService.updateAccountBanned(userId, banned);
+    }
+
     public Optional<User> findUserById(String userId) {
         return authenticationService.findById(userId);
     }

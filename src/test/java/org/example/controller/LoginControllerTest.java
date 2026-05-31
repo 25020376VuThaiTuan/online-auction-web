@@ -16,7 +16,9 @@ import org.junit.jupiter.api.Test;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -254,14 +256,25 @@ class LoginControllerTest {
 
         String suffix = UUID.randomUUID().toString().substring(0, 8);
         String username = "login_reset_" + suffix;
-        AuthenticationService.getInstance().registerManualBidder(
+        AtomicReference<String> deliveredCode = new AtomicReference<>();
+        AuthenticationService service = new AuthenticationService(
+                List.of(org.example.repository.DemoUserRepository.createEmpty()),
+                (email, recoveryCode) -> deliveredCode.set(recoveryCode)
+        );
+        controller = new LoginController(
+                newApiClientWithoutBaseUrl(),
+                service,
+                ApplicationSession.getInstance()
+        );
+        service.registerManualBidder(
                 username,
                 "oldpass",
                 username + "@test.local",
                 "Login Reset " + suffix
         );
 
-        controller.resetPassword(username, username + "@test.local", "newpass", "newpass");
+        controller.requestPasswordRecovery(username, username + "@test.local");
+        controller.resetPassword(username, username + "@test.local", deliveredCode.get(), "newpass", "newpass");
 
         controller.authenticate(username, "newpass");
         assertEquals(

@@ -9,8 +9,10 @@ import javafx.scene.control.PasswordField;
 import javafx.scene.control.TextField;
 import javafx.scene.layout.GridPane;
 import org.example.client.AuctionApiClient;
+import org.example.exception.AccountBannedException;
 import org.example.exception.InvalidPasswordException;
 import org.example.exception.UserNotFound;
+import org.example.model.PasswordRecoveryResult;
 import org.example.service.AuthenticationService;
 import org.example.state.ApplicationSession;
 import org.example.util.SceneNavigator;
@@ -71,6 +73,8 @@ public class LoginController {
             SceneNavigator.switchScene(usernameField, "/view/Dashboard.fxml", "Auction Dashboard");
         } catch (UserNotFound e) {
             showAlert(Alert.AlertType.WARNING, "User not found", e.getMessage());
+        } catch (AccountBannedException e) {
+            showAlert(Alert.AlertType.WARNING, "Account banned", e.getMessage());
         } catch (InvalidPasswordException e) {
             showAlert(Alert.AlertType.WARNING, "Password incorrect", e.getMessage());
         } catch (AuctionApiClient.ApiClientException e) {
@@ -92,53 +96,43 @@ public class LoginController {
 
     @FXML
     private void handleForgotPassword() {
-        Dialog<PasswordResetInput> dialog = new Dialog<>();
-        dialog.setTitle("Reset password");
-        dialog.setHeaderText(null);
-
-        TextField dialogUsernameField = new TextField(usernameField.getText());
-        dialogUsernameField.setPromptText("Username");
-        TextField emailField = new TextField();
-        emailField.setPromptText("Account email");
-        PasswordField newPasswordField = new PasswordField();
-        newPasswordField.setPromptText("New password");
-        PasswordField confirmPasswordField = new PasswordField();
-        confirmPasswordField.setPromptText("Confirm new password");
-
-        GridPane form = new GridPane();
-        form.setHgap(10.0);
-        form.setVgap(10.0);
-        form.addRow(0, new Label("Username"), dialogUsernameField);
-        form.addRow(1, new Label("Email"), emailField);
-        form.addRow(2, new Label("New password"), newPasswordField);
-        form.addRow(3, new Label("Confirm password"), confirmPasswordField);
-
-        dialog.getDialogPane().setContent(form);
-        dialog.getDialogPane().getButtonTypes().setAll(ButtonType.OK, ButtonType.CANCEL);
-        dialog.setResultConverter(buttonType -> buttonType == ButtonType.OK
-                ? new PasswordResetInput(
-                        dialogUsernameField.getText(),
-                        emailField.getText(),
-                        newPasswordField.getText(),
-                        confirmPasswordField.getText()
-                )
-                : null);
-
-        Optional<PasswordResetInput> result = dialog.showAndWait();
-        result.ifPresent(input -> {
+        Optional<PasswordRecoveryInput> recoveryInput = requestPasswordRecoveryInput();
+        recoveryInput.ifPresent(input -> {
             try {
-                resetPassword(input.username(), input.email(), input.newPassword(), input.confirmPassword());
-                showAlert(Alert.AlertType.INFORMATION, "Password reset", "Sign in with your new password.");
+                PasswordRecoveryResult result = requestPasswordRecovery(input.username(), input.email());
+                showAlert(Alert.AlertType.INFORMATION, "Recovery email sent", result.message());
+                requestPasswordResetInput(input.username(), input.email()).ifPresent(resetInput -> {
+                    try {
+                        resetPassword(
+                                resetInput.username(),
+                                resetInput.email(),
+                                resetInput.recoveryCode(),
+                                resetInput.newPassword(),
+                                resetInput.confirmPassword()
+                        );
+                        showAlert(Alert.AlertType.INFORMATION, "Password reset", "Sign in with your new password.");
+                    } catch (UserNotFound e) {
+                        showAlert(Alert.AlertType.WARNING, "Account not found", e.getMessage());
+                    } catch (AuctionApiClient.ApiClientException e) {
+                        showAlert(
+                                Alert.AlertType.WARNING,
+                                AuctionApiClient.isConnectivityFailure(e) ? "API unavailable" : "Password reset failed",
+                                e.getMessage()
+                        );
+                    } catch (IllegalArgumentException | IllegalStateException e) {
+                        showAlert(Alert.AlertType.WARNING, "Password reset failed", e.getMessage());
+                    }
+                });
             } catch (UserNotFound e) {
                 showAlert(Alert.AlertType.WARNING, "Account not found", e.getMessage());
             } catch (AuctionApiClient.ApiClientException e) {
                 showAlert(
                         Alert.AlertType.WARNING,
-                        AuctionApiClient.isConnectivityFailure(e) ? "API unavailable" : "Password reset failed",
+                        AuctionApiClient.isConnectivityFailure(e) ? "API unavailable" : "Recovery failed",
                         e.getMessage()
                 );
             } catch (IllegalArgumentException | IllegalStateException e) {
-                showAlert(Alert.AlertType.WARNING, "Password reset failed", e.getMessage());
+                showAlert(Alert.AlertType.WARNING, "Recovery failed", e.getMessage());
             }
         });
     }
@@ -160,12 +154,82 @@ public class LoginController {
         }
     }
 
-    void resetPassword(String username, String email, String newPassword, String confirmPassword) throws UserNotFound {
+    PasswordRecoveryResult requestPasswordRecovery(String username, String email) throws UserNotFound {
         if (!apiClient.isEnabled()) {
-            authenticationService.resetPassword(username, email, newPassword, confirmPassword);
+            return authenticationService.requestPasswordRecovery(username, email);
+        }
+        return apiClient.requestPasswordRecovery(username, email);
+    }
+
+    void resetPassword(
+            String username,
+            String email,
+            String recoveryCode,
+            String newPassword,
+            String confirmPassword
+    ) throws UserNotFound {
+        if (!apiClient.isEnabled()) {
+            authenticationService.resetPassword(username, email, recoveryCode, newPassword, confirmPassword);
             return;
         }
-        apiClient.resetPassword(username, email, newPassword, confirmPassword);
+        apiClient.resetPassword(username, email, recoveryCode, newPassword, confirmPassword);
+    }
+
+    private Optional<PasswordRecoveryInput> requestPasswordRecoveryInput() {
+        Dialog<PasswordRecoveryInput> dialog = new Dialog<>();
+        dialog.setTitle("Recover password");
+        dialog.setHeaderText(null);
+
+        TextField dialogUsernameField = new TextField(usernameField.getText());
+        dialogUsernameField.setPromptText("Username");
+        TextField emailField = new TextField();
+        emailField.setPromptText("Account email");
+
+        GridPane form = new GridPane();
+        form.setHgap(10.0);
+        form.setVgap(10.0);
+        form.addRow(0, new Label("Username"), dialogUsernameField);
+        form.addRow(1, new Label("Email"), emailField);
+
+        dialog.getDialogPane().setContent(form);
+        dialog.getDialogPane().getButtonTypes().setAll(ButtonType.OK, ButtonType.CANCEL);
+        dialog.setResultConverter(buttonType -> buttonType == ButtonType.OK
+                ? new PasswordRecoveryInput(dialogUsernameField.getText(), emailField.getText())
+                : null);
+        return dialog.showAndWait();
+    }
+
+    private Optional<PasswordResetInput> requestPasswordResetInput(String username, String email) {
+        Dialog<PasswordResetInput> dialog = new Dialog<>();
+        dialog.setTitle("Reset password");
+        dialog.setHeaderText(null);
+
+        TextField recoveryCodeField = new TextField();
+        recoveryCodeField.setPromptText("6-digit recovery code");
+        PasswordField newPasswordField = new PasswordField();
+        newPasswordField.setPromptText("New password");
+        PasswordField confirmPasswordField = new PasswordField();
+        confirmPasswordField.setPromptText("Confirm new password");
+
+        GridPane form = new GridPane();
+        form.setHgap(10.0);
+        form.setVgap(10.0);
+        form.addRow(0, new Label("Recovery code"), recoveryCodeField);
+        form.addRow(1, new Label("New password"), newPasswordField);
+        form.addRow(2, new Label("Confirm password"), confirmPasswordField);
+
+        dialog.getDialogPane().setContent(form);
+        dialog.getDialogPane().getButtonTypes().setAll(ButtonType.OK, ButtonType.CANCEL);
+        dialog.setResultConverter(buttonType -> buttonType == ButtonType.OK
+                ? new PasswordResetInput(
+                        username,
+                        email,
+                        recoveryCodeField.getText(),
+                        newPasswordField.getText(),
+                        confirmPasswordField.getText()
+                )
+                : null);
+        return dialog.showAndWait();
     }
 
     private AuctionApiClient.ApiClientException configuredApiUnavailable(AuctionApiClient.ApiClientException cause) {
@@ -197,9 +261,16 @@ public class LoginController {
         return "Dashboard data could not be loaded.";
     }
 
+    private record PasswordRecoveryInput(
+            String username,
+            String email
+    ) {
+    }
+
     private record PasswordResetInput(
             String username,
             String email,
+            String recoveryCode,
             String newPassword,
             String confirmPassword
     ) {

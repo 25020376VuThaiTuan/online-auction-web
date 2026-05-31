@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -114,6 +115,23 @@ class AuthenticationServiceTest {
         AuthenticationService service = new AuthenticationService(List.of(primaryRepository));
 
         assertThrows(InvalidPasswordException.class, () -> service.loginOrThrow("admin", "admin123"));
+    }
+
+    @Test
+    void bannedAccountCannotLogInUntilUnbanned() {
+        InMemoryUserRepository repository = new InMemoryUserRepository();
+        repository.save(new Bidder("BANNED-USER", "banned_user", CredentialHasher.hash("secret123"), "banned@test.local", 0.0));
+        AuthenticationService service = new AuthenticationService(List.of(repository));
+
+        assertTrue(service.updateAccountBanned("BANNED-USER", true));
+        InvalidPasswordException exception = assertThrows(
+                InvalidPasswordException.class,
+                () -> service.loginOrThrow("banned_user", "secret123")
+        );
+        assertEquals("This account has been banned by an administrator.", exception.getMessage());
+
+        assertTrue(service.updateAccountBanned("BANNED-USER", false));
+        assertEquals("banned_user", service.loginOrThrow("banned_user", "secret123").getUsername());
     }
 
     @Test
@@ -274,9 +292,14 @@ class AuthenticationServiceTest {
                 "reset@test.local",
                 0.0
         ));
-        AuthenticationService service = new AuthenticationService(List.of(repository));
+        AtomicReference<String> deliveredCode = new AtomicReference<>();
+        AuthenticationService service = new AuthenticationService(
+                List.of(repository),
+                (email, recoveryCode) -> deliveredCode.set(recoveryCode)
+        );
 
-        service.resetPassword(" reset_user ", " reset@test.local ", "newpass", "newpass");
+        service.requestPasswordRecovery(" reset_user ", " reset@test.local ");
+        service.resetPassword(" reset_user ", " reset@test.local ", deliveredCode.get(), "newpass", "newpass");
 
         assertThrows(InvalidPasswordException.class, () -> service.loginOrThrow("reset_user", "oldpass"));
         User loggedIn = service.loginOrThrow("reset_user", "newpass");
@@ -284,7 +307,11 @@ class AuthenticationServiceTest {
         assertTrue(loggedIn.getPasswordHash().startsWith("$2a$"));
         assertThrows(
                 IllegalArgumentException.class,
-                () -> service.resetPassword("reset_user", "wrong@test.local", "nextpass", "nextpass")
+                () -> service.resetPassword("reset_user", "reset@test.local", deliveredCode.get(), "nextpass", "nextpass")
+        );
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> service.requestPasswordRecovery("reset_user", "wrong@test.local")
         );
     }
 
@@ -350,6 +377,15 @@ class AuthenticationServiceTest {
             }
             usersByUsername.put(user.getUsername().trim().toLowerCase(), user);
             return Optional.of(user);
+        }
+
+        @Override
+        public boolean updateAccountBanned(String userId, boolean banned) {
+            Optional<User> user = usersByUsername.values().stream()
+                    .filter(candidate -> candidate.getId().equals(userId))
+                    .findFirst();
+            user.ifPresent(candidate -> candidate.setAccountBanned(banned));
+            return user.isPresent();
         }
     }
 

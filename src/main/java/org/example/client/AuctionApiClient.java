@@ -10,6 +10,7 @@ import org.example.model.Bid;
 import org.example.model.Bidder;
 import org.example.model.Item;
 import org.example.model.ItemFactory;
+import org.example.model.PasswordRecoveryResult;
 import org.example.model.Seller;
 import org.example.model.User;
 import org.example.model.WalletAuthorization;
@@ -117,10 +118,28 @@ public final class AuctionApiClient {
         return authResult(response);
     }
 
-    public String resetPassword(String username, String email, String newPassword, String confirmPassword) {
+    public PasswordRecoveryResult requestPasswordRecovery(String username, String email) {
+        Map<String, Object> response = request("POST", "/auth/password/recovery", null, jsonObject(
+                "username", username,
+                "email", email
+        ));
+        Object recovery = response.get("recovery");
+        if (!(recovery instanceof Map<?, ?> map)) {
+            throw new ApiClientException("API response did not include password recovery details.");
+        }
+        Map<String, Object> payload = castMap(map);
+        return new PasswordRecoveryResult(
+                booleanValue(payload.get("accepted")),
+                stringValue(payload.get("message")),
+                stringValue(payload.get("email"))
+        );
+    }
+
+    public String resetPassword(String username, String email, String recoveryCode, String newPassword, String confirmPassword) {
         Map<String, Object> response = request("POST", "/auth/password/reset", null, jsonObject(
                 "username", username,
                 "email", email,
+                "recoveryCode", recoveryCode,
                 "newPassword", newPassword,
                 "confirmPassword", confirmPassword
         ));
@@ -284,6 +303,14 @@ public final class AuctionApiClient {
     public User updateUserRole(String token, String userId, String role) {
         Map<String, Object> response = request("PATCH", "/users/" + segment(userId) + "/role", token, jsonObject(
                 "role", role
+        ));
+        Object user = response.get("user");
+        return user instanceof Map<?, ?> map ? buildUser(castMap(map)) : null;
+    }
+
+    public User updateAccountBanned(String token, String userId, boolean banned) {
+        Map<String, Object> response = request("PATCH", "/users/" + segment(userId) + "/ban", token, jsonObject(
+                "banned", banned
         ));
         Object user = response.get("user");
         return user instanceof Map<?, ?> map ? buildUser(castMap(map)) : null;
@@ -662,6 +689,7 @@ public final class AuctionApiClient {
         user.setPhoneNumber(stringValue(payload.get("phoneNumber")));
         user.setAddress(stringValue(payload.get("address")));
         user.setAvatarUrl(stringValue(payload.get("avatarUrl")));
+        user.setAccountBanned(booleanValue(payload.get("accountBanned")));
         if (user instanceof Bidder bidder) {
             bidder.replaceLockedDeposits(lockedDeposits(payload.get("lockedDeposits")));
         }

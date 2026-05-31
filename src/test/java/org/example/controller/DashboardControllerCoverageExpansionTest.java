@@ -1397,6 +1397,7 @@ class DashboardControllerCoverageExpansionTest {
         setField(controller, "adminFullNameColumn", new TableColumn<User, String>());
         setField(controller, "adminEmailColumn", new TableColumn<User, String>());
         setField(controller, "adminRoleColumn", new TableColumn<User, String>());
+        setField(controller, "adminAccountStatusColumn", new TableColumn<User, String>());
         setField(controller, "roleChoiceBox", new ChoiceBox<String>());
         setField(controller, "pendingItemsTable", new TableView<Item>());
         setField(controller, "pendingItemNameColumn", new TableColumn<Item, String>());

@@ -323,10 +323,12 @@ class DashboardTableConfiguratorTest {
         TableColumn<User, String> fullNameColumn = new TableColumn<>();
         TableColumn<User, String> emailColumn = new TableColumn<>();
         TableColumn<User, String> roleColumn = new TableColumn<>();
+        TableColumn<User, String> accountStatusColumn = new TableColumn<>();
         userTable.getColumns().add(usernameColumn);
         userTable.getColumns().add(fullNameColumn);
         userTable.getColumns().add(emailColumn);
         userTable.getColumns().add(roleColumn);
+        userTable.getColumns().add(accountStatusColumn);
         ChoiceBox<String> roleChoiceBox = new ChoiceBox<>();
         TableView<Item> pendingItemsTable = new TableView<>();
         TableColumn<Item, String> pendingItemNameColumn = new TableColumn<>();
@@ -342,6 +344,7 @@ class DashboardTableConfiguratorTest {
                 fullNameColumn,
                 emailColumn,
                 roleColumn,
+                accountStatusColumn,
                 roleChoiceBox,
                 pendingItemsTable,
                 pendingItemNameColumn,
@@ -356,6 +359,9 @@ class DashboardTableConfiguratorTest {
         assertEquals("Bidder One", fullNameColumn.getCellObservableValue(user).getValue());
         assertEquals("bidder@test.local", emailColumn.getCellObservableValue(user).getValue());
         assertEquals("SELLER", roleColumn.getCellObservableValue(user).getValue());
+        assertEquals("Active", accountStatusColumn.getCellObservableValue(user).getValue());
+        user.setAccountBanned(true);
+        assertEquals("Banned", accountStatusColumn.getCellObservableValue(user).getValue());
         assertEquals(FXCollections.observableArrayList("BIDDER", "SELLER", "ADMIN"), roleChoiceBox.getItems());
         assertEquals("Vintage Camera", pendingItemNameColumn.getCellObservableValue(sellerItem).getValue());
         assertEquals("SELLER-1", pendingSellerColumn.getCellObservableValue(sellerItem).getValue());

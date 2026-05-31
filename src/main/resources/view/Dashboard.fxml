@@ -513,11 +513,14 @@
                                             <TableColumn fx:id="adminFullNameColumn" prefWidth="180.0" text="Full Name"/>
                                             <TableColumn fx:id="adminEmailColumn" prefWidth="220.0" text="Email"/>
                                             <TableColumn fx:id="adminRoleColumn" prefWidth="120.0" text="Role"/>
+                                            <TableColumn fx:id="adminAccountStatusColumn" prefWidth="120.0" text="Status"/>
                                         </columns>
                                     </TableView>
                                     <HBox alignment="CENTER_LEFT" spacing="10.0">
                                         <ChoiceBox fx:id="roleChoiceBox"/>
                                         <Button onAction="#handleUpdateRole" styleClass="primary-action" text="Update Role"/>
+                                        <Button onAction="#handleBanAccount" text="Ban Login"/>
+                                        <Button onAction="#handleUnbanAccount" text="Unban Login"/>
                                     </HBox>
                                 </VBox>
 

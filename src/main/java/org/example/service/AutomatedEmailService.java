@@ -32,15 +32,26 @@ public final class AutomatedEmailService {
         String subject = "Wallet PIN recovery code";
         String body = "Your wallet PIN recovery code is " + recoveryCode
                 + ". It expires in 15 minutes. Requested at " + LocalDateTime.now() + ".";
+        sendRecoveryEmail(email, subject, body, "wallet PIN recovery");
+    }
+
+    public void sendAccountPasswordRecovery(String email, String recoveryCode) {
+        String subject = "Account password recovery code";
+        String body = "Your account password recovery code is " + recoveryCode
+                + ". It expires in 15 minutes. Requested at " + LocalDateTime.now() + ".";
+        sendRecoveryEmail(email, subject, body, "account password recovery");
+    }
+
+    private void sendRecoveryEmail(String email, String subject, String body, String purpose) {
         if (!hasSmtpConfig()) {
-            LOGGER.fine(() -> "Automated wallet PIN recovery email prepared for " + email + ".");
+            LOGGER.fine(() -> "Automated " + purpose + " email prepared for " + email + ".");
             return;
         }
 
         try {
             sendSmtp(email, subject, body);
         } catch (IOException e) {
-            LOGGER.log(Level.WARNING, "Wallet PIN recovery email delivery failed.", e);
+            LOGGER.log(Level.WARNING, "Automated " + purpose + " email delivery failed.", e);
         }
     }
 

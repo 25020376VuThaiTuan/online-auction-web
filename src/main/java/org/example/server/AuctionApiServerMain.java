@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.example.dao.AuthSessionDAO;
 import org.example.dao.BidDAO;
 import org.example.dao.DatabaseConfig;
+import org.example.dao.UserDAO;
 import org.example.dao.WalletDAO;
 import org.example.service.AuthenticationService;
 import org.example.service.AuctionWorkflowService;
@@ -356,6 +357,8 @@ public final class AuctionApiServerMain {
         verifyDatabaseSchema(connection, SELF_HEALING_DATABASE_SCHEMA);
         verifyWalletTransactionSchema(connection);
         verifyWalletRecoveryCodeColumn(connection);
+        verifyPasswordRecoveryCodeColumn(connection);
+        verifyAccountBanColumn(connection);
     }
 
     static void verifyDatabaseSchema(Connection connection, List<RequiredTable> requiredTables) throws SQLException {
@@ -431,6 +434,42 @@ public final class AuctionApiServerMain {
             if (columnSize < 255) {
                 throw new SQLException(
                         "Column 'wallet_accounts.pin_recovery_code' must be at least 255 characters for hashed recovery codes. Apply the latest schema.sql.",
+                        "42S22",
+                        1054
+                );
+            }
+        }
+    }
+
+    static void verifyPasswordRecoveryCodeColumn(Connection connection) throws SQLException {
+        DatabaseMetaData metaData = connection.getMetaData();
+        String catalog = connection.getCatalog();
+        try (ResultSet resultSet = metaData.getColumns(catalog, null, "users", "password_recovery_code")) {
+            if (!resultSet.next()) {
+                throw new SQLException(
+                        "Missing required column 'users.password_recovery_code'. Apply schema.sql before starting the API server.",
+                        "42S22",
+                        1054
+                );
+            }
+            int columnSize = resultSet.getInt("COLUMN_SIZE");
+            if (columnSize < 255) {
+                throw new SQLException(
+                        "Column 'users.password_recovery_code' must be at least 255 characters for hashed recovery codes. Apply the latest schema.sql.",
+                        "42S22",
+                        1054
+                );
+            }
+        }
+    }
+
+    static void verifyAccountBanColumn(Connection connection) throws SQLException {
+        DatabaseMetaData metaData = connection.getMetaData();
+        String catalog = connection.getCatalog();
+        try (ResultSet resultSet = metaData.getColumns(catalog, null, "users", "account_banned")) {
+            if (!resultSet.next()) {
+                throw new SQLException(
+                        "Missing required column 'users.account_banned'. Apply schema.sql before starting the API server.",
                         "42S22",
                         1054
                 );
@@ -521,8 +560,11 @@ public final class AuctionApiServerMain {
             }
             verifyDatabaseSchema(connection, CORE_REQUIRED_DATABASE_SCHEMA);
             try (BidDAO bidDAO = new BidDAO(connection);
+                 UserDAO userDAO = new UserDAO(connection);
                  WalletDAO walletDAO = new WalletDAO(connection);
                  AuthSessionDAO authSessionDAO = new AuthSessionDAO(connection)) {
+                userDAO.ensurePasswordRecoveryColumns();
+                userDAO.ensureAccountBanColumn();
                 bidDAO.ensureSchema();
                 walletDAO.ensureSchema();
                 authSessionDAO.ensureSchema();

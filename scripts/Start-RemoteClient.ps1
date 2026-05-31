@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "Load-RemoteEnv.ps1")
 
-$requiredNames = @(
+$apiNames = @(
     "AUCTION_API_BASE_URL"
 )
 $optionalNames = @(
@@ -15,11 +15,21 @@ $optionalNames = @(
     "AUCTION_API_REQUEST_TIMEOUT_MILLIS"
 )
 
-Import-AuctionRemoteEnv -Path $EnvFile -RequiredNames $requiredNames -OptionalNames $optionalNames | Out-Null
+if (Test-Path -LiteralPath $EnvFile) {
+    Import-AuctionRemoteEnv -Path $EnvFile -RequiredNames @() -OptionalNames ($apiNames + $optionalNames) | Out-Null
+    $resolvedEnvFile = (Resolve-Path -LiteralPath $EnvFile).Path
+    Write-Host "Loaded JavaFX client environment from $resolvedEnvFile"
+} elseif ($PSBoundParameters.ContainsKey("EnvFile")) {
+    throw "Env file '$EnvFile' was not found."
+} else {
+    Write-Host "No remote client env file found at $EnvFile; using http://100.89.207.4:8081/api."
+}
 
-$resolvedEnvFile = (Resolve-Path -LiteralPath $EnvFile).Path
-Write-Host "Loaded JavaFX client environment from $resolvedEnvFile"
-Write-AuctionRemoteEnvSummary -Names ($requiredNames + $optionalNames)
+if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable("AUCTION_API_BASE_URL", "Process"))) {
+    [Environment]::SetEnvironmentVariable("AUCTION_API_BASE_URL", "http://100.89.207.4:8081/api", "Process")
+}
+
+Write-AuctionRemoteEnvSummary -Names ($apiNames + $optionalNames)
 
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 Write-Host "Starting JavaFX auction client..."

@@ -73,9 +73,10 @@ class AuctionApiClientCoverageExpansionTest {
 
         assertEquals("BIDDER", client.registerManualBidder("bidder", "password", "b@test.local", "Bidder").user().getRole());
         assertEquals("SELLER", client.registerManualSeller("seller", "password", "s@test.local", "Seller").user().getRole());
+        assertEquals("b@test.local", client.requestPasswordRecovery("bidder", "b@test.local").email());
         assertEquals(
                 "Password reset. Sign in with the new password.",
-                client.resetPassword("bidder", "b@test.local", "newpass", "newpass")
+                client.resetPassword("bidder", "b@test.local", "123456", "newpass", "newpass")
         );
         client.logout("token-1");
 
@@ -225,6 +226,9 @@ class AuctionApiClientCoverageExpansionTest {
         }
         if (path.equals("/auth/register")) {
             return Map.of("token", "token-1", "user", user(body.contains("\"role\":\"SELLER\"") ? "SELLER" : "BIDDER"));
+        }
+        if (path.equals("/auth/password/recovery")) {
+            return Map.of("recovery", Map.of("accepted", true, "message", "sent", "email", "b@test.local"));
         }
         if (path.equals("/auth/password/reset")) {
             return Map.of("message", "Password reset. Sign in with the new password.");
