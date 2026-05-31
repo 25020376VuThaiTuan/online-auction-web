@@ -194,78 +194,85 @@ class DashboardControllerCoverageExpansionTest {
 
     @Test
     void initializationProfileAvatarRecoveryAndBidIncrementHandlersUseLocalBranches() throws Exception {
-        Bidder bidder = registeredBidder("dashboard-init");
-        dashboardService.setWalletPin(bidder, PIN);
-        session.login(bidder, "api-token");
-        DashboardController controller = dashboardController();
+        String previousBaseUrl = System.getProperty("auction.api.baseUrl");
+        try {
+            System.setProperty("auction.api.baseUrl", "");
+            Bidder bidder = registeredBidder("dashboard-init");
+            dashboardService.setWalletPin(bidder, PIN);
+            session.login(bidder, "api-token");
+            DashboardController controller = dashboardController();
+            setField(controller, "apiClient", newApiClient());
 
-        JavaFxTestSupport.runAndWait(() -> {
-            try {
-                controller.initialize();
-                invoke(controller, "stopRefreshLoop");
-            } catch (Exception e) {
-                throw new AssertionError(e);
-            }
-        });
+            JavaFxTestSupport.runAndWait(() -> {
+                try {
+                    controller.initialize();
+                    invoke(controller, "stopRefreshLoop");
+                } catch (Exception e) {
+                    throw new AssertionError(e);
+                }
+            });
 
-        assertEquals("api-token", invoke(controller, "apiToken"));
-        assertTrue(invokeOnFx(controller, "walletAuthorizationCredential", PIN).toString().startsWith("wa_"));
+            assertEquals("api-token", invoke(controller, "apiToken"));
+            assertTrue(invokeOnFx(controller, "walletAuthorizationCredential", PIN).toString().startsWith("wa_"));
 
-        invokeWithClosedDialog(controller, "handleTestConnection");
-        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
-        invokeOnFx(controller, "showConnectionSuccess",
-                new AuctionApiClient.ConnectionTestResult("http://127.0.0.1/api", "ok", "2026-05-27T12:00:00"));
-        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
-        invokeOnFx(controller, "showConnectionFailure",
-                new AuctionApiClient.ApiClientException("Could not reach API", new IOException("down")));
-        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
-        invokeOnFx(controller, "showConnectionFailure", new IllegalStateException("bad status"));
+            invokeWithClosedDialog(controller, "handleTestConnection");
+            JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+            invokeOnFx(controller, "showConnectionSuccess",
+                    new AuctionApiClient.ConnectionTestResult("http://127.0.0.1/api", "ok", "2026-05-27T12:00:00"));
+            JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+            invokeOnFx(controller, "showConnectionFailure",
+                    new AuctionApiClient.ApiClientException("Could not reach API", new IOException("down")));
+            JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+            invokeOnFx(controller, "showConnectionFailure", new IllegalStateException("bad status"));
 
-        field(controller, "fullNameField", TextField.class).setText("Dashboard Init Updated");
-        field(controller, "phoneField", TextField.class).setText("555-0200");
-        field(controller, "addressArea", TextArea.class).setText("Updated Avenue");
-        invokeWithClosedDialog(controller, "handleSaveProfile");
-        assertEquals("Dashboard Init Updated", bidder.getFullName());
+            field(controller, "fullNameField", TextField.class).setText("Dashboard Init Updated");
+            field(controller, "phoneField", TextField.class).setText("555-0200");
+            field(controller, "addressArea", TextArea.class).setText("Updated Avenue");
+            invokeWithClosedDialog(controller, "handleSaveProfile");
+            assertEquals("Dashboard Init Updated", bidder.getFullName());
 
-        field(controller, "avatarUrlField", TextField.class).setText("https://example.test/init-avatar.png");
-        invokeWithClosedDialog(controller, "handleSaveAvatar");
-        assertEquals("https://example.test/init-avatar.png", bidder.getAvatarUrl());
+            field(controller, "avatarUrlField", TextField.class).setText("https://example.test/init-avatar.png");
+            invokeWithClosedDialog(controller, "handleSaveAvatar");
+            assertEquals("https://example.test/init-avatar.png", bidder.getAvatarUrl());
 
-        invokeWithClosedDialog(controller, "handleRequestWalletPinRecovery");
-        field(controller, "recoveryCodeField", TextField.class).clear();
-        field(controller, "newWalletPinField", PasswordField.class).clear();
-        invokeWithClosedDialog(controller, "handleResetWalletPin");
-        @SuppressWarnings("unchecked")
-        java.util.Map<String, String> recoveryCodes = (java.util.Map<String, String>) field(
-                WalletService.getInstance(),
-                "recoveryCodesByUserId"
-        );
-        recoveryCodes.put(bidder.getId(), "999999");
-        field(controller, "recoveryCodeField", TextField.class).setText("999999");
-        field(controller, "newWalletPinField", PasswordField.class).setText("1357");
-        invokeWithClosedDialog(controller, "handleResetWalletPin");
-        assertEquals("", field(controller, "recoveryCodeField", TextField.class).getText());
+            invokeWithClosedDialog(controller, "handleRequestWalletPinRecovery");
+            field(controller, "recoveryCodeField", TextField.class).clear();
+            field(controller, "newWalletPinField", PasswordField.class).clear();
+            invokeWithClosedDialog(controller, "handleResetWalletPin");
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, String> recoveryCodes = (java.util.Map<String, String>) field(
+                    WalletService.getInstance(),
+                    "recoveryCodesByUserId"
+            );
+            recoveryCodes.put(bidder.getId(), "999999");
+            field(controller, "recoveryCodeField", TextField.class).setText("999999");
+            field(controller, "newWalletPinField", PasswordField.class).setText("1357");
+            invokeWithClosedDialog(controller, "handleResetWalletPin");
+            assertEquals("", field(controller, "recoveryCodeField", TextField.class).getText());
 
-        AuctionEligibilityEntry entry = auctionEntry("INIT-AUCTION", "Init Camera", "RUNNING", 100.0, 110.0, true, true, 120L);
-        TableView<AuctionEligibilityEntry> table = field(controller, "auctionTable");
-        setField(controller, "suppressAuctionSelectionRefresh", true);
-        table.setItems(FXCollections.observableArrayList(entry));
-        table.getSelectionModel().select(entry);
-        setField(controller, "suppressAuctionSelectionRefresh", false);
-        setField(controller, "selectedAuctionId", entry.getItemId());
-        field(controller, "bidAmountField", TextField.class).setText("110.00");
+            AuctionEligibilityEntry entry = auctionEntry("INIT-AUCTION", "Init Camera", "RUNNING", 100.0, 110.0, true, true, 120L);
+            TableView<AuctionEligibilityEntry> table = field(controller, "auctionTable");
+            setField(controller, "suppressAuctionSelectionRefresh", true);
+            table.setItems(FXCollections.observableArrayList(entry));
+            table.getSelectionModel().select(entry);
+            setField(controller, "suppressAuctionSelectionRefresh", false);
+            setField(controller, "selectedAuctionId", entry.getItemId());
+            field(controller, "bidAmountField", TextField.class).setText("110.00");
 
-        invokeOnFx(controller, "handleAddTenToBid");
-        assertEquals("120.00", field(controller, "bidAmountField", TextField.class).getText());
-        invokeOnFx(controller, "handleAddFiftyToBid");
-        assertEquals("170.00", field(controller, "bidAmountField", TextField.class).getText());
-        invokeOnFx(controller, "handleAddHundredToBid");
-        assertEquals("270.00", field(controller, "bidAmountField", TextField.class).getText());
+            invokeOnFx(controller, "handleAddTenToBid");
+            assertEquals("120.00", field(controller, "bidAmountField", TextField.class).getText());
+            invokeOnFx(controller, "handleAddFiftyToBid");
+            assertEquals("170.00", field(controller, "bidAmountField", TextField.class).getText());
+            invokeOnFx(controller, "handleAddHundredToBid");
+            assertEquals("270.00", field(controller, "bidAmountField", TextField.class).getText());
 
-        JavaFxTestSupport.closeNextDialog(ButtonType.OK);
-        invokeOnFx(controller, "runBuyerSettlementAction", "No item", "", (Runnable) () -> {
-            throw new AssertionError("Action should not run without an item id.");
-        });
+            JavaFxTestSupport.closeNextDialog(ButtonType.OK);
+            invokeOnFx(controller, "runBuyerSettlementAction", "No item", "", (Runnable) () -> {
+                throw new AssertionError("Action should not run without an item id.");
+            });
+        } finally {
+            restoreProperty("auction.api.baseUrl", previousBaseUrl);
+        }
     }
 
     @Test
@@ -1723,6 +1730,14 @@ class DashboardControllerCoverageExpansionTest {
         Method method = type.getDeclaredMethod(name, parameterTypes);
         method.setAccessible(true);
         return method.invoke(null, args);
+    }
+
+    private static void restoreProperty(String propertyName, String previousValue) {
+        if (previousValue == null) {
+            System.clearProperty(propertyName);
+        } else {
+            System.setProperty(propertyName, previousValue);
+        }
     }
 
     private static AuctionApiClient newApiClient() throws Exception {

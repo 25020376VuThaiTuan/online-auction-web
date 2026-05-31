@@ -998,7 +998,7 @@ public final class AuctionApiClient {
 
     private static String resolveBaseUrl() {
         String configured = System.getProperty("auction.api.baseUrl");
-        if (configured == null || configured.isBlank()) {
+        if (configured == null) {
             configured = System.getenv("AUCTION_API_BASE_URL");
         }
         if (configured == null || configured.isBlank()) {
